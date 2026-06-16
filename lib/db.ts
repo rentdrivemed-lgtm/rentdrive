@@ -2,7 +2,9 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import bcrypt from 'bcryptjs';
 
-const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), 'rentdrive.db');
+const DB_PATH = process.env.NODE_ENV === 'production'
+  ? '/app/data/rentdrive.db'
+  : path.join(process.cwd(), 'rentdrive.db');
 
 let db: Database.Database;
 
