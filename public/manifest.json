@@ -1,0 +1,40 @@
+{
+  "name": "DrivePass Medellín",
+  "short_name": "DrivePass",
+  "description": "Tu ciudad. Tu ritmo. Tu DrivePass.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0A1422",
+  "theme_color": "#1B3356",
+  "orientation": "portrait-primary",
+  "categories": ["travel", "lifestyle"],
+  "lang": "es",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "screenshots": [],
+  "related_applications": []
+}

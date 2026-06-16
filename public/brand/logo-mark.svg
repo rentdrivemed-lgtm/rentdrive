@@ -1,0 +1,6 @@
+<svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="DrivePass">
+  <rect x="2" y="2" width="44" height="44" rx="13" fill="#1B3356"></rect>
+  <rect x="2.5" y="2.5" width="43" height="43" rx="12.5" stroke="#FFFFFF" stroke-opacity="0.14"></rect>
+  <path d="M16 36 L21 14 L26 14 L23 36 Z" fill="#F4F6FA"></path>
+  <path d="M30 36 L25 14 L30 14 L35 36 Z" fill="#F25C2B"></path>
+</svg>

@@ -1,0 +1,31 @@
+# Dependencias
+node_modules/
+
+# Next.js
+.next/
+out/
+
+# Variables de entorno (NUNCA subir)
+.env.local
+.env.*.local
+
+# Base de datos local (se crea automáticamente en Railway con volumen)
+rentdrive.db
+rentdrive.db-shm
+rentdrive.db-wal
+
+# Archivos subidos por usuarios (se persisten con volumen en Railway)
+public/uploads/*
+!public/uploads/.gitkeep
+
+# Logs
+*.log
+npm-debug.log*
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/

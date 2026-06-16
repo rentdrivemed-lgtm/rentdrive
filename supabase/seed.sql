@@ -1,0 +1,41 @@
+-- Datos exportados desde rentdrive.db (SQLite)
+-- Ejecutar DESPUÉS de schema.sql en el SQL Editor de Supabase
+BEGIN;
+
+-- usuarios: 5 filas
+INSERT INTO usuarios (id,nombre,correo,password,rol,documento_identidad,estado_cuenta,celular,tipo_documento,fecha_nacimiento,direccion,ciudad,numero_licencia,contacto_emergencia,created_at) VALUES (1,'Administrador','admin@rentdrive.com','$2b$10$771FRh6KypQaooHdnmBWNueASOfQnNeCOVx5kjEO/7IWxhAbecs6e','admin',NULL,'activa','','cedula','','','Medellín','','{}','2026-05-07 21:55:21');
+INSERT INTO usuarios (id,nombre,correo,password,rol,documento_identidad,estado_cuenta,celular,tipo_documento,fecha_nacimiento,direccion,ciudad,numero_licencia,contacto_emergencia,created_at) VALUES (2,'Carlos Propietario','propietario@rentdrive.com','$2b$10$z0877NGeeuJlthEdmPznxOdBj0BNYKKbwLB2HZPgU34zI4yf/dyVG','propietario',NULL,'activa','','cedula','','','Medellín','','{}','2026-05-07 21:55:21');
+INSERT INTO usuarios (id,nombre,correo,password,rol,documento_identidad,estado_cuenta,celular,tipo_documento,fecha_nacimiento,direccion,ciudad,numero_licencia,contacto_emergencia,created_at) VALUES (3,'María Usuario','usuario@rentdrive.com','$2b$10$wLGzMLmTRPiBnqI0jhVdqOimW3R940wUmTncdijr3yz4N7RtM5Y/S','usuario',NULL,'activa','','cedula','','','Medellín','','{}','2026-05-07 21:55:21');
+INSERT INTO usuarios (id,nombre,correo,password,rol,documento_identidad,estado_cuenta,celular,tipo_documento,fecha_nacimiento,direccion,ciudad,numero_licencia,contacto_emergencia,created_at) VALUES (4,'Victor Hugo Navarro Lujan','hugonavarrol@hotmail.com','$2b$10$mIEe1aCQtza/7q1XXqPAkuLNZPfrVTMTeLw.Le9HY7QcIivrXx2sq','usuario',NULL,'activa','','cedula','','','Medellín','','{}','2026-05-07 21:55:58');
+INSERT INTO usuarios (id,nombre,correo,password,rol,documento_identidad,estado_cuenta,celular,tipo_documento,fecha_nacimiento,direccion,ciudad,numero_licencia,contacto_emergencia,created_at) VALUES (5,'Victor . Na','victor.navarrolu@amigo.edu.co','$2b$10$KW2uZABIZgDYO2Wbgxh9teuqTPj6qaZb3xn9mFTC.Y5yeiA21Ke5q','propietario',NULL,'activa','','cedula','','','Medellín','','{}','2026-05-07 22:39:12');
+
+-- vehiculos: 4 filas
+INSERT INTO vehiculos (id,propietario_id,marca,modelo,anio,tipo,ubicacion,precio_dia,descripcion,fotos,disponible,dias_disponibles,fotos_detalle,placa,documentos,documentos_estado,documentos_nota,documentos_revisiones,created_at) VALUES (1,2,'Toyota','Corolla',2022,'sedan','Medellín',120000.0,'Vehículo en excelente estado, aire acondicionado, bluetooth.','["https://images.unsplash.com/photo-1621007947382-bb3c3994e3fb?w=400"]',1,'[]','{}','','{}','sin_documentos','','{}','2026-05-07 21:55:21');
+INSERT INTO vehiculos (id,propietario_id,marca,modelo,anio,tipo,ubicacion,precio_dia,descripcion,fotos,disponible,dias_disponibles,fotos_detalle,placa,documentos,documentos_estado,documentos_nota,documentos_revisiones,created_at) VALUES (2,2,'Mazda','CX-5',2023,'suv','Medellín',180000.0,'SUV espaciosa perfecta para familia o viajes largos.','["https://images.unsplash.com/photo-1544636331-e26879cd4d9b?w=400"]',1,'[]','{}','','{}','sin_documentos','','{}','2026-05-07 21:55:21');
+INSERT INTO vehiculos (id,propietario_id,marca,modelo,anio,tipo,ubicacion,precio_dia,descripcion,fotos,disponible,dias_disponibles,fotos_detalle,placa,documentos,documentos_estado,documentos_nota,documentos_revisiones,created_at) VALUES (3,2,'Chevrolet','Spark',2021,'compacto','Medellín',80000.0,'Compacto ideal para la ciudad, bajo consumo de combustible.','["https://images.unsplash.com/photo-1503376780353-7e6692767b70?w=400"]',1,'[]','{}','','{}','sin_documentos','','{}','2026-05-07 21:55:21');
+INSERT INTO vehiculos (id,propietario_id,marca,modelo,anio,tipo,ubicacion,precio_dia,descripcion,fotos,disponible,dias_disponibles,fotos_detalle,placa,documentos,documentos_estado,documentos_nota,documentos_revisiones,created_at) VALUES (4,5,'Hiunday','Tucson',2022,'suv','Medellín',290000.0,'','[]',1,'["2026-05-10","2026-06-15","2026-06-08","2026-06-09","2026-06-13","2026-06-14","2026-05-11","2026-05-12","2026-05-13","2026-05-14","2026-05-15","2026-05-16","2026-05-17","2026-06-16","2026-06-17","2026-06-18","2026-06-19","2026-06-21","2026-05-07","2026-05-08","2026-05-09","2026-05-18","2026-05-19","2026-05-20","2026-05-21","2026-05-22","2026-05-23","2026-05-24","2026-06-11","2026-06-10","2026-06-12","2026-06-20","2026-06-27","2026-06-28","2026-06-26"]','{}','','{"soat":{"url":"/uploads/doc-1778548087471-4a29cz343de.png"},"tecno":{"url":"/uploads/doc-1778548133639-d93bzauijo4.png"},"tarjeta":{"url":"/uploads/doc-1778548902742-albzhxnmtwg.jpg"},"todo_riesgo":{"url":"/uploads/doc-1778548907889-7mmrea0cvlu.jpg"}}','denegado','Tarjeta de propiedad: fg','{"soat":{"estado":"aprobado","nota":""},"tecno":{"estado":"aprobado","nota":""},"todo_riesgo":{"estado":"aprobado","nota":""},"tarjeta":{"estado":"denegado","nota":"fg"}}','2026-05-07 22:39:41');
+
+-- conversaciones: 1 filas
+INSERT INTO conversaciones (id,propietario_id,usuario_id,created_at) VALUES (1,5,4,'2026-05-11 05:04:35');
+
+-- reservas: 3 filas
+INSERT INTO reservas (id,usuario_id,vehiculo_id,fecha_inicio,fecha_fin,total,pago_estado,estado,fotos_antes,fotos_despues,documento_id_url,licencia_url,firma_contrato,created_at) VALUES (1,4,2,'2026-05-13','2026-05-22',1620000.0,'pagado','confirmada','[]','[]','','','{}','2026-05-07 21:56:19');
+INSERT INTO reservas (id,usuario_id,vehiculo_id,fecha_inicio,fecha_fin,total,pago_estado,estado,fotos_antes,fotos_despues,documento_id_url,licencia_url,firma_contrato,created_at) VALUES (2,4,4,'2026-06-10','2026-06-20',2900000.0,'pagado','confirmada','[]','[]','','','{}','2026-05-11 05:03:30');
+INSERT INTO reservas (id,usuario_id,vehiculo_id,fecha_inicio,fecha_fin,total,pago_estado,estado,fotos_antes,fotos_despues,documento_id_url,licencia_url,firma_contrato,created_at) VALUES (3,4,4,'2026-05-12','2026-05-18',1740000.0,'pendiente','pendiente','[]','[]','','','{}','2026-05-12 01:33:15');
+
+-- notificaciones: 5 filas
+INSERT INTO notificaciones (id,destinatario_id,tipo,titulo,mensaje,referencia_id,referencia_tipo,leida,created_at) VALUES (1,1,'documentos_subidos','📄 Documentos pendientes de revisión','Victor . Na subió documentos para Hiunday Tucson 2022',4,'vehiculo',1,'2026-05-11 20:21:48');
+INSERT INTO notificaciones (id,destinatario_id,tipo,titulo,mensaje,referencia_id,referencia_tipo,leida,created_at) VALUES (2,5,'documento_aprobado','✅ Documento aprobado','Tu documento "SOAT" para Hiunday Tucson 2022 fue aprobado.',4,'vehiculo',1,'2026-05-11 20:22:18');
+INSERT INTO notificaciones (id,destinatario_id,tipo,titulo,mensaje,referencia_id,referencia_tipo,leida,created_at) VALUES (3,5,'documento_aprobado','✅ Documento aprobado','Tu documento "Tecno-mecánica" para Hiunday Tucson 2022 fue aprobado.',4,'vehiculo',1,'2026-05-11 20:22:19');
+INSERT INTO notificaciones (id,destinatario_id,tipo,titulo,mensaje,referencia_id,referencia_tipo,leida,created_at) VALUES (4,5,'documento_aprobado','✅ Documento aprobado','Tu documento "Seguro todo riesgo" para Hiunday Tucson 2022 fue aprobado.',4,'vehiculo',1,'2026-05-11 20:22:29');
+INSERT INTO notificaciones (id,destinatario_id,tipo,titulo,mensaje,referencia_id,referencia_tipo,leida,created_at) VALUES (5,5,'documento_denegado','❌ Documento rechazado','Tu documento "Tarjeta de propiedad" para Hiunday Tucson 2022 fue rechazado. Motivo: fg',4,'vehiculo',1,'2026-05-11 20:24:10');
+
+-- Sincronizar secuencias después de insertar IDs explícitos
+SELECT setval(pg_get_serial_sequence('usuarios','id'), COALESCE((SELECT MAX(id) FROM usuarios), 1));
+SELECT setval(pg_get_serial_sequence('vehiculos','id'), COALESCE((SELECT MAX(id) FROM vehiculos), 1));
+SELECT setval(pg_get_serial_sequence('conversaciones','id'), COALESCE((SELECT MAX(id) FROM conversaciones), 1));
+SELECT setval(pg_get_serial_sequence('mensajes','id'), COALESCE((SELECT MAX(id) FROM mensajes), 1));
+SELECT setval(pg_get_serial_sequence('reservas','id'), COALESCE((SELECT MAX(id) FROM reservas), 1));
+SELECT setval(pg_get_serial_sequence('notificaciones','id'), COALESCE((SELECT MAX(id) FROM notificaciones), 1));
+
+COMMIT;
