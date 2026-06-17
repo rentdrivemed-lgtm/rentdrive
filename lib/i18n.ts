@@ -6,6 +6,10 @@ export const es = {
     login: 'Iniciar sesión', register: 'Registrarse', logout: 'Cerrar sesión',
     role_admin: 'Administrador', role_owner: 'Propietario', role_user: 'Alquilador',
   },
+  footer: {
+    tagline: 'Alquiler de carros entre particulares',
+    copy: `© ${new Date().getFullYear()} DrivePass. Todos los derechos reservados.`,
+  },
 };
 
 export type Translations = typeof es;
@@ -17,5 +21,9 @@ export const en: Translations = {
     messages: 'Messages', profile: 'My profile',
     login: 'Sign in', register: 'Sign up', logout: 'Sign out',
     role_admin: 'Administrator', role_owner: 'Owner', role_user: 'Renter',
+  },
+  footer: {
+    tagline: 'Peer-to-peer car rental',
+    copy: `© ${new Date().getFullYear()} DrivePass. All rights reserved.`,
   },
 };
