@@ -1,12 +1,13 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import FotoUpload from '@/components/FotoUpload';
 import DocUpload from '@/components/DocUpload';
 import CalendarioDisponibilidad from '@/components/CalendarioDisponibilidad';
 import CalendarioReservas, { type ReservaCalendario } from '@/components/CalendarioReservas';
-import { IconCar, IconCalendar, IconChat, IconCheck } from '@/components/Icons';
+import { IconCar, IconCalendar, IconChat, IconCheck, IconArrowL } from '@/components/Icons';
 
+// ─── Types ────────────────────────────────────────────────────────────────────
 type DocItem = { url: string; vence?: string };
 type Documentos = {
   soat?: DocItem;
@@ -14,15 +15,15 @@ type Documentos = {
   tarjeta?: { url: string };
   todo_riesgo?: { url: string; aseguradora?: string; poliza?: string; vence?: string };
 };
-
 type DocRevision = { estado: string; nota: string };
-
 type Vehiculo = {
   id: number; marca: string; modelo: string; anio: number;
   tipo: string; precio_dia: number; disponible: number;
-  dias_disponibles: string; placa?: string; documentos?: string;
-  documentos_estado?: string; documentos_nota?: string;
-  documentos_revisiones?: string;
+  dias_disponibles: string; placa?: string;
+  fotos?: string; fotos_detalle?: string;
+  ubicacion?: string; descripcion?: string;
+  documentos?: string; documentos_estado?: string;
+  documentos_nota?: string; documentos_revisiones?: string;
 };
 type Reserva = ReservaCalendario & { usuario_id: number };
 type User = {
@@ -31,64 +32,117 @@ type User = {
   celular?: string; cedula_url?: string;
   banco?: string; numero_cuenta?: string; certificado_bancario_url?: string;
 };
-
 type Fotos = {
   lado_izquierdo: string; lado_derecho: string;
   frente: string; trasera: string;
   cojineria: string; baul: string; tablero: string;
 };
+type NotifRaw = { id: number; tipo: string; titulo: string; mensaje: string; leida: number };
+
+// ─── Constants ────────────────────────────────────────────────────────────────
 const FOTOS_VACIAS: Fotos = {
   lado_izquierdo: '', lado_derecho: '', frente: '', trasera: '',
   cojineria: '', baul: '', tablero: '',
 };
 const FOTOS_LABELS: Record<keyof Fotos, string> = {
-  lado_izquierdo: 'Lado izquierdo',
-  lado_derecho: 'Lado derecho',
-  frente: 'Frente',
-  trasera: 'Parte trasera',
-  cojineria: 'Cojinería',
-  baul: 'Baúl',
-  tablero: 'Tablero',
+  lado_izquierdo: 'Lado izquierdo', lado_derecho: 'Lado derecho',
+  frente: 'Frente', trasera: 'Parte trasera',
+  cojineria: 'Cojinería', baul: 'Baúl', tablero: 'Tablero',
 };
-
 const FORM_INICIAL = {
-  marca: '', modelo: '', anio: '', tipo: 'sedan', ubicacion: 'Medellín', descripcion: '', placa: '',
+  marca: '', modelo: '', anio: '', tipo: 'sedan',
+  ubicacion: 'Medellín', descripcion: '', placa: '',
 };
-
+const DOC_KEYS = ['soat', 'tecno', 'tarjeta', 'todo_riesgo'] as const;
+const DOC_LABELS_MAP: Record<string, string> = {
+  soat: 'SOAT', tecno: 'Tecno-mecánica',
+  tarjeta: 'Tarjeta de propiedad', todo_riesgo: 'Todo riesgo',
+};
 const estadoColor: Record<string, string> = {
-  pendiente:  'bg-warning/15 text-warning',
+  pendiente: 'bg-warning/15 text-warning',
   confirmada: 'bg-brand-muted text-ink',
-  en_curso:   'bg-success/15 text-success',
+  en_curso: 'bg-success/15 text-success',
   completada: 'bg-surface text-ink/50',
-  cancelada:  'bg-danger/15 text-danger',
+  cancelada: 'bg-danger/15 text-danger',
 };
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+const parseJ = <T,>(s: string | undefined | null, fb: T): T => {
+  try { return s ? JSON.parse(s) as T : fb; } catch { return fb; }
+};
+
+type ProgresoItem = { key: string; label: string; done: boolean };
+function calcProgreso(v: Vehiculo): { pct: number; items: ProgresoItem[] } {
+  const fDet = parseJ<Record<string, string>>(v.fotos_detalle, {});
+  const nFotos = Object.values(fDet).filter(Boolean).length;
+  const dias = parseJ<string[]>(v.dias_disponibles, []);
+  const docs = parseJ<Record<string, { url?: string } | undefined>>(v.documentos, {});
+
+  const items: ProgresoItem[] = [
+    { key: 'placa',  label: 'Placa',                 done: !!v.placa?.trim() },
+    { key: 'fotos',  label: `Fotos (${nFotos}/7)`,   done: nFotos >= 7 },
+    { key: 'dias',   label: `Disponibilidad`,         done: dias.length > 0 },
+    { key: 'soat',       label: 'SOAT',               done: !!(docs.soat as { url?: string } | undefined)?.url },
+    { key: 'tecno',      label: 'Tecno-mecánica',     done: !!(docs.tecno as { url?: string } | undefined)?.url },
+    { key: 'tarjeta',    label: 'Tarjeta propiedad',  done: !!(docs.tarjeta as { url?: string } | undefined)?.url },
+    { key: 'todo_riesgo',label: 'Todo riesgo',        done: !!(docs.todo_riesgo as { url?: string } | undefined)?.url },
+    { key: 'aprobacion', label: 'Aprobación DrivePass', done: v.documentos_estado === 'aprobado' },
+  ];
+  const done = items.filter(i => i.done).length;
+  return { pct: Math.round(done / items.length * 100), items };
+}
+
+// ─── Component ────────────────────────────────────────────────────────────────
 export default function DashboardPropietario() {
   const [user, setUser] = useState<User | null>(null);
   const [vehiculos, setVehiculos] = useState<Vehiculo[]>([]);
   const [reservas, setReservas] = useState<Reserva[]>([]);
   const [loadingReservas, setLoadingReservas] = useState(false);
   const [errorReservas, setErrorReservas] = useState('');
+  const [tab, setTab] = useState<'vehiculos' | 'reservas' | 'nuevo' | 'perfil' | 'editar'>('vehiculos');
+
+  // Nuevo vehículo
   const [form, setForm] = useState(FORM_INICIAL);
   const [fotos, setFotos] = useState<Fotos>(FOTOS_VACIAS);
   const [diasDisponibles, setDiasDisponibles] = useState<string[]>([]);
   const [msg, setMsg] = useState('');
   const [publicando, setPublicando] = useState(false);
-  const [tab, setTab] = useState<'vehiculos' | 'reservas' | 'nuevo' | 'perfil'>('vehiculos');
+
+  // Editar vehículo existente
+  const [vehiculoEditandoId, setVehiculoEditandoId] = useState<number | null>(null);
+  const [editForm, setEditForm] = useState(FORM_INICIAL);
+  const [editFotos, setEditFotos] = useState<Fotos>(FOTOS_VACIAS);
+  const [editDias, setEditDias] = useState<string[]>([]);
+  const [editDocs, setEditDocs] = useState<Documentos>({});
+  const [seccionMsg, setSeccionMsg] = useState<Record<string, string>>({});
+  const [guardandoSeccion, setGuardandoSeccion] = useState<Record<string, boolean>>({});
+
+  // Inline quick-edits in vehicle cards
   const [calTab, setCalTab] = useState<number | null>(null);
-  const [docTab, setDocTab] = useState<number | null>(null);
-  const [docsEditando, setDocsEditando] = useState<Record<number, Documentos>>({});
   const [placaMsg, setPlacaMsg] = useState<Record<number, string>>({});
-  const [perfil, setPerfil] = useState({ tipo_documento: 'cedula', documento_identidad: '', celular: '', cedula_url: '', banco: '', numero_cuenta: '', certificado_bancario_url: '' });
+
+  // Perfil
+  const [perfil, setPerfil] = useState({
+    tipo_documento: 'cedula', documento_identidad: '', celular: '', cedula_url: '',
+    banco: '', numero_cuenta: '', certificado_bancario_url: '',
+  });
   const [perfilMsg, setPerfilMsg] = useState('');
   const [guardandoPerfil, setGuardandoPerfil] = useState(false);
+
+  // Popups
+  const [popupCompleto, setPopupCompleto] = useState<string | null>(null); // vehicle name
+  const [popupNotif, setPopupNotif] = useState<{ tipo: 'aprobado' | 'denegado'; titulo: string; mensaje: string } | null>(null);
+
   const router = useRouter();
 
-  const cargarVehiculos = async (uid: number) => {
+  // ── Data loaders ──────────────────────────────────────────────────────────
+  const cargarVehiculos = useCallback(async (uid: number): Promise<Vehiculo[]> => {
     const res = await fetch(`/api/vehiculos?propietarioId=${uid}`);
     const data = await res.json();
-    setVehiculos(data.vehiculos || []);
-  };
+    const vs: Vehiculo[] = data.vehiculos || [];
+    setVehiculos(vs);
+    return vs;
+  }, []);
 
   const cargarReservas = async () => {
     setLoadingReservas(true);
@@ -97,18 +151,19 @@ export default function DashboardPropietario() {
       const res = await fetch('/api/reservas', { cache: 'no-store' });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        setErrorReservas(err.error || `Error ${res.status} al cargar reservas`);
+        setErrorReservas((err as { error?: string }).error || `Error ${res.status}`);
         setLoadingReservas(false);
         return;
       }
       const data = await res.json();
       setReservas(data.reservas || []);
     } catch {
-      setErrorReservas('Error de red al cargar reservas. Intenta de nuevo.');
+      setErrorReservas('Error de red al cargar reservas.');
     }
     setLoadingReservas(false);
   };
 
+  // ── Mount: load user + check notification popups ─────────────────────────
   useEffect(() => {
     fetch('/api/auth/me').then(r => r.json()).then(d => {
       if (!d.user || d.user.rol !== 'propietario') { router.push('/login'); return; }
@@ -125,92 +180,53 @@ export default function DashboardPropietario() {
       cargarVehiculos(d.user.id);
       cargarReservas();
     });
-  }, [router]);
 
-  // Recargar reservas cada vez que el usuario cambia a la tab de reservas
+    // Notification popups: check for unread doc approved/rejected
+    fetch('/api/notificaciones')
+      .then(r => r.json())
+      .then(data => {
+        const notifs: NotifRaw[] = data.notificaciones || [];
+        const pending = notifs.filter(n =>
+          !n.leida && (n.tipo === 'documento_aprobado' || n.tipo === 'documento_denegado')
+        );
+        if (pending.length > 0) {
+          const first = pending[0];
+          setPopupNotif({
+            tipo: first.tipo === 'documento_aprobado' ? 'aprobado' : 'denegado',
+            titulo: first.titulo,
+            mensaje: first.mensaje,
+          });
+          fetch('/api/notificaciones', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids: pending.map(n => n.id) }),
+          });
+        }
+      })
+      .catch(() => {});
+  }, [router, cargarVehiculos]);
+
   useEffect(() => {
     if (tab === 'reservas') cargarReservas();
   }, [tab]);
 
+  // ── Quick edits ────────────────────────────────────────────────────────────
   const guardarPlaca = async (vid: number, valor: string) => {
     const placa = valor.toUpperCase().trim();
     const actual = vehiculos.find(v => v.id === vid)?.placa || '';
     if (placa === actual) return;
     await fetch(`/api/vehiculos/${vid}`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ placa }),
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ placa }),
     });
     setVehiculos(vs => vs.map(v => v.id === vid ? { ...v, placa } : v));
     setPlacaMsg(m => ({ ...m, [vid]: '✓ Guardada' }));
     setTimeout(() => setPlacaMsg(m => { const c = { ...m }; delete c[vid]; return c; }), 1500);
   };
 
-  const guardarPerfil = async () => {
-    if (!perfil.banco.trim() || !perfil.numero_cuenta.trim() || !perfil.certificado_bancario_url) {
-      setPerfilMsg('Los datos bancarios son obligatorios para procesar pagos.');
-      return;
-    }
-    setGuardandoPerfil(true);
-    setPerfilMsg('');
-    try {
-      const res = await fetch('/api/auth/me', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(perfil),
-      });
-      if (res.ok) {
-        setPerfilMsg('✓ Perfil actualizado correctamente.');
-        setUser(u => u ? { ...u, ...perfil } : u);
-      } else {
-        const d = await res.json().catch(() => ({}));
-        setPerfilMsg(d.error || 'No se pudo guardar el perfil.');
-      }
-    } catch {
-      setPerfilMsg('Error de red al guardar.');
-    } finally {
-      setGuardandoPerfil(false);
-    }
-  };
-
-  const fotosCompletas = Object.values(fotos).every(Boolean);
-
-  const publicar = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setMsg('');
-    if (!fotosCompletas) { setMsg('Debes subir todas las fotos obligatorias'); return; }
-    if (diasDisponibles.length === 0) { setMsg('Debes marcar al menos un día de disponibilidad'); return; }
-
-    setPublicando(true);
-    const res = await fetch('/api/vehiculos', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...form,
-        anio: Number(form.anio),
-        precio_dia: 0,
-        placa: form.placa,
-        fotos: JSON.stringify([fotos.frente]),
-        fotos_detalle: JSON.stringify(fotos),
-        dias_disponibles: JSON.stringify(diasDisponibles),
-      }),
-    });
-    setPublicando(false);
-    if (res.ok) {
-      setMsg('✅ Vehículo publicado. El administrador asignará el precio pronto.');
-      setForm(FORM_INICIAL);
-      setFotos(FOTOS_VACIAS);
-      setDiasDisponibles([]);
-      if (user) cargarVehiculos(user.id);
-      setTab('vehiculos');
-    } else {
-      const d = await res.json();
-      setMsg(d.error || 'Error al publicar');
-    }
-  };
-
   const toggleDisponible = async (v: Vehiculo) => {
     await fetch(`/api/vehiculos/${v.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ disponible: v.disponible ? 0 : 1 }),
     });
     if (user) cargarVehiculos(user.id);
@@ -218,44 +234,130 @@ export default function DashboardPropietario() {
 
   const guardarDias = async (vid: number, dias: string[]) => {
     await fetch(`/api/vehiculos/${vid}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dias_disponibles: JSON.stringify(dias) }),
     });
     setVehiculos(vs => vs.map(v => v.id === vid ? { ...v, dias_disponibles: JSON.stringify(dias) } : v));
   };
 
-  const guardarDocumentos = async (vid: number, docs: Documentos) => {
-    await fetch(`/api/vehiculos/${vid}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ documentos: JSON.stringify(docs) }),
+  // ── Open vehicle editor ────────────────────────────────────────────────────
+  const abrirEditar = (v: Vehiculo) => {
+    setEditForm({
+      marca: v.marca, modelo: v.modelo, anio: String(v.anio),
+      tipo: v.tipo, ubicacion: v.ubicacion || 'Medellín',
+      descripcion: v.descripcion || '', placa: v.placa || '',
     });
-    // API auto-sets documentos_estado = 'en_revision' and clears nota
-    setVehiculos(vs => vs.map(v => v.id === vid
-      ? { ...v, documentos: JSON.stringify(docs), documentos_estado: 'en_revision', documentos_nota: '' }
-      : v));
+    setEditFotos({ ...FOTOS_VACIAS, ...parseJ<Partial<Fotos>>(v.fotos_detalle, {}) } as Fotos);
+    setEditDias(parseJ<string[]>(v.dias_disponibles, []));
+    setEditDocs(parseJ<Documentos>(v.documentos, {}));
+    setVehiculoEditandoId(v.id);
+    setSeccionMsg({});
+    setTab('editar');
   };
 
+  // ── Section savers in edit mode ────────────────────────────────────────────
+  const guardarSeccion = async (seccion: string, body: Record<string, unknown>) => {
+    if (!vehiculoEditandoId || !user) return;
+    setGuardandoSeccion(g => ({ ...g, [seccion]: true }));
+    setSeccionMsg(m => ({ ...m, [seccion]: '' }));
+    try {
+      const res = await fetch(`/api/vehiculos/${vehiculoEditandoId}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        setSeccionMsg(m => ({ ...m, [seccion]: '✓ Guardado' }));
+        const vs = await cargarVehiculos(user.id);
+        const vAct = vs.find(v => v.id === vehiculoEditandoId);
+        if (vAct) {
+          const { pct } = calcProgreso(vAct);
+          if (pct === 100) setPopupCompleto(`${vAct.marca} ${vAct.modelo} ${vAct.anio}`);
+        }
+      } else {
+        const d = await res.json();
+        setSeccionMsg(m => ({ ...m, [seccion]: (d as { error?: string }).error || 'Error al guardar' }));
+      }
+    } catch {
+      setSeccionMsg(m => ({ ...m, [seccion]: 'Error de red' }));
+    }
+    setGuardandoSeccion(g => ({ ...g, [seccion]: false }));
+  };
+
+  // ── Publish new vehicle ────────────────────────────────────────────────────
+  const publicar = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setMsg('');
+    if (!form.marca || !form.modelo || !form.anio) { setMsg('Marca, modelo y año son obligatorios'); return; }
+    setPublicando(true);
+    const res = await fetch('/api/vehiculos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...form, anio: Number(form.anio), precio_dia: 0, placa: form.placa,
+        fotos: JSON.stringify(fotos.frente ? [fotos.frente] : []),
+        fotos_detalle: JSON.stringify(fotos),
+        dias_disponibles: JSON.stringify(diasDisponibles),
+      }),
+    });
+    setPublicando(false);
+    if (res.ok) {
+      const d = await res.json();
+      setMsg('✅ Vehículo publicado. Ahora completa el perfil para activarlo.');
+      setForm(FORM_INICIAL); setFotos(FOTOS_VACIAS); setDiasDisponibles([]);
+      if (user) {
+        const vs = await cargarVehiculos(user.id);
+        const nuevo = vs.find(v => v.id === d.id);
+        if (nuevo) { abrirEditar(nuevo); return; }
+      }
+      setTab('vehiculos');
+    } else {
+      const d = await res.json();
+      setMsg((d as { error?: string }).error || 'Error al publicar');
+    }
+  };
+
+  // ── Perfil ─────────────────────────────────────────────────────────────────
+  const guardarPerfil = async () => {
+    if (!perfil.banco.trim() || !perfil.numero_cuenta.trim() || !perfil.certificado_bancario_url) {
+      setPerfilMsg('Los datos bancarios son obligatorios para procesar pagos.');
+      return;
+    }
+    setGuardandoPerfil(true); setPerfilMsg('');
+    try {
+      const res = await fetch('/api/auth/me', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(perfil),
+      });
+      if (res.ok) {
+        setPerfilMsg('✓ Perfil actualizado correctamente.');
+        setUser(u => u ? { ...u, ...perfil } : u);
+      } else {
+        const d = await res.json().catch(() => ({}));
+        setPerfilMsg((d as { error?: string }).error || 'No se pudo guardar el perfil.');
+      }
+    } catch { setPerfilMsg('Error de red al guardar.'); }
+    finally { setGuardandoPerfil(false); }
+  };
+
+  // ── Reservas helper ────────────────────────────────────────────────────────
   const reservasDatesVehiculo = (vid: number): string[] => {
     const set = new Set<string>();
-    reservas
-      .filter(r => r.vehiculo_id === vid && r.estado !== 'cancelada')
-      .forEach(r => {
-        const [sy, sm, sd] = r.fecha_inicio.slice(0, 10).split('-').map(Number);
-        const [ey, em, ed] = r.fecha_fin.slice(0, 10).split('-').map(Number);
-        const c = new Date(sy, sm - 1, sd);
-        const f = new Date(ey, em - 1, ed);
-        while (c < f) {
-          set.add(`${c.getFullYear()}-${String(c.getMonth() + 1).padStart(2, '0')}-${String(c.getDate()).padStart(2, '0')}`);
-          c.setDate(c.getDate() + 1);
-        }
-      });
+    reservas.filter(r => r.vehiculo_id === vid && r.estado !== 'cancelada').forEach(r => {
+      const [sy, sm, sd] = r.fecha_inicio.slice(0, 10).split('-').map(Number);
+      const [ey, em, ed] = r.fecha_fin.slice(0, 10).split('-').map(Number);
+      const c = new Date(sy, sm - 1, sd);
+      const f = new Date(ey, em - 1, ed);
+      while (c < f) {
+        set.add(`${c.getFullYear()}-${String(c.getMonth() + 1).padStart(2, '0')}-${String(c.getDate()).padStart(2, '0')}`);
+        c.setDate(c.getDate() + 1);
+      }
+    });
     return [...set];
   };
 
   if (!user) return <div className="text-center py-20 text-ink/40">Cargando...</div>;
 
+  // ── Tabs ──────────────────────────────────────────────────────────────────
   const TABS = [
     { key: 'vehiculos', label: `Mis vehículos (${vehiculos.length})` },
     { key: 'reservas',  label: loadingReservas ? 'Reservas…' : `Reservas (${reservas.length})` },
@@ -263,29 +365,68 @@ export default function DashboardPropietario() {
     { key: 'perfil',    label: 'Mi perfil' },
   ] as const;
 
+  // ── Edited vehicle ref ────────────────────────────────────────────────────
+  const vehiculoEditando = vehiculos.find(v => v.id === vehiculoEditandoId) ?? null;
+
+  // ─────────────────────────────────────────────────────────────────────────
   return (
     <div className="max-w-5xl mx-auto px-4 py-10">
+      {/* Popups */}
+      {popupCompleto && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-surface-2 rounded-3xl shadow-2xl border border-border max-w-sm w-full p-8 text-center animate-[fadeIn_0.2s_ease]">
+            <div className="text-5xl mb-4">🎉</div>
+            <h2 className="text-xl font-bold text-ink mb-2">¡Inscripción completa!</h2>
+            <p className="text-ink/60 text-sm mb-6">
+              Tu vehículo <strong className="text-ink">{popupCompleto}</strong> fue verificado y
+              aprobado por DrivePass. Ya está visible para los arrendatarios.
+            </p>
+            <button onClick={() => setPopupCompleto(null)}
+              className="w-full bg-accent hover:bg-accent-hover text-white font-bold py-3 rounded-xl transition">
+              ¡Genial!
+            </button>
+          </div>
+        </div>
+      )}
+
+      {popupNotif && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-surface-2 rounded-3xl shadow-2xl border border-border max-w-sm w-full p-8 text-center animate-[fadeIn_0.2s_ease]">
+            <div className="text-5xl mb-4">{popupNotif.tipo === 'aprobado' ? '✅' : '❌'}</div>
+            <h2 className="text-xl font-bold text-ink mb-2">{popupNotif.titulo}</h2>
+            <p className="text-ink/60 text-sm mb-6">{popupNotif.mensaje}</p>
+            <button
+              onClick={() => { setPopupNotif(null); if (popupNotif.tipo === 'denegado') setTab('vehiculos'); }}
+              className={`w-full text-white font-bold py-3 rounded-xl transition ${
+                popupNotif.tipo === 'aprobado' ? 'bg-success hover:bg-success/80' : 'bg-danger hover:bg-danger/80'
+              }`}>
+              {popupNotif.tipo === 'aprobado' ? '¡Excelente!' : 'Ver detalles'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Header */}
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-ink">Panel Propietario</h1>
         <p className="text-ink/50 text-sm">{user.nombre} · {user.correo}</p>
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-1 mb-6 border-b border-border overflow-x-auto scrollbar-none">
-        {TABS.map(t => (
-          <button key={t.key} onClick={() => setTab(t.key)}
-            className={`flex-shrink-0 px-4 py-2.5 text-sm font-medium transition border-b-2 -mb-px whitespace-nowrap ${
-              tab === t.key
-                ? 'border-accent text-accent'
-                : 'border-transparent text-ink/50 hover:text-ink'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      {/* Tabs (hide in edit mode) */}
+      {tab !== 'editar' && (
+        <div className="flex gap-1 mb-6 border-b border-border overflow-x-auto scrollbar-none">
+          {TABS.map(t => (
+            <button key={t.key} onClick={() => setTab(t.key)}
+              className={`flex-shrink-0 px-4 py-2.5 text-sm font-medium transition border-b-2 -mb-px whitespace-nowrap ${
+                tab === t.key ? 'border-accent text-accent' : 'border-transparent text-ink/50 hover:text-ink'
+              }`}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
 
-      {/* ── MIS VEHÍCULOS ── */}
+      {/* ── MIS VEHÍCULOS ────────────────────────────────────────────────────── */}
       {tab === 'vehiculos' && (
         <div className="space-y-4">
           {vehiculos.length === 0 ? (
@@ -294,24 +435,26 @@ export default function DashboardPropietario() {
               <p className="text-ink/40">No tienes vehículos publicados.</p>
             </div>
           ) : vehiculos.map(v => {
-            const dias = (() => { try { return JSON.parse(v.dias_disponibles || '[]'); } catch { return []; } })() as string[];
+            const { pct, items } = calcProgreso(v);
+            const faltantes = items.filter(i => !i.done).map(i => i.label);
+            const dias = parseJ<string[]>(v.dias_disponibles, []);
             const editando = calTab === v.id;
-            const docsActuales: Documentos = (() => { try { return JSON.parse(v.documentos || '{}'); } catch { return {}; } })();
+            const docsEstado = v.documentos_estado;
+
             return (
               <div key={v.id} className="bg-surface-2 rounded-2xl shadow-sm border border-border p-5">
-                <div className="flex items-center justify-between flex-wrap gap-3">
+                {/* Header row */}
+                <div className="flex items-start justify-between flex-wrap gap-3 mb-4">
                   <div>
                     <p className="font-bold text-ink">{v.marca} {v.modelo} {v.anio}</p>
                     <p className="text-sm text-ink/50 capitalize mt-0.5">
                       {v.tipo}
                       {v.precio_dia > 0
                         ? ` · $${v.precio_dia.toLocaleString('es-CO')}/día`
-                        : ' · Precio pendiente de asignación'}
+                        : ' · Precio pendiente'}
                     </p>
-                    <p className="text-xs text-accent mt-0.5 font-medium">
-                      {dias.length} día{dias.length !== 1 ? 's' : ''} disponibles
-                    </p>
-                    <div className="flex items-center gap-1.5 mt-1">
+                    {/* Placa inline */}
+                    <div className="flex items-center gap-1.5 mt-1.5">
                       <span className="text-xs text-ink/40">Placa:</span>
                       <input
                         defaultValue={v.placa || ''}
@@ -323,47 +466,64 @@ export default function DashboardPropietario() {
                       {placaMsg[v.id] && <span className="text-[10px] text-success">{placaMsg[v.id]}</span>}
                     </div>
                   </div>
-                  <div className="flex gap-2 flex-wrap">
-                    <button onClick={() => setCalTab(editando ? null : v.id)}
-                      className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl border transition font-medium ${
-                        editando
-                          ? 'bg-brand-muted border-brand/20 text-ink'
-                          : 'border-accent/30 text-accent hover:bg-accent-light'
-                      }`}>
-                      <IconCalendar size={12} /> {editando ? 'Cerrar' : 'Disponibilidad'}
-                    </button>
-                    <div className="flex items-center gap-1.5">
-                      <button onClick={() => setDocTab(docTab === v.id ? null : v.id)}
-                        className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl border transition font-medium ${
-                          docTab === v.id
-                            ? 'bg-brand-muted border-brand/20 text-ink'
-                            : v.documentos_estado === 'denegado'
-                            ? 'border-danger/25 text-danger bg-danger/10 hover:bg-danger/15'
-                            : 'border-border text-ink/60 hover:bg-surface'
-                        }`}>
-                        📄 {docTab === v.id ? 'Cerrar docs' : 'Documentos'}
-                      </button>
-                      {v.documentos_estado === 'en_revision' && (
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-warning/15 text-warning border border-warning/25 whitespace-nowrap">En revisión</span>
-                      )}
-                      {v.documentos_estado === 'aprobado' && (
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-success/15 text-success border border-success/30 whitespace-nowrap">✓ Aprobados</span>
-                      )}
-                      {v.documentos_estado === 'denegado' && (
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-danger/15 text-danger border border-danger/25 whitespace-nowrap">✗ Denegados</span>
-                      )}
-                    </div>
+                  {/* Status badges */}
+                  <div className="flex gap-2 flex-wrap items-center">
+                    {docsEstado === 'en_revision' && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-warning/15 text-warning border border-warning/25">⏳ En revisión</span>
+                    )}
+                    {docsEstado === 'aprobado' && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-success/15 text-success border border-success/30">✓ Aprobado</span>
+                    )}
+                    {docsEstado === 'denegado' && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-danger/15 text-danger border border-danger/25">✗ Rechazado</span>
+                    )}
                     <button onClick={() => toggleDisponible(v)}
                       className={`text-xs px-3 py-1.5 rounded-xl font-medium transition ${
-                        v.disponible
-                          ? 'bg-success/15 text-success hover:bg-success/15'
-                          : 'bg-danger/15 text-danger hover:bg-danger/15'
+                        v.disponible ? 'bg-success/15 text-success' : 'bg-danger/15 text-danger'
                       }`}>
                       {v.disponible ? 'Activo' : 'Inactivo'}
                     </button>
                   </div>
                 </div>
 
+                {/* Progress bar */}
+                <div className="mb-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-semibold text-ink/60">Perfil del vehículo</span>
+                    <span className={`text-xs font-bold ${pct === 100 ? 'text-success' : pct >= 75 ? 'text-accent' : 'text-warning'}`}>
+                      {pct}%
+                    </span>
+                  </div>
+                  <div className="h-2 bg-surface rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        pct === 100 ? 'bg-success' : pct >= 75 ? 'bg-accent' : 'bg-warning'
+                      }`}
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                  {faltantes.length > 0 && (
+                    <p className="text-[11px] text-ink/40 mt-1">
+                      Falta: {faltantes.join(' · ')}
+                    </p>
+                  )}
+                </div>
+
+                {/* Action buttons */}
+                <div className="flex gap-2 flex-wrap">
+                  <button onClick={() => setCalTab(editando ? null : v.id)}
+                    className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl border transition font-medium ${
+                      editando ? 'bg-brand-muted border-brand/20 text-ink' : 'border-accent/30 text-accent hover:bg-accent-light'
+                    }`}>
+                    <IconCalendar size={12} /> {editando ? 'Cerrar' : 'Disponibilidad'}
+                  </button>
+                  <button onClick={() => abrirEditar(v)}
+                    className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl border border-border text-ink/60 hover:border-accent/40 hover:text-accent transition font-medium">
+                    {pct < 100 ? '📋 Completar perfil' : '✏️ Editar'}
+                  </button>
+                </div>
+
+                {/* Inline calendar */}
                 {editando && (
                   <div className="mt-4 pt-4 border-t border-border">
                     <p className="text-sm font-medium text-ink/70 mb-3">
@@ -377,195 +537,48 @@ export default function DashboardPropietario() {
                     />
                   </div>
                 )}
-
-                {docTab === v.id && (() => {
-                  const docs = docsEditando[v.id] ?? docsActuales;
-                  const upd = (patch: Partial<Documentos>) =>
-                    setDocsEditando(d => ({ ...d, [v.id]: { ...(d[v.id] ?? docsActuales), ...patch } }));
-                  return (
-                    <div className="mt-4 pt-4 border-t border-border space-y-4">
-                      <div className="flex items-center justify-between flex-wrap gap-2">
-                        <p className="text-xs font-bold text-ink/50 uppercase tracking-widest">Documentos del vehículo</p>
-                        {v.documentos_estado === 'aprobado' && (
-                          <span className="text-xs font-semibold px-3 py-1 rounded-full bg-success/15 text-success border border-success/30">
-                            ✓ Documentos aprobados por DrivePass
-                          </span>
-                        )}
-                        {v.documentos_estado === 'en_revision' && (
-                          <span className="text-xs font-semibold px-3 py-1 rounded-full bg-warning/15 text-warning border border-warning/25">
-                            ⏳ En revisión por DrivePass
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Nota de denegación */}
-                      {v.documentos_estado === 'denegado' && v.documentos_nota && (
-                        <div className="bg-danger/10 border border-danger/25 rounded-xl p-3">
-                          <p className="text-xs font-bold text-danger mb-1">✗ Documentos denegados por DrivePass</p>
-                          <p className="text-sm text-danger">{v.documentos_nota}</p>
-                          <p className="text-[11px] text-danger mt-2">Corrige los documentos señalados y vuelve a guardar para enviarlos nuevamente a revisión.</p>
-                        </div>
-                      )}
-
-                      {/* Per-document review status */}
-                    {(() => {
-                      let revs: Record<string, DocRevision> = {};
-                      try { revs = JSON.parse(v.documentos_revisiones || '{}'); } catch { /* */ }
-                      const hasFeedback = Object.values(revs).some(r => r.estado === 'aprobado' || r.estado === 'denegado');
-                      if (!hasFeedback) return null;
-                      const DOC_KEYS_P = ['soat', 'tecno', 'tarjeta', 'todo_riesgo'];
-                      const DOC_LABELS_P: Record<string, string> = { soat: 'SOAT', tecno: 'Tecno-mecánica', tarjeta: 'Tarjeta de propiedad', todo_riesgo: 'Seguro todo riesgo' };
-                      return (
-                        <div className="space-y-1.5">
-                          <p className="text-[10px] font-bold text-ink/40 uppercase tracking-widest">Estado por documento</p>
-                          <div className="grid grid-cols-2 gap-2">
-                            {DOC_KEYS_P.map(k => {
-                              const r = revs[k];
-                              if (!r || r.estado === 'pendiente') return null;
-                              return (
-                                <div key={k} className={`rounded-xl px-3 py-2 border text-xs ${
-                                  r.estado === 'aprobado' ? 'bg-success/10 border-success/30' : 'bg-danger/10 border-danger/25'
-                                }`}>
-                                  <p className="font-bold text-ink">{DOC_LABELS_P[k]}</p>
-                                  {r.estado === 'aprobado' && <p className="text-success font-semibold mt-0.5">✓ Aprobado</p>}
-                                  {r.estado === 'denegado' && (
-                                    <>
-                                      <p className="text-danger font-semibold mt-0.5">✗ Rechazado</p>
-                                      {r.nota && <p className="text-danger text-[11px] mt-0.5">{r.nota}</p>}
-                                    </>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      );
-                    })()}
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        {/* SOAT */}
-                        <div className="bg-surface rounded-xl p-3 border border-border space-y-2">
-                          <p className="text-xs font-semibold text-ink">SOAT</p>
-                          <DocUpload label="Documento SOAT" value={docs.soat?.url || ''} onChange={url => upd({ soat: { ...docs.soat, url } })} />
-                          <div>
-                            <label className="text-[11px] text-ink/50 block mb-1">Fecha de vencimiento</label>
-                            <input type="date" value={docs.soat?.vence || ''}
-                              onChange={e => upd({ soat: { ...docs.soat, url: docs.soat?.url || '', vence: e.target.value } })}
-                              className="w-full border border-border rounded-lg px-2 py-1.5 text-xs text-ink bg-surface-2 focus:outline-none focus:ring-1 focus:ring-accent/40" />
-                          </div>
-                        </div>
-
-                        {/* Tecno-mecánica */}
-                        <div className="bg-surface rounded-xl p-3 border border-border space-y-2">
-                          <p className="text-xs font-semibold text-ink">Tecno-mecánica</p>
-                          <DocUpload label="Revisión tecno-mecánica" value={docs.tecno?.url || ''} onChange={url => upd({ tecno: { ...docs.tecno, url } })} />
-                          <div>
-                            <label className="text-[11px] text-ink/50 block mb-1">Fecha de vencimiento</label>
-                            <input type="date" value={docs.tecno?.vence || ''}
-                              onChange={e => upd({ tecno: { ...docs.tecno, url: docs.tecno?.url || '', vence: e.target.value } })}
-                              className="w-full border border-border rounded-lg px-2 py-1.5 text-xs text-ink bg-surface-2 focus:outline-none focus:ring-1 focus:ring-accent/40" />
-                          </div>
-                        </div>
-
-                        {/* Tarjeta de propiedad */}
-                        <div className="bg-surface rounded-xl p-3 border border-border space-y-2">
-                          <p className="text-xs font-semibold text-ink">Tarjeta de propiedad</p>
-                          <DocUpload label="Tarjeta de propiedad" value={docs.tarjeta?.url || ''} onChange={url => upd({ tarjeta: { url } })} />
-                        </div>
-
-                        {/* Todo riesgo */}
-                        <div className="bg-surface rounded-xl p-3 border border-border space-y-2">
-                          <p className="text-xs font-semibold text-ink">Seguro todo riesgo</p>
-                          <DocUpload label="Póliza todo riesgo" value={docs.todo_riesgo?.url || ''} onChange={url => upd({ todo_riesgo: { ...docs.todo_riesgo, url } })} />
-                          <div className="grid grid-cols-2 gap-2">
-                            <div>
-                              <label className="text-[11px] text-ink/50 block mb-1">Aseguradora</label>
-                              <input type="text" placeholder="Ej: Sura" value={docs.todo_riesgo?.aseguradora || ''}
-                                onChange={e => upd({ todo_riesgo: { ...docs.todo_riesgo, url: docs.todo_riesgo?.url || '', aseguradora: e.target.value } })}
-                                className="w-full border border-border rounded-lg px-2 py-1.5 text-xs text-ink bg-surface-2 focus:outline-none focus:ring-1 focus:ring-accent/40" />
-                            </div>
-                            <div>
-                              <label className="text-[11px] text-ink/50 block mb-1">N° Póliza</label>
-                              <input type="text" placeholder="Número" value={docs.todo_riesgo?.poliza || ''}
-                                onChange={e => upd({ todo_riesgo: { ...docs.todo_riesgo, url: docs.todo_riesgo?.url || '', poliza: e.target.value } })}
-                                className="w-full border border-border rounded-lg px-2 py-1.5 text-xs text-ink bg-surface-2 focus:outline-none focus:ring-1 focus:ring-accent/40" />
-                            </div>
-                          </div>
-                          <div>
-                            <label className="text-[11px] text-ink/50 block mb-1">Vencimiento</label>
-                            <input type="date" value={docs.todo_riesgo?.vence || ''}
-                              onChange={e => upd({ todo_riesgo: { ...docs.todo_riesgo, url: docs.todo_riesgo?.url || '', vence: e.target.value } })}
-                              className="w-full border border-border rounded-lg px-2 py-1.5 text-xs text-ink bg-surface-2 focus:outline-none focus:ring-1 focus:ring-accent/40" />
-                          </div>
-                        </div>
-                      </div>
-
-                      <button
-                        onClick={() => guardarDocumentos(v.id, docsEditando[v.id] ?? docsActuales)}
-                        className="flex items-center gap-2 bg-accent hover:bg-accent-hover text-white text-xs font-bold px-4 py-2 rounded-xl transition shadow-sm">
-                        Guardar documentos
-                      </button>
-                    </div>
-                  );
-                })()}
               </div>
             );
           })}
         </div>
       )}
 
-      {/* ── RESERVAS ── */}
+      {/* ── RESERVAS ─────────────────────────────────────────────────────────── */}
       {tab === 'reservas' && (
         <div className="space-y-6">
-          {/* Header con botón de recarga */}
           <div className="flex items-center justify-between">
             <p className="text-sm text-ink/50">
               {reservas.length > 0
                 ? `${reservas.length} reserva${reservas.length !== 1 ? 's' : ''} para tus vehículos`
                 : 'Reservas de tus vehículos'}
             </p>
-            <button
-              onClick={cargarReservas}
-              disabled={loadingReservas}
+            <button onClick={cargarReservas} disabled={loadingReservas}
               className="flex items-center gap-1.5 text-xs px-3 py-1.5 border border-accent/30 text-accent rounded-xl hover:bg-accent-light transition disabled:opacity-50 font-medium">
-              <IconCalendar size={12} />
-              {loadingReservas ? 'Cargando…' : 'Actualizar'}
+              <IconCalendar size={12} /> {loadingReservas ? 'Cargando…' : 'Actualizar'}
             </button>
           </div>
-
-          {/* Error de carga */}
           {errorReservas && (
             <div className="bg-danger/10 border border-danger/25 text-danger text-sm px-4 py-3 rounded-xl flex items-center justify-between gap-3">
               <span>{errorReservas}</span>
-              <button onClick={cargarReservas} className="font-semibold hover:text-danger transition">Reintentar</button>
+              <button onClick={cargarReservas} className="font-semibold hover:text-danger">Reintentar</button>
             </div>
           )}
-
-          {/* Skeleton de carga */}
           {loadingReservas ? (
-            <div className="space-y-3">
-              {[1, 2].map(i => (
-                <div key={i} className="bg-surface-2 rounded-2xl border border-border h-20 animate-pulse" />
-              ))}
-            </div>
+            <div className="space-y-3">{[1, 2].map(i => <div key={i} className="bg-surface-2 rounded-2xl border border-border h-20 animate-pulse" />)}</div>
           ) : !errorReservas && (
             <>
-              {/* Calendario visual */}
               <div className="bg-surface rounded-2xl border border-border p-4">
                 <h3 className="font-bold text-ink text-sm mb-4 flex items-center gap-2">
-                  <IconCalendar size={15} className="text-accent" /> Vista de calendario — mis vehículos
+                  <IconCalendar size={15} className="text-accent" /> Vista de calendario
                 </h3>
                 <CalendarioReservas reservas={reservas} />
               </div>
-
-              {/* Lista de reservas */}
               <div>
                 <h3 className="font-bold text-ink text-sm mb-3">Lista de reservas</h3>
                 {reservas.length === 0 ? (
                   <div className="text-center py-14 bg-surface-2 rounded-2xl border border-border">
                     <IconCalendar size={40} className="text-ink/15 mx-auto mb-3" />
-                    <p className="text-ink/40 font-medium">No hay reservas para tus vehículos aún.</p>
-                    <p className="text-ink/30 text-xs mt-1">Las reservas aparecerán aquí cuando los clientes reserven tus vehículos.</p>
+                    <p className="text-ink/40 font-medium">No hay reservas aún.</p>
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -595,38 +608,33 @@ export default function DashboardPropietario() {
         </div>
       )}
 
-      {/* ── PUBLICAR NUEVO VEHÍCULO ── */}
+      {/* ── PUBLICAR NUEVO ───────────────────────────────────────────────────── */}
       {tab === 'nuevo' && (
         <div className="bg-surface-2 rounded-2xl shadow-sm border border-border p-6">
           <h2 className="font-bold text-ink mb-1">Publicar nuevo vehículo</h2>
           <p className="text-sm text-ink/50 mb-5">
-            Completa todos los campos y sube las 7 fotos requeridas. El administrador asignará el precio.
+            Solo se requiere información básica. Podrás agregar fotos, disponibilidad y documentos luego.
           </p>
           {msg && (
             <div className={`text-sm px-4 py-2.5 rounded-xl mb-4 border ${
-              msg.startsWith('✅')
-                ? 'bg-success/10 text-success border-success/30'
-                : 'bg-danger/10 text-danger border-danger/25'
+              msg.startsWith('✅') ? 'bg-success/10 text-success border-success/30' : 'bg-danger/10 text-danger border-danger/25'
             }`}>{msg}</div>
           )}
           <form onSubmit={publicar} className="space-y-6">
-
-            {/* Datos básicos */}
             <div>
               <h3 className="text-xs font-bold text-ink/50 mb-3 uppercase tracking-widest">Datos del vehículo</h3>
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-semibold text-ink/60 block mb-1.5">Marca <span className="text-accent">*</span></label>
-                  <input required
-                    className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40"
-                    value={form.marca} onChange={e => setForm(f => ({ ...f, marca: e.target.value }))} />
-                </div>
-                <div>
-                  <label className="text-xs font-semibold text-ink/60 block mb-1.5">Modelo <span className="text-accent">*</span></label>
-                  <input required
-                    className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40"
-                    value={form.modelo} onChange={e => setForm(f => ({ ...f, modelo: e.target.value }))} />
-                </div>
+                {([
+                  { key: 'marca',  label: 'Marca',   req: true },
+                  { key: 'modelo', label: 'Modelo',  req: true },
+                ] as const).map(f => (
+                  <div key={f.key}>
+                    <label className="text-xs font-semibold text-ink/60 block mb-1.5">{f.label} <span className="text-accent">*</span></label>
+                    <input required={f.req}
+                      className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40"
+                      value={form[f.key]} onChange={e => setForm(f2 => ({ ...f2, [f.key]: e.target.value }))} />
+                  </div>
+                ))}
                 <div>
                   <label className="text-xs font-semibold text-ink/60 block mb-1.5">Año <span className="text-accent">*</span></label>
                   <input type="number" required min="2000" max="2030"
@@ -634,27 +642,20 @@ export default function DashboardPropietario() {
                     value={form.anio} onChange={e => setForm(f => ({ ...f, anio: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="text-xs font-semibold text-ink/60 block mb-1.5">Placa <span className="text-accent">*</span></label>
-                  <input required placeholder="ABC-123"
+                  <label className="text-xs font-semibold text-ink/60 block mb-1.5">Placa</label>
+                  <input placeholder="ABC-123"
                     className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40 uppercase"
                     value={form.placa} onChange={e => setForm(f => ({ ...f, placa: e.target.value.toUpperCase() }))} />
                 </div>
                 <div>
-                  <label className="text-xs font-semibold text-ink/60 block mb-1.5">Tipo <span className="text-accent">*</span></label>
-                  <select
-                    className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40"
+                  <label className="text-xs font-semibold text-ink/60 block mb-1.5">Tipo</label>
+                  <select className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40"
                     value={form.tipo} onChange={e => setForm(f => ({ ...f, tipo: e.target.value }))}>
                     <option value="sedan">Sedán</option>
                     <option value="suv">SUV</option>
                     <option value="compacto">Compacto</option>
                     <option value="pickup">Pickup</option>
                   </select>
-                </div>
-                <div className="col-span-2">
-                  <label className="text-xs font-semibold text-ink/60 block mb-1.5">Ubicación</label>
-                  <input
-                    className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40"
-                    value={form.ubicacion} onChange={e => setForm(f => ({ ...f, ubicacion: e.target.value }))} />
                 </div>
                 <div className="col-span-2">
                   <label className="text-xs font-semibold text-ink/60 block mb-1.5">Descripción</label>
@@ -664,15 +665,146 @@ export default function DashboardPropietario() {
                 </div>
               </div>
             </div>
+            <button type="submit" disabled={publicando}
+              className="w-full flex items-center justify-center gap-2 bg-accent hover:bg-accent-hover text-white py-3 rounded-xl font-bold transition shadow-md shadow-accent/20 disabled:opacity-60 text-sm">
+              <IconCheck size={16} />
+              {publicando ? 'Publicando…' : 'Publicar y completar perfil →'}
+            </button>
+          </form>
+        </div>
+      )}
 
-            {/* Fotos obligatorias */}
-            <div>
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-xs font-bold text-ink/50 uppercase tracking-widest">Fotos del vehículo</h3>
+      {/* ── EDITAR VEHÍCULO ──────────────────────────────────────────────────── */}
+      {tab === 'editar' && vehiculoEditando && (() => {
+        const { pct, items } = calcProgreso(vehiculoEditando);
+        const faltantes = items.filter(i => !i.done).map(i => i.label);
+        const fDet = parseJ<Record<string, { url?: string } | undefined>>(vehiculoEditando.documentos, {});
+
+        return (
+          <div className="space-y-5">
+            {/* Back + title */}
+            <div className="flex items-center gap-3">
+              <button onClick={() => { setTab('vehiculos'); setVehiculoEditandoId(null); }}
+                className="flex items-center gap-1.5 text-sm text-ink/60 hover:text-ink transition font-medium">
+                <IconArrowL size={16} /> Mis vehículos
+              </button>
+              <span className="text-ink/30">/</span>
+              <span className="text-sm font-semibold text-ink">
+                {vehiculoEditando.marca} {vehiculoEditando.modelo} {vehiculoEditando.anio}
+              </span>
+            </div>
+
+            {/* Progress bar */}
+            <div className="bg-surface-2 rounded-2xl border border-border p-5">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="font-bold text-ink">Perfil del vehículo</h3>
+                <span className={`text-lg font-black ${pct === 100 ? 'text-success' : pct >= 75 ? 'text-accent' : 'text-warning'}`}>
+                  {pct}%
+                </span>
+              </div>
+              <div className="h-3 bg-surface rounded-full overflow-hidden mb-3">
+                <div
+                  className={`h-full rounded-full transition-all duration-500 ${
+                    pct === 100 ? 'bg-success' : pct >= 75 ? 'bg-accent' : 'bg-warning'
+                  }`}
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {items.map(item => (
+                  <div key={item.key} className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-xl border ${
+                    item.done
+                      ? 'bg-success/10 border-success/30 text-success'
+                      : 'bg-surface border-border text-ink/40'
+                  }`}>
+                    <span>{item.done ? '✓' : '○'}</span>
+                    <span className="truncate">{item.label}</span>
+                  </div>
+                ))}
+              </div>
+              {faltantes.length > 0 && (
+                <p className="text-[11px] text-ink/40 mt-2">Pendiente: {faltantes.join(' · ')}</p>
+              )}
+            </div>
+
+            {/* Section 1: Basic info */}
+            <div className="bg-surface-2 rounded-2xl border border-border p-5">
+              <h3 className="font-bold text-ink mb-4 flex items-center gap-2">
+                <span className="w-6 h-6 rounded-full bg-accent/15 text-accent text-xs font-black grid place-items-center">1</span>
+                Datos básicos
+              </h3>
+              <div className="grid grid-cols-2 gap-3">
+                {([
+                  { key: 'marca',  label: 'Marca' },
+                  { key: 'modelo', label: 'Modelo' },
+                ] as const).map(f => (
+                  <div key={f.key}>
+                    <label className="text-xs font-medium text-ink/60 block mb-1">{f.label}</label>
+                    <input className="w-full border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40"
+                      value={editForm[f.key]} onChange={e => setEditForm(ef => ({ ...ef, [f.key]: e.target.value }))} />
+                  </div>
+                ))}
+                <div>
+                  <label className="text-xs font-medium text-ink/60 block mb-1">Año</label>
+                  <input type="number" min="2000" max="2030"
+                    className="w-full border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40"
+                    value={editForm.anio} onChange={e => setEditForm(ef => ({ ...ef, anio: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-ink/60 block mb-1">Placa</label>
+                  <input placeholder="ABC-123" maxLength={7}
+                    className="w-full border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40 uppercase"
+                    value={editForm.placa} onChange={e => setEditForm(ef => ({ ...ef, placa: e.target.value.toUpperCase() }))} />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-ink/60 block mb-1">Tipo</label>
+                  <select className="w-full border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40"
+                    value={editForm.tipo} onChange={e => setEditForm(ef => ({ ...ef, tipo: e.target.value }))}>
+                    <option value="sedan">Sedán</option>
+                    <option value="suv">SUV</option>
+                    <option value="compacto">Compacto</option>
+                    <option value="pickup">Pickup</option>
+                  </select>
+                </div>
+                <div className="col-span-2">
+                  <label className="text-xs font-medium text-ink/60 block mb-1">Descripción</label>
+                  <textarea rows={2}
+                    className="w-full border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40 resize-none"
+                    value={editForm.descripcion} onChange={e => setEditForm(ef => ({ ...ef, descripcion: e.target.value }))} />
+                </div>
+              </div>
+              <div className="flex items-center gap-3 mt-4">
+                <button
+                  onClick={() => guardarSeccion('basico', {
+                    marca: editForm.marca, modelo: editForm.modelo,
+                    anio: Number(editForm.anio), tipo: editForm.tipo,
+                    descripcion: editForm.descripcion, placa: editForm.placa,
+                  })}
+                  disabled={guardandoSeccion.basico}
+                  className="flex items-center gap-2 bg-accent hover:bg-accent-hover text-white text-sm font-bold px-4 py-2 rounded-xl transition disabled:opacity-60">
+                  <IconCheck size={14} /> {guardandoSeccion.basico ? 'Guardando…' : 'Guardar datos'}
+                </button>
+                {seccionMsg.basico && (
+                  <span className={`text-xs font-medium ${seccionMsg.basico.startsWith('✓') ? 'text-success' : 'text-danger'}`}>
+                    {seccionMsg.basico}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Section 2: Photos */}
+            <div className="bg-surface-2 rounded-2xl border border-border p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-bold text-ink flex items-center gap-2">
+                  <span className="w-6 h-6 rounded-full bg-accent/15 text-accent text-xs font-black grid place-items-center">2</span>
+                  Fotos del vehículo
+                </h3>
                 <span className={`text-xs px-2.5 py-0.5 rounded-full font-medium ${
-                  fotosCompletas ? 'bg-success/15 text-success' : 'bg-warning/15 text-warning'
+                  Object.values(editFotos).filter(Boolean).length >= 7
+                    ? 'bg-success/15 text-success'
+                    : 'bg-warning/15 text-warning'
                 }`}>
-                  {Object.values(fotos).filter(Boolean).length}/7 subidas
+                  {Object.values(editFotos).filter(Boolean).length}/7 subidas
                 </span>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
@@ -680,50 +812,211 @@ export default function DashboardPropietario() {
                   <FotoUpload
                     key={key}
                     label={FOTOS_LABELS[key]}
-                    value={fotos[key]}
-                    onChange={url => setFotos(f => ({ ...f, [key]: url }))}
-                    required
+                    value={editFotos[key]}
+                    onChange={url => setEditFotos(ef => ({ ...ef, [key]: url }))}
                   />
                 ))}
               </div>
-            </div>
-
-            {/* Calendario */}
-            <div>
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-xs font-bold text-ink/50 uppercase tracking-widest">Disponibilidad</h3>
-                {diasDisponibles.length === 0 && (
-                  <span className="text-xs text-accent font-medium">Debes marcar al menos un día</span>
+              <div className="flex items-center gap-3 mt-4">
+                <button
+                  onClick={() => guardarSeccion('fotos', {
+                    fotos: JSON.stringify(editFotos.frente ? [editFotos.frente] : []),
+                    fotos_detalle: JSON.stringify(editFotos),
+                  })}
+                  disabled={guardandoSeccion.fotos}
+                  className="flex items-center gap-2 bg-accent hover:bg-accent-hover text-white text-sm font-bold px-4 py-2 rounded-xl transition disabled:opacity-60">
+                  <IconCheck size={14} /> {guardandoSeccion.fotos ? 'Guardando…' : 'Guardar fotos'}
+                </button>
+                {seccionMsg.fotos && (
+                  <span className={`text-xs font-medium ${seccionMsg.fotos.startsWith('✓') ? 'text-success' : 'text-danger'}`}>
+                    {seccionMsg.fotos}
+                  </span>
                 )}
               </div>
-              <p className="text-sm text-ink/50 mb-4">Selecciona los días en que tu vehículo estará disponible para alquilar.</p>
-              <CalendarioDisponibilidad value={diasDisponibles} onChange={setDiasDisponibles} />
             </div>
 
-            <button type="submit" disabled={publicando}
-              className="w-full flex items-center justify-center gap-2 bg-accent hover:bg-accent-hover text-white py-3 rounded-xl font-bold transition shadow-md shadow-accent/20 disabled:opacity-60 text-sm">
-              <IconCheck size={16} />
-              {publicando ? 'Publicando…' : 'Publicar vehículo'}
-            </button>
-          </form>
-        </div>
-      )}
+            {/* Section 3: Availability */}
+            <div className="bg-surface-2 rounded-2xl border border-border p-5">
+              <h3 className="font-bold text-ink mb-4 flex items-center gap-2">
+                <span className="w-6 h-6 rounded-full bg-accent/15 text-accent text-xs font-black grid place-items-center">3</span>
+                Disponibilidad
+                {editDias.length > 0 && (
+                  <span className="text-xs text-success font-normal">({editDias.length} días)</span>
+                )}
+              </h3>
+              <CalendarioDisponibilidad
+                value={editDias}
+                onChange={async (dias) => {
+                  setEditDias(dias);
+                  await guardarSeccion('dias', { dias_disponibles: JSON.stringify(dias) });
+                }}
+                placa={editForm.placa}
+                reservedDates={reservasDatesVehiculo(vehiculoEditandoId!)}
+              />
+              {seccionMsg.dias && (
+                <span className={`text-xs font-medium mt-2 block ${seccionMsg.dias.startsWith('✓') ? 'text-success' : 'text-danger'}`}>
+                  {seccionMsg.dias}
+                </span>
+              )}
+            </div>
 
-      {/* ── MI PERFIL ── */}
+            {/* Section 4: Documents */}
+            <div className="bg-surface-2 rounded-2xl border border-border p-5">
+              <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+                <h3 className="font-bold text-ink flex items-center gap-2">
+                  <span className="w-6 h-6 rounded-full bg-accent/15 text-accent text-xs font-black grid place-items-center">4</span>
+                  Documentos del vehículo
+                </h3>
+                {vehiculoEditando.documentos_estado === 'aprobado' && (
+                  <span className="text-xs font-semibold px-3 py-1 rounded-full bg-success/15 text-success border border-success/30">✓ Aprobados</span>
+                )}
+                {vehiculoEditando.documentos_estado === 'en_revision' && (
+                  <span className="text-xs font-semibold px-3 py-1 rounded-full bg-warning/15 text-warning border border-warning/25">⏳ En revisión</span>
+                )}
+                {vehiculoEditando.documentos_estado === 'denegado' && (
+                  <span className="text-xs font-semibold px-3 py-1 rounded-full bg-danger/15 text-danger border border-danger/25">✗ Requiere corrección</span>
+                )}
+              </div>
+
+              {vehiculoEditando.documentos_estado === 'denegado' && vehiculoEditando.documentos_nota && (
+                <div className="bg-danger/10 border border-danger/25 rounded-xl p-3 mb-4">
+                  <p className="text-xs font-bold text-danger mb-1">✗ Documentos rechazados</p>
+                  <p className="text-sm text-danger whitespace-pre-line">{vehiculoEditando.documentos_nota}</p>
+                  <p className="text-[11px] text-danger mt-2">Corrige los documentos señalados y vuelve a guardar.</p>
+                </div>
+              )}
+
+              {/* Per-doc review status */}
+              {(() => {
+                let revs: Record<string, DocRevision> = {};
+                try { revs = JSON.parse(vehiculoEditando.documentos_revisiones || '{}'); } catch { /* */ }
+                const hasFeedback = Object.values(revs).some(r => r.estado === 'aprobado' || r.estado === 'denegado');
+                if (!hasFeedback) return null;
+                return (
+                  <div className="grid grid-cols-2 gap-2 mb-4">
+                    {DOC_KEYS.map(k => {
+                      const r = revs[k];
+                      if (!r || r.estado === 'pendiente') return null;
+                      return (
+                        <div key={k} className={`rounded-xl px-3 py-2 border text-xs ${
+                          r.estado === 'aprobado' ? 'bg-success/10 border-success/30' : 'bg-danger/10 border-danger/25'
+                        }`}>
+                          <p className="font-bold text-ink">{DOC_LABELS_MAP[k]}</p>
+                          {r.estado === 'aprobado' && <p className="text-success font-semibold mt-0.5">✓ Aprobado</p>}
+                          {r.estado === 'denegado' && (
+                            <>
+                              <p className="text-danger font-semibold mt-0.5">✗ Rechazado</p>
+                              {r.nota && <p className="text-danger text-[11px] mt-0.5">{r.nota}</p>}
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* SOAT */}
+                <div className="bg-surface rounded-xl p-3 border border-border space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-semibold text-ink">SOAT</p>
+                    {fDet.soat && (fDet.soat as { url?: string }).url && <span className="text-[10px] text-success font-bold">✓ Subido</span>}
+                  </div>
+                  <DocUpload label="Documento SOAT" value={(editDocs.soat?.url) || ''} onChange={url => setEditDocs(d => ({ ...d, soat: { ...d.soat, url } }))} />
+                  <div>
+                    <label className="text-[11px] text-ink/50 block mb-1">Fecha de vencimiento</label>
+                    <input type="date" value={editDocs.soat?.vence || ''}
+                      onChange={e => setEditDocs(d => ({ ...d, soat: { ...d.soat, url: d.soat?.url || '', vence: e.target.value } }))}
+                      className="w-full border border-border rounded-lg px-2 py-1.5 text-xs text-ink bg-surface-2 focus:outline-none focus:ring-1 focus:ring-accent/40" />
+                  </div>
+                </div>
+
+                {/* Tecno */}
+                <div className="bg-surface rounded-xl p-3 border border-border space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-semibold text-ink">Tecno-mecánica</p>
+                    {fDet.tecno && (fDet.tecno as { url?: string }).url && <span className="text-[10px] text-success font-bold">✓ Subido</span>}
+                  </div>
+                  <DocUpload label="Revisión tecno-mecánica" value={editDocs.tecno?.url || ''} onChange={url => setEditDocs(d => ({ ...d, tecno: { ...d.tecno, url } }))} />
+                  <div>
+                    <label className="text-[11px] text-ink/50 block mb-1">Fecha de vencimiento</label>
+                    <input type="date" value={editDocs.tecno?.vence || ''}
+                      onChange={e => setEditDocs(d => ({ ...d, tecno: { ...d.tecno, url: d.tecno?.url || '', vence: e.target.value } }))}
+                      className="w-full border border-border rounded-lg px-2 py-1.5 text-xs text-ink bg-surface-2 focus:outline-none focus:ring-1 focus:ring-accent/40" />
+                  </div>
+                </div>
+
+                {/* Tarjeta */}
+                <div className="bg-surface rounded-xl p-3 border border-border space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-semibold text-ink">Tarjeta de propiedad</p>
+                    {fDet.tarjeta && (fDet.tarjeta as { url?: string }).url && <span className="text-[10px] text-success font-bold">✓ Subido</span>}
+                  </div>
+                  <DocUpload label="Tarjeta de propiedad" value={(editDocs.tarjeta?.url) || ''} onChange={url => setEditDocs(d => ({ ...d, tarjeta: { url } }))} />
+                </div>
+
+                {/* Todo riesgo */}
+                <div className="bg-surface rounded-xl p-3 border border-border space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-semibold text-ink">Seguro todo riesgo</p>
+                    {fDet.todo_riesgo && (fDet.todo_riesgo as { url?: string }).url && <span className="text-[10px] text-success font-bold">✓ Subido</span>}
+                  </div>
+                  <DocUpload label="Póliza todo riesgo" value={editDocs.todo_riesgo?.url || ''} onChange={url => setEditDocs(d => ({ ...d, todo_riesgo: { ...d.todo_riesgo, url } }))} />
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[11px] text-ink/50 block mb-1">Aseguradora</label>
+                      <input type="text" placeholder="Ej: Sura" value={editDocs.todo_riesgo?.aseguradora || ''}
+                        onChange={e => setEditDocs(d => ({ ...d, todo_riesgo: { ...d.todo_riesgo, url: d.todo_riesgo?.url || '', aseguradora: e.target.value } }))}
+                        className="w-full border border-border rounded-lg px-2 py-1.5 text-xs text-ink bg-surface-2 focus:outline-none focus:ring-1 focus:ring-accent/40" />
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-ink/50 block mb-1">N° Póliza</label>
+                      <input type="text" placeholder="Número" value={editDocs.todo_riesgo?.poliza || ''}
+                        onChange={e => setEditDocs(d => ({ ...d, todo_riesgo: { ...d.todo_riesgo, url: d.todo_riesgo?.url || '', poliza: e.target.value } }))}
+                        className="w-full border border-border rounded-lg px-2 py-1.5 text-xs text-ink bg-surface-2 focus:outline-none focus:ring-1 focus:ring-accent/40" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-ink/50 block mb-1">Vencimiento</label>
+                    <input type="date" value={editDocs.todo_riesgo?.vence || ''}
+                      onChange={e => setEditDocs(d => ({ ...d, todo_riesgo: { ...d.todo_riesgo, url: d.todo_riesgo?.url || '', vence: e.target.value } }))}
+                      className="w-full border border-border rounded-lg px-2 py-1.5 text-xs text-ink bg-surface-2 focus:outline-none focus:ring-1 focus:ring-accent/40" />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 mt-4">
+                <button
+                  onClick={() => guardarSeccion('docs', { documentos: JSON.stringify(editDocs) })}
+                  disabled={guardandoSeccion.docs}
+                  className="flex items-center gap-2 bg-accent hover:bg-accent-hover text-white text-sm font-bold px-4 py-2 rounded-xl transition disabled:opacity-60">
+                  <IconCheck size={14} /> {guardandoSeccion.docs ? 'Guardando…' : 'Guardar documentos'}
+                </button>
+                {seccionMsg.docs && (
+                  <span className={`text-xs font-medium ${seccionMsg.docs.startsWith('✓') ? 'text-success' : 'text-danger'}`}>
+                    {seccionMsg.docs}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── MI PERFIL ────────────────────────────────────────────────────────── */}
       {tab === 'perfil' && (
         <div className="max-w-xl space-y-5">
+          {/* Datos personales */}
           <div className="bg-surface-2 rounded-2xl border border-border p-5">
             <h2 className="font-bold text-ink mb-1">Datos del propietario</h2>
             <p className="text-xs text-ink/50 mb-4">
-              Estos datos y tu cédula se usan para verificar que la tarjeta de propiedad de tus
-              vehículos esté realmente a tu nombre.
+              Tus datos y cédula se usan para verificar que la tarjeta de propiedad de tus vehículos esté a tu nombre.
             </p>
-
             <div className="grid grid-cols-2 gap-3 mb-4">
               <div>
                 <label className="text-[11px] text-ink/50 block mb-1">Tipo de documento</label>
-                <select
-                  value={perfil.tipo_documento}
+                <select value={perfil.tipo_documento}
                   onChange={e => setPerfil(p => ({ ...p, tipo_documento: e.target.value }))}
                   className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink">
                   <option value="cedula">Cédula de ciudadanía</option>
@@ -733,30 +1026,25 @@ export default function DashboardPropietario() {
               </div>
               <div>
                 <label className="text-[11px] text-ink/50 block mb-1">Número de documento</label>
-                <input
-                  value={perfil.documento_identidad}
+                <input value={perfil.documento_identidad}
                   onChange={e => setPerfil(p => ({ ...p, documento_identidad: e.target.value }))}
                   placeholder="Ej. 1.234.567.890"
                   className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink placeholder:text-ink/30" />
               </div>
             </div>
-
             <div className="mb-4">
               <label className="text-[11px] text-ink/50 block mb-1">Celular</label>
-              <input
-                value={perfil.celular}
+              <input value={perfil.celular}
                 onChange={e => setPerfil(p => ({ ...p, celular: e.target.value }))}
                 placeholder="Ej. 300 123 4567"
                 className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink placeholder:text-ink/30" />
             </div>
-
-            <div className="mb-4">
-              <DocUpload
-                label="Foto de tu cédula (frente)"
+            <div className="mb-1">
+              <DocUpload label="Foto de tu cédula (frente)"
                 value={perfil.cedula_url}
                 onChange={url => setPerfil(p => ({ ...p, cedula_url: url }))} />
               <p className="text-[11px] text-ink/40 mt-1">
-                Imagen o PDF claro y legible. Solo la vemos para validar tus documentos; no se muestra a los arrendatarios.
+                Imagen o PDF claro y legible. Solo la vemos para validar tus documentos.
               </p>
             </div>
           </div>
@@ -765,14 +1053,12 @@ export default function DashboardPropietario() {
           <div className="bg-surface-2 rounded-2xl border border-border p-5">
             <h2 className="font-bold text-ink mb-1">Datos bancarios <span className="text-accent text-sm font-semibold">*</span></h2>
             <p className="text-xs text-ink/50 mb-4">
-              Requeridos para procesar los pagos de tus alquileres. Estos datos son privados y solo los usa DrivePass para transferirte.
+              Requeridos para procesar los pagos de tus alquileres. Solo los usa DrivePass para transferirte.
             </p>
-
             <div className="grid grid-cols-2 gap-3 mb-4">
               <div>
                 <label className="text-[11px] text-ink/50 block mb-1">Banco <span className="text-accent">*</span></label>
-                <select
-                  value={perfil.banco}
+                <select value={perfil.banco}
                   onChange={e => setPerfil(p => ({ ...p, banco: e.target.value }))}
                   className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink">
                   <option value="">Selecciona un banco…</option>
@@ -793,29 +1079,25 @@ export default function DashboardPropietario() {
               </div>
               <div>
                 <label className="text-[11px] text-ink/50 block mb-1">Número de cuenta <span className="text-accent">*</span></label>
-                <input
-                  value={perfil.numero_cuenta}
+                <input value={perfil.numero_cuenta}
                   onChange={e => setPerfil(p => ({ ...p, numero_cuenta: e.target.value }))}
                   placeholder="Ej. 123-456789-00"
                   className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink placeholder:text-ink/30" />
               </div>
             </div>
-
             <div className="mb-1">
-              <DocUpload
-                label="Certificado bancario (PDF o imagen) *"
+              <DocUpload label="Certificado bancario (PDF o imagen) *"
                 value={perfil.certificado_bancario_url}
                 onChange={url => setPerfil(p => ({ ...p, certificado_bancario_url: url }))} />
               <p className="text-[11px] text-ink/40 mt-1">
-                Documento emitido por el banco que certifica la cuenta. Máximo 3 meses de antigüedad.
+                Documento emitido por el banco. Máximo 3 meses de antigüedad.
               </p>
             </div>
           </div>
 
+          {/* Save button */}
           <div className="bg-surface-2 rounded-2xl border border-border p-5">
-            <button
-              onClick={guardarPerfil}
-              disabled={guardandoPerfil}
+            <button onClick={guardarPerfil} disabled={guardandoPerfil}
               className="w-full flex items-center justify-center gap-2 bg-accent hover:bg-accent-hover text-white py-2.5 rounded-xl font-bold transition shadow-md shadow-accent/20 disabled:opacity-60 text-sm">
               <IconCheck size={16} />
               {guardandoPerfil ? 'Guardando…' : 'Guardar perfil'}
@@ -830,14 +1112,14 @@ export default function DashboardPropietario() {
   );
 }
 
+// ─── Sub-component ────────────────────────────────────────────────────────────
 function ChatLink({ propietarioId, usuarioId }: { propietarioId: number; usuarioId: number }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const abrir = async () => {
     setLoading(true);
     const res = await fetch('/api/chat/conversaciones', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ propietario_id: propietarioId, usuario_id: usuarioId }),
     });
     const data = await res.json();

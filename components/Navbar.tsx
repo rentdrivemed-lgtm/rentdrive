@@ -111,7 +111,6 @@ export default function Navbar() {
   const publicLinks = [
     { href: '/para-usuarios', label: t.nav.rent },
     { href: '/propietarios-info', label: t.nav.owners },
-    { href: '/alianzas/dtravel', label: t.nav.alliance },
     { href: '/terminos', label: t.nav.terms },
   ];
 
