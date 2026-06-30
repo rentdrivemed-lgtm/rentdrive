@@ -63,7 +63,7 @@ export default function HeroSlider() {
       <div className="hs-scrim" />
 
       {/* Contenido */}
-      <div className="relative mx-auto flex min-h-[inherit] max-w-[1240px] items-center px-4 sm:px-8 py-10">
+      <div className="relative mx-auto flex min-h-[inherit] max-w-[1240px] items-center px-4 sm:px-8 pt-10 pb-[90px]">
         {/* Izquierda — texto fijo */}
         <div className="max-w-[520px]">
           <span className="inline-flex items-center gap-2 text-accent font-semibold text-sm px-4 py-2 rounded-full border border-accent/40 bg-accent/10 backdrop-blur-sm">

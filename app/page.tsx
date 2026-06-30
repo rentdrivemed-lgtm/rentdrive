@@ -2,9 +2,7 @@
 import { useState, useEffect } from 'react';
 import HeroSlider from '@/components/HeroSlider';
 import VehiculoCard from '@/components/VehiculoCard';
-import LugarSelector from '@/components/LugarSelector';
-import { LUGAR_VACIO, cargarLugares, guardarLugares, type Lugar } from '@/lib/lugares';
-import { IconFilter, IconKey, IconShield, IconRoute, IconCar, IconCalendar, IconX, IconPin } from '@/components/Icons';
+import { IconFilter, IconKey, IconShield, IconRoute, IconCar, IconCalendar, IconX } from '@/components/Icons';
 
 type Vehiculo = {
   id: number; marca: string; modelo: string; anio: number;
@@ -24,18 +22,7 @@ export default function Home() {
   const [filtros, setFiltros] = useState({
     tipo: '', ubicacion: '', precioMax: '', fechaInicio: '', fechaFin: '',
   });
-  const [recogida, setRecogida] = useState<Lugar>({ ...LUGAR_VACIO });
-  const [entrega, setEntrega] = useState<Lugar>({ ...LUGAR_VACIO });
   const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const { recogida: r, entrega: e } = cargarLugares();
-    setRecogida(r);
-    setEntrega(e);
-  }, []);
-
-  const cambiarRecogida = (l: Lugar) => { setRecogida(l); guardarLugares(l, entrega); };
-  const cambiarEntrega  = (l: Lugar) => { setEntrega(l);  guardarLugares(recogida, l); };
 
   const cargar = async () => {
     setLoading(true);
@@ -152,21 +139,6 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Recogida y entrega */}
-          <div className="mb-3 pt-3 border-t border-border">
-            <div className="flex items-center gap-1.5 mb-3">
-              <IconPin size={14} className="text-accent" />
-              <span className="text-xs font-bold text-ink/60 uppercase tracking-wide">Recogida y entrega</span>
-            </div>
-            <div className="grid sm:grid-cols-2 gap-4">
-              <LugarSelector label="Recogida" value={recogida} onChange={cambiarRecogida} />
-              <LugarSelector label="Entrega" value={entrega} onChange={cambiarEntrega} tone="brand" />
-            </div>
-            <p className="text-[11px] text-ink/40 mt-2">
-              El aeropuerto José María Córdova (Rionegro) tiene un recargo de $100.000 por trayecto. Tu selección se guarda para la reserva.
-            </p>
-          </div>
-
           {/* Botones */}
           <div className="flex gap-2">
             <button onClick={cargar}
@@ -176,9 +148,6 @@ export default function Home() {
             {Object.values(filtros).some(Boolean) && (
               <button onClick={async () => {
                 setFiltros({ tipo: '', ubicacion: '', precioMax: '', fechaInicio: '', fechaFin: '' });
-                setRecogida({ ...LUGAR_VACIO });
-                setEntrega({ ...LUGAR_VACIO });
-                guardarLugares({ ...LUGAR_VACIO }, { ...LUGAR_VACIO });
                 setLoading(true);
                 const res = await fetch('/api/vehiculos');
                 const data = await res.json();

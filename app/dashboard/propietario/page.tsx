@@ -29,6 +29,7 @@ type User = {
   id: number; nombre: string; correo: string;
   tipo_documento?: string; documento_identidad?: string;
   celular?: string; cedula_url?: string;
+  banco?: string; numero_cuenta?: string; certificado_bancario_url?: string;
 };
 
 type Fotos = {
@@ -78,7 +79,7 @@ export default function DashboardPropietario() {
   const [docTab, setDocTab] = useState<number | null>(null);
   const [docsEditando, setDocsEditando] = useState<Record<number, Documentos>>({});
   const [placaMsg, setPlacaMsg] = useState<Record<number, string>>({});
-  const [perfil, setPerfil] = useState({ tipo_documento: 'cedula', documento_identidad: '', celular: '', cedula_url: '' });
+  const [perfil, setPerfil] = useState({ tipo_documento: 'cedula', documento_identidad: '', celular: '', cedula_url: '', banco: '', numero_cuenta: '', certificado_bancario_url: '' });
   const [perfilMsg, setPerfilMsg] = useState('');
   const [guardandoPerfil, setGuardandoPerfil] = useState(false);
   const router = useRouter();
@@ -117,6 +118,9 @@ export default function DashboardPropietario() {
         documento_identidad: d.user.documento_identidad || '',
         celular: d.user.celular || '',
         cedula_url: d.user.cedula_url || '',
+        banco: d.user.banco || '',
+        numero_cuenta: d.user.numero_cuenta || '',
+        certificado_bancario_url: d.user.certificado_bancario_url || '',
       });
       cargarVehiculos(d.user.id);
       cargarReservas();
@@ -141,6 +145,10 @@ export default function DashboardPropietario() {
   };
 
   const guardarPerfil = async () => {
+    if (!perfil.banco.trim() || !perfil.numero_cuenta.trim() || !perfil.certificado_bancario_url) {
+      setPerfilMsg('Los datos bancarios son obligatorios para procesar pagos.');
+      return;
+    }
     setGuardandoPerfil(true);
     setPerfilMsg('');
     try {
@@ -751,7 +759,60 @@ export default function DashboardPropietario() {
                 Imagen o PDF claro y legible. Solo la vemos para validar tus documentos; no se muestra a los arrendatarios.
               </p>
             </div>
+          </div>
 
+          {/* Datos bancarios */}
+          <div className="bg-surface-2 rounded-2xl border border-border p-5">
+            <h2 className="font-bold text-ink mb-1">Datos bancarios <span className="text-accent text-sm font-semibold">*</span></h2>
+            <p className="text-xs text-ink/50 mb-4">
+              Requeridos para procesar los pagos de tus alquileres. Estos datos son privados y solo los usa DrivePass para transferirte.
+            </p>
+
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <div>
+                <label className="text-[11px] text-ink/50 block mb-1">Banco <span className="text-accent">*</span></label>
+                <select
+                  value={perfil.banco}
+                  onChange={e => setPerfil(p => ({ ...p, banco: e.target.value }))}
+                  className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink">
+                  <option value="">Selecciona un banco…</option>
+                  <option value="Bancolombia">Bancolombia</option>
+                  <option value="Davivienda">Davivienda</option>
+                  <option value="Banco de Bogotá">Banco de Bogotá</option>
+                  <option value="BBVA Colombia">BBVA Colombia</option>
+                  <option value="Nequi">Nequi</option>
+                  <option value="Daviplata">Daviplata</option>
+                  <option value="Banco Agrario">Banco Agrario</option>
+                  <option value="Scotiabank Colpatria">Scotiabank Colpatria</option>
+                  <option value="Banco Popular">Banco Popular</option>
+                  <option value="Banco de Occidente">Banco de Occidente</option>
+                  <option value="Banco Caja Social">Banco Caja Social</option>
+                  <option value="Bancamía">Bancamía</option>
+                  <option value="Otro">Otro</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-[11px] text-ink/50 block mb-1">Número de cuenta <span className="text-accent">*</span></label>
+                <input
+                  value={perfil.numero_cuenta}
+                  onChange={e => setPerfil(p => ({ ...p, numero_cuenta: e.target.value }))}
+                  placeholder="Ej. 123-456789-00"
+                  className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink placeholder:text-ink/30" />
+              </div>
+            </div>
+
+            <div className="mb-1">
+              <DocUpload
+                label="Certificado bancario (PDF o imagen) *"
+                value={perfil.certificado_bancario_url}
+                onChange={url => setPerfil(p => ({ ...p, certificado_bancario_url: url }))} />
+              <p className="text-[11px] text-ink/40 mt-1">
+                Documento emitido por el banco que certifica la cuenta. Máximo 3 meses de antigüedad.
+              </p>
+            </div>
+          </div>
+
+          <div className="bg-surface-2 rounded-2xl border border-border p-5">
             <button
               onClick={guardarPerfil}
               disabled={guardandoPerfil}

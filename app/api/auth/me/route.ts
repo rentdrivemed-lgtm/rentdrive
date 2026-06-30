@@ -9,14 +9,14 @@ export async function GET() {
   // Devolvemos también el perfil ampliado desde la BD (el JWT solo trae lo básico).
   const db = getDb();
   const fila = db.prepare(
-    'SELECT tipo_documento, documento_identidad, celular, direccion, ciudad, cedula_url FROM usuarios WHERE id = ?'
+    'SELECT tipo_documento, documento_identidad, celular, direccion, ciudad, cedula_url, banco, numero_cuenta, certificado_bancario_url FROM usuarios WHERE id = ?'
   ).get(user.id) as Record<string, unknown> | undefined;
 
   return NextResponse.json({ user: { ...user, ...(fila || {}) } });
 }
 
 // Campos que el usuario puede editar de su propio perfil.
-const CAMPOS_EDITABLES = ['tipo_documento', 'documento_identidad', 'celular', 'direccion', 'ciudad', 'cedula_url'] as const;
+const CAMPOS_EDITABLES = ['tipo_documento', 'documento_identidad', 'celular', 'direccion', 'ciudad', 'cedula_url', 'banco', 'numero_cuenta', 'certificado_bancario_url'] as const;
 
 export async function PUT(req: NextRequest) {
   const user = await getCurrentUser();
@@ -39,7 +39,7 @@ export async function PUT(req: NextRequest) {
   db.prepare(`UPDATE usuarios SET ${sets.join(', ')} WHERE id = ?`).run(...valores, user.id);
 
   const fila = db.prepare(
-    'SELECT tipo_documento, documento_identidad, celular, direccion, ciudad, cedula_url FROM usuarios WHERE id = ?'
+    'SELECT tipo_documento, documento_identidad, celular, direccion, ciudad, cedula_url, banco, numero_cuenta, certificado_bancario_url FROM usuarios WHERE id = ?'
   ).get(user.id) as Record<string, unknown> | undefined;
 
   return NextResponse.json({ ok: true, perfil: fila || {} });

@@ -29,3 +29,6 @@ Thumbs.db
 # Editor
 .vscode/
 .idea/
+
+# Documentos internos de trabajo (agentes y bitácora) — solo locales
+_agentes/
