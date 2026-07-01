@@ -37,7 +37,7 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: 'La contraseña debe tener al menos 6 caracteres' }, { status: 400 });
     }
     const hash = await bcrypt.hash(nueva_contrasena, 12);
-    db.prepare('UPDATE usuarios SET contrasena = ? WHERE id = ?').run(hash, id);
+    db.prepare('UPDATE usuarios SET password = ? WHERE id = ?').run(hash, id);
     return NextResponse.json({ ok: true });
   }
 

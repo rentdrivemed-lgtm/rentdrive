@@ -330,17 +330,22 @@ export default function DashboardAdmin() {
     if (!resetPass) return;
     if (resetPass.nueva.length < 6) return;
     if (resetPass.nueva !== resetPass.confirmar) return;
-    setResetPass(r => r ? { ...r, guardando: true } : r);
-    const res = await fetch('/api/admin/usuarios', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: resetPass.uid, nueva_contrasena: resetPass.nueva }),
-    });
-    if (res.ok) {
-      setResetPass(r => r ? { ...r, guardando: false, ok: resetPass.nueva } : r);
-    } else {
+    const nueva = resetPass.nueva;
+    setResetPass(r => r ? { ...r, guardando: true, ok: '' } : r);
+    try {
+      const res = await fetch('/api/admin/usuarios', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: resetPass.uid, nueva_contrasena: nueva }),
+      });
       const d = await res.json() as { error?: string };
-      setResetPass(r => r ? { ...r, guardando: false, ok: d.error || 'Error' } : r);
+      if (res.ok) {
+        setResetPass(r => r ? { ...r, guardando: false, ok: nueva } : r);
+      } else {
+        setResetPass(r => r ? { ...r, guardando: false, ok: `Error: ${d.error || res.status}` } : r);
+      }
+    } catch {
+      setResetPass(r => r ? { ...r, guardando: false, ok: 'Error: sin conexión' } : r);
     }
   };
 
