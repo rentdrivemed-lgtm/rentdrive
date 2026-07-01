@@ -131,7 +131,7 @@ export default function DashboardPropietario() {
 
   // Popups
   const [popupCompleto, setPopupCompleto] = useState<string | null>(null); // vehicle name
-  const [popupNotif, setPopupNotif] = useState<{ tipo: 'aprobado' | 'denegado'; titulo: string; mensaje: string } | null>(null);
+  const [popupNotif, setPopupNotif] = useState<{ tipo: 'aprobado' | 'denegado' | 'pago'; titulo: string; mensaje: string } | null>(null);
 
   const router = useRouter();
 
@@ -181,21 +181,19 @@ export default function DashboardPropietario() {
       cargarReservas();
     });
 
-    // Notification popups: check for unread doc approved/rejected
+    // Notification popups: check for unread doc / payment notifications
     fetch('/api/notificaciones')
       .then(r => r.json())
       .then(data => {
         const notifs: NotifRaw[] = data.notificaciones || [];
-        const pending = notifs.filter(n =>
-          !n.leida && (n.tipo === 'documento_aprobado' || n.tipo === 'documento_denegado')
-        );
+        const TIPOS_POPUP = ['documento_aprobado', 'documento_denegado', 'pago_realizado'];
+        const pending = notifs.filter(n => !n.leida && TIPOS_POPUP.includes(n.tipo));
         if (pending.length > 0) {
           const first = pending[0];
-          setPopupNotif({
-            tipo: first.tipo === 'documento_aprobado' ? 'aprobado' : 'denegado',
-            titulo: first.titulo,
-            mensaje: first.mensaje,
-          });
+          let tipo: 'aprobado' | 'denegado' | 'pago' = 'aprobado';
+          if (first.tipo === 'documento_denegado') tipo = 'denegado';
+          else if (first.tipo === 'pago_realizado') tipo = 'pago';
+          setPopupNotif({ tipo, titulo: first.titulo, mensaje: first.mensaje });
           fetch('/api/notificaciones', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
@@ -392,15 +390,19 @@ export default function DashboardPropietario() {
       {popupNotif && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <div className="bg-surface-2 rounded-3xl shadow-2xl border border-border max-w-sm w-full p-8 text-center animate-[fadeIn_0.2s_ease]">
-            <div className="text-5xl mb-4">{popupNotif.tipo === 'aprobado' ? '✅' : '❌'}</div>
+            <div className="text-5xl mb-4">
+              {popupNotif.tipo === 'aprobado' ? '✅' : popupNotif.tipo === 'pago' ? '💰' : '❌'}
+            </div>
             <h2 className="text-xl font-bold text-ink mb-2">{popupNotif.titulo}</h2>
             <p className="text-ink/60 text-sm mb-6">{popupNotif.mensaje}</p>
             <button
               onClick={() => { setPopupNotif(null); if (popupNotif.tipo === 'denegado') setTab('vehiculos'); }}
               className={`w-full text-white font-bold py-3 rounded-xl transition ${
-                popupNotif.tipo === 'aprobado' ? 'bg-success hover:bg-success/80' : 'bg-danger hover:bg-danger/80'
+                popupNotif.tipo === 'aprobado' ? 'bg-success hover:bg-success/80'
+                : popupNotif.tipo === 'pago' ? 'bg-accent hover:bg-accent-hover'
+                : 'bg-danger hover:bg-danger/80'
               }`}>
-              {popupNotif.tipo === 'aprobado' ? '¡Excelente!' : 'Ver detalles'}
+              {popupNotif.tipo === 'aprobado' ? '¡Excelente!' : popupNotif.tipo === 'pago' ? '¡Genial, gracias!' : 'Ver detalles'}
             </button>
           </div>
         </div>

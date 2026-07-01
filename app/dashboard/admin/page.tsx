@@ -184,7 +184,7 @@ function ResultadoIA({ res, auto }: { res: VerificacionResultado; auto?: string[
 }
 
 export default function DashboardAdmin() {
-  const [tab, setTab] = useState<'usuarios' | 'vehiculos' | 'reservas' | 'operaciones' | 'config'>('usuarios');
+  const [tab, setTab] = useState<'usuarios' | 'vehiculos' | 'reservas' | 'operaciones' | 'pagos' | 'config'>('usuarios');
   const [picoPlaca, setPicoPlaca] = useState<PicoPlaca>(picoPlacaVacio());
   const [usuarios, setUsuarios]   = useState<Usuario[]>([]);
   const [vehiculos, setVehiculos] = useState<Vehiculo[]>([]);
@@ -208,6 +208,20 @@ export default function DashboardAdmin() {
   const [arrIaCargando, setArrIaCargando] = useState(false);
   const [revisandoDoc, setRevisandoDoc] = useState<{ key: string; nota: string } | null>(null);
   const [docAccionando, setDocAccionando] = useState<string | null>(null);
+
+  // ── Pagos ──────────────────────────────────────────────────────────────────
+  type PagoGrupo = {
+    propietario_id: number; propietario_nombre: string; propietario_correo: string;
+    banco: string; numero_cuenta: string; total_pendiente: number;
+    reservas: Array<{ reserva_id: number; marca: string; modelo: string; anio: number; fecha_inicio: string; fecha_fin: string; total: number; usuario_nombre: string }>;
+  };
+  const [pagos, setPagos] = useState<PagoGrupo[]>([]);
+  const [pagosTotalGeneral, setPagosTotalGeneral] = useState(0);
+  const [pagosLoading, setPagosLoading] = useState(false);
+  const [pagandoIds, setPagandoIds] = useState<Set<number>>(new Set());
+  const [pagoMsg, setPagoMsg] = useState('');
+  const [pagoComprobante, setPagoComprobante] = useState('');
+
   const router = useRouter();
 
   useEffect(() => {
@@ -220,6 +234,10 @@ export default function DashboardAdmin() {
     fetch('/api/config').then(r => r.json()).then(d => setPicoPlaca(parsePicoPlaca(d.config?.pico_placa || ''))).catch(() => {});
   }, [router]);
 
+  useEffect(() => {
+    if (tab === 'pagos') cargarPagos();
+  }, [tab]);
+
   const cargarUsuarios = () =>
     fetch('/api/admin/usuarios').then(r => r.json()).then(d => setUsuarios(d.usuarios || []));
 
@@ -228,6 +246,18 @@ export default function DashboardAdmin() {
 
   const cargarReservas = () =>
     fetch('/api/reservas').then(r => r.json()).then(d => setReservas(d.reservas || []));
+
+  const cargarPagos = () => {
+    setPagosLoading(true);
+    fetch('/api/pagos?pago_estado=pendiente')
+      .then(r => r.json())
+      .then(d => {
+        setPagos(d.por_propietario || []);
+        setPagosTotalGeneral(d.total_general || 0);
+      })
+      .catch(() => {})
+      .finally(() => setPagosLoading(false));
+  };
 
   const toggleEstado = async (u: Usuario) => {
     const nuevo = u.estado_cuenta === 'activa' ? 'inactiva' : 'activa';
@@ -397,6 +427,29 @@ export default function DashboardAdmin() {
     setReservas(rs => rs.map(r => r.id === id ? { ...r, estado } : r));
   };
 
+  const marcarPagado = async (reservaIds: number[]) => {
+    setPagandoIds(prev => new Set([...prev, ...reservaIds]));
+    setPagoMsg('');
+    try {
+      const res = await fetch('/api/pagos', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reserva_ids: reservaIds, comprobante: pagoComprobante }),
+      });
+      if (res.ok) {
+        setPagoMsg('✓ Pago registrado y propietario notificado.');
+        cargarPagos();
+        setTimeout(() => setPagoMsg(''), 4000);
+      } else {
+        const d = await res.json();
+        setPagoMsg((d as { error?: string }).error || 'Error al registrar el pago.');
+      }
+    } catch {
+      setPagoMsg('Error de red al registrar el pago.');
+    }
+    setPagandoIds(prev => { const n = new Set(prev); reservaIds.forEach(id => n.delete(id)); return n; });
+  };
+
   const stats = {
     total:         usuarios.length,
     propietarios:  usuarios.filter(u => u.rol === 'propietario').length,
@@ -465,6 +518,7 @@ export default function DashboardAdmin() {
           { key: 'vehiculos', label: `Vehículos (${vehiculos.length})` },
           { key: 'reservas',  label: `Reservas (${reservas.length})`, badge: pendientesCount },
           { key: 'operaciones', label: 'Operaciones' },
+          { key: 'pagos', label: `💰 Pagos${pagos.length > 0 ? ` (${pagos.length})` : ''}`, badge: pagos.length },
           { key: 'config', label: 'Configuración' },
         ] as const).map(t => (
           <button key={t.key} onClick={() => setTab(t.key)}
@@ -838,6 +892,126 @@ export default function DashboardAdmin() {
 
       {/* ── OPERACIONES / LOGÍSTICA ── */}
       {tab === 'operaciones' && <OperacionesPanel />}
+
+      {/* ── PAGOS A PROPIETARIOS ── */}
+      {tab === 'pagos' && (
+        <div className="space-y-5">
+          {/* Header + totales */}
+          <div className="flex items-start justify-between flex-wrap gap-4">
+            <div>
+              <h2 className="font-bold text-ink text-lg">Pagos pendientes a propietarios</h2>
+              <p className="text-sm text-ink/50">Reservas completadas cuyo pago al dueño aún no se ha transferido</p>
+            </div>
+            <div className="bg-warning/10 border border-warning/30 rounded-2xl px-5 py-3 text-right">
+              <p className="text-xs text-warning/80 font-medium">Total pendiente</p>
+              <p className="text-2xl font-black text-warning">${pagosTotalGeneral.toLocaleString('es-CO')}</p>
+            </div>
+          </div>
+
+          {/* Comprobante global */}
+          <div className="bg-surface-2 rounded-2xl border border-border p-4 flex flex-wrap items-center gap-3">
+            <div className="flex-1 min-w-[200px]">
+              <label className="text-xs font-medium text-ink/60 block mb-1">Número de comprobante / referencia (opcional)</label>
+              <input
+                placeholder="Ej. TXN-20260630-001"
+                value={pagoComprobante}
+                onChange={e => setPagoComprobante(e.target.value)}
+                className="w-full border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40"
+              />
+            </div>
+            <p className="text-xs text-ink/40 flex-shrink-0">Se incluye en la notificación al propietario.</p>
+          </div>
+
+          {pagoMsg && (
+            <div className={`text-sm px-4 py-2.5 rounded-xl border ${
+              pagoMsg.startsWith('✓') ? 'bg-success/10 text-success border-success/30' : 'bg-danger/10 text-danger border-danger/25'
+            }`}>{pagoMsg}</div>
+          )}
+
+          {pagosLoading ? (
+            <div className="space-y-3">
+              {[1, 2].map(i => <div key={i} className="bg-surface-2 rounded-2xl border border-border h-28 animate-pulse" />)}
+            </div>
+          ) : pagos.length === 0 ? (
+            <div className="text-center py-16 bg-surface-2 rounded-2xl border border-border">
+              <p className="text-4xl mb-3">✅</p>
+              <p className="font-semibold text-ink">Sin pagos pendientes</p>
+              <p className="text-sm text-ink/40 mt-1">Todos los propietarios tienen sus pagos al día.</p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {pagos.map(grupo => {
+                const todasIds = grupo.reservas.map(r => r.reserva_id);
+                const cargando = todasIds.some(id => pagandoIds.has(id));
+                return (
+                  <div key={grupo.propietario_id} className="bg-surface-2 rounded-2xl border border-border p-5">
+                    {/* Propietario header */}
+                    <div className="flex items-start justify-between flex-wrap gap-3 mb-4">
+                      <div>
+                        <p className="font-bold text-ink text-base">{grupo.propietario_nombre}</p>
+                        <p className="text-xs text-ink/50">{grupo.propietario_correo}</p>
+                        {grupo.banco ? (
+                          <div className="mt-1.5 flex flex-wrap gap-2">
+                            <span className="text-xs bg-surface border border-border rounded-lg px-2.5 py-1 text-ink/70">
+                              🏦 {grupo.banco}
+                            </span>
+                            <span className="text-xs bg-surface border border-border rounded-lg px-2.5 py-1 font-mono text-ink/70">
+                              {grupo.numero_cuenta}
+                            </span>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-danger mt-1">⚠ Datos bancarios no registrados</p>
+                        )}
+                      </div>
+                      <div className="text-right">
+                        <p className="text-xs text-ink/50 mb-1">Total a transferir</p>
+                        <p className="text-xl font-black text-success">${grupo.total_pendiente.toLocaleString('es-CO')}</p>
+                        <button
+                          onClick={() => marcarPagado(todasIds)}
+                          disabled={cargando}
+                          className="mt-2 flex items-center gap-2 bg-success hover:bg-success/80 text-white text-sm font-bold px-4 py-2 rounded-xl transition disabled:opacity-60">
+                          <IconCheck size={14} />
+                          {cargando ? 'Procesando…' : `Marcar todo pagado (${grupo.reservas.length})`}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Lista de reservas del propietario */}
+                    <div className="border-t border-border pt-3 space-y-2">
+                      {grupo.reservas.map(r => {
+                        const enCurso = pagandoIds.has(r.reserva_id);
+                        return (
+                          <div key={r.reserva_id} className="flex items-center justify-between gap-3 bg-surface rounded-xl px-3 py-2.5 border border-border">
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold text-ink truncate">{r.marca} {r.modelo} {r.anio}</p>
+                              <p className="text-xs text-ink/50">{r.fecha_inicio} → {r.fecha_fin} · {r.usuario_nombre}</p>
+                            </div>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              <span className="text-sm font-bold text-ink">${r.total.toLocaleString('es-CO')}</span>
+                              <button
+                                onClick={() => marcarPagado([r.reserva_id])}
+                                disabled={enCurso}
+                                className="text-xs border border-success/40 text-success px-2.5 py-1.5 rounded-xl hover:bg-success/10 transition disabled:opacity-50 font-medium">
+                                {enCurso ? '…' : '✓ Pagar'}
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Botón refrescar */}
+          <button onClick={cargarPagos} disabled={pagosLoading}
+            className="text-xs text-accent border border-accent/30 px-4 py-2 rounded-xl hover:bg-accent-light transition disabled:opacity-50 font-medium">
+            {pagosLoading ? 'Cargando…' : '↻ Actualizar lista'}
+          </button>
+        </div>
+      )}
 
       {/* ── CONFIGURACIÓN (pico y placa) ── */}
       {tab === 'config' && <PicoPlacaConfig />}
