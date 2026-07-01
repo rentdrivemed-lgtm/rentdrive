@@ -7,27 +7,32 @@ type Props = {
   value: string;
   onChange: (url: string) => void;
   required?: boolean;
+  blurPlaca?: boolean;
 };
 
-export default function FotoUpload({ label, value, onChange, required }: Props) {
+export default function FotoUpload({ label, value, onChange, required, blurPlaca = true }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [subiendo, setSubiendo] = useState(false);
   const [error, setError] = useState('');
+  const [difuminada, setDifuminada] = useState(false);
 
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setError('');
     setSubiendo(true);
+    setDifuminada(false);
 
     const fd = new FormData();
     fd.append('file', file);
+    if (blurPlaca) fd.append('blurPlaca', '1');
     const res = await fetch('/api/upload', { method: 'POST', body: fd });
-    const data = await res.json();
+    const data = await res.json() as { url?: string; error?: string; difuminada?: boolean };
     setSubiendo(false);
 
     if (!res.ok) { setError(data.error || 'Error al subir'); return; }
-    onChange(data.url);
+    if (data.difuminada) setDifuminada(true);
+    onChange(data.url!);
   };
 
   return (
@@ -52,6 +57,9 @@ export default function FotoUpload({ label, value, onChange, required }: Props) 
               <span className="text-white text-xs font-medium">Cambiar foto</span>
             </div>
             <span className="absolute top-1.5 right-1.5 bg-success/100 text-white text-[10px] rounded-full px-1.5 py-0.5 font-bold">✓</span>
+            {difuminada && (
+              <span className="absolute bottom-1.5 left-1.5 bg-black/70 text-white text-[9px] rounded-full px-1.5 py-0.5 font-medium">🔵 placa ocultada</span>
+            )}
           </>
         ) : (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 text-ink/30">

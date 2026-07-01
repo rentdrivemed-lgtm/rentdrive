@@ -142,6 +142,30 @@ function initDb(db: Database.Database) {
       created_at TEXT DEFAULT (datetime('now', 'localtime')),
       UNIQUE(reserva_id, fecha)
     );
+
+    CREATE TABLE IF NOT EXISTS competidores (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      nombre TEXT NOT NULL,
+      url TEXT NOT NULL,
+      activo INTEGER DEFAULT 1,
+      ajuste_pct REAL DEFAULT -5,
+      auto_actualizar INTEGER DEFAULT 0,
+      ultimo_check TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS precios_mercado (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      competidor_id INTEGER NOT NULL REFERENCES competidores(id),
+      sedan REAL,
+      suv REAL,
+      compacto REAL,
+      pickup REAL,
+      encontrado INTEGER DEFAULT 0,
+      nota TEXT DEFAULT '',
+      datos_raw TEXT DEFAULT '{}',
+      fecha TEXT DEFAULT (datetime('now'))
+    );
   `);
 
   try { db.exec("ALTER TABLE vehiculos ADD COLUMN dias_disponibles TEXT DEFAULT '[]'"); } catch { /* ya existe */ }
