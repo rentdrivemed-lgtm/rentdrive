@@ -197,6 +197,7 @@ export default function DashboardAdmin() {
   const [filtroEstado, setFiltroEstado] = useState('');
   const [filtroBusq, setFiltroBusq] = useState('');
   const [perfilModal, setPerfilModal] = useState<{ u: Usuario } | null>(null);
+  const [resetPass, setResetPass] = useState<{ uid: number; nueva: string; confirmar: string; guardando: boolean; ok: string } | null>(null);
   const [clienteDocs, setClienteDocs] = useState<{ r: ReservaCalendario & { documento_id_url?: string; licencia_url?: string } } | null>(null);
   const [rechazando, setRechazando] = useState<{ id: number; nota: string } | null>(null);
   const [accionando, setAccionando] = useState<number | null>(null);
@@ -323,6 +324,24 @@ export default function DashboardAdmin() {
       body: JSON.stringify({ id: u.id, estado_cuenta: nuevo }),
     });
     setUsuarios(prev => prev.map(x => x.id === u.id ? { ...x, estado_cuenta: nuevo } : x));
+  };
+
+  const guardarNuevaContrasena = async () => {
+    if (!resetPass) return;
+    if (resetPass.nueva.length < 6) return;
+    if (resetPass.nueva !== resetPass.confirmar) return;
+    setResetPass(r => r ? { ...r, guardando: true } : r);
+    const res = await fetch('/api/admin/usuarios', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: resetPass.uid, nueva_contrasena: resetPass.nueva }),
+    });
+    if (res.ok) {
+      setResetPass(r => r ? { ...r, guardando: false, ok: resetPass.nueva } : r);
+    } else {
+      const d = await res.json() as { error?: string };
+      setResetPass(r => r ? { ...r, guardando: false, ok: d.error || 'Error' } : r);
+    }
   };
 
   const guardarPrecio = async (vid: number) => {
@@ -1691,6 +1710,79 @@ export default function DashboardAdmin() {
                       }`}>
                       {u.estado_cuenta === 'activa' ? 'Desactivar cuenta' : 'Activar cuenta'}
                     </button>
+                  )}
+                </div>
+
+                {/* Resetear contraseña */}
+                <div className="pt-2 border-t border-border">
+                  {resetPass?.uid !== u.id ? (
+                    <button
+                      onClick={() => setResetPass({ uid: u.id, nueva: '', confirmar: '', guardando: false, ok: '' })}
+                      className="text-xs border border-warning/30 text-warning px-3 py-1.5 rounded-xl hover:bg-warning/10 transition font-medium">
+                      🔑 Resetear contraseña
+                    </button>
+                  ) : resetPass.ok && !resetPass.ok.startsWith('Error') ? (
+                    /* Contraseña establecida — mostrarla una sola vez */
+                    <div className="bg-success/10 border border-success/30 rounded-xl p-4 space-y-2">
+                      <p className="text-xs font-bold text-success">✓ Contraseña actualizada</p>
+                      <p className="text-xs text-ink/60">Comparte esta contraseña temporal con el usuario:</p>
+                      <div className="flex items-center gap-2">
+                        <code className="flex-1 bg-surface border border-border rounded-lg px-3 py-2 text-sm font-mono text-ink tracking-wider">
+                          {resetPass.ok}
+                        </code>
+                        <button
+                          onClick={() => navigator.clipboard.writeText(resetPass.ok)}
+                          className="text-xs border border-border text-ink/50 px-2.5 py-2 rounded-lg hover:border-accent/40 hover:text-accent transition">
+                          Copiar
+                        </button>
+                      </div>
+                      <button onClick={() => setResetPass(null)}
+                        className="text-xs text-ink/40 hover:text-ink transition">Cerrar</button>
+                    </div>
+                  ) : (
+                    /* Formulario de nueva contraseña */
+                    <div className="bg-surface rounded-xl border border-border p-4 space-y-3">
+                      <p className="text-xs font-bold text-ink">Nueva contraseña para {u.nombre}</p>
+                      <div className="space-y-2">
+                        <input
+                          type="password"
+                          placeholder="Nueva contraseña (mín. 6 caracteres)"
+                          value={resetPass.nueva}
+                          onChange={e => setResetPass(r => r ? { ...r, nueva: e.target.value, ok: '' } : r)}
+                          className="w-full border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface-2 focus:outline-none focus:ring-2 focus:ring-warning/40"
+                        />
+                        <input
+                          type="password"
+                          placeholder="Confirmar contraseña"
+                          value={resetPass.confirmar}
+                          onChange={e => setResetPass(r => r ? { ...r, confirmar: e.target.value, ok: '' } : r)}
+                          className="w-full border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface-2 focus:outline-none focus:ring-2 focus:ring-warning/40"
+                        />
+                        {resetPass.nueva && resetPass.confirmar && resetPass.nueva !== resetPass.confirmar && (
+                          <p className="text-xs text-danger">Las contraseñas no coinciden</p>
+                        )}
+                        {resetPass.ok?.startsWith('Error') && (
+                          <p className="text-xs text-danger">{resetPass.ok}</p>
+                        )}
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={guardarNuevaContrasena}
+                          disabled={
+                            resetPass.guardando ||
+                            resetPass.nueva.length < 6 ||
+                            resetPass.nueva !== resetPass.confirmar
+                          }
+                          className="flex items-center gap-1.5 bg-warning hover:bg-warning/80 text-white text-xs font-bold px-3 py-2 rounded-xl transition disabled:opacity-50">
+                          <IconCheck size={13} />
+                          {resetPass.guardando ? 'Guardando…' : 'Establecer contraseña'}
+                        </button>
+                        <button onClick={() => setResetPass(null)}
+                          className="text-xs border border-border text-ink/50 px-3 py-2 rounded-xl hover:border-ink/30 transition">
+                          Cancelar
+                        </button>
+                      </div>
+                    </div>
                   )}
                 </div>
               </div>
