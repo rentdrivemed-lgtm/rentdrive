@@ -7,7 +7,7 @@ import ConditionalShell from "@/components/ConditionalShell";
 import SwRegistrar from "@/components/SwRegistrar";
 import Analytics from "@/components/Analytics";
 
-const BASE_URL = process.env.NEXT_PUBLIC_APP_URL || "https://drivepass.com.co";
+const BASE_URL = process.env.NEXT_PUBLIC_APP_URL || "https://www.drivepasscol.com";
 
 export const metadata: Metadata = {
   metadataBase: new URL(BASE_URL),
