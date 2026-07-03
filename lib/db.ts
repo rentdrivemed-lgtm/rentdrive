@@ -227,4 +227,16 @@ function initDb(db: Database.Database) {
     db.prepare(`INSERT INTO usuarios (nombre, correo, password, rol) VALUES (?, ?, ?, ?)`)
       .run('María Usuario', 'usuario@rentdrive.com', hashUser, 'usuario');
   }
+
+  // Las fotos demo se sembraron con ancho bajo (?w=400) y se ven pixeladas al mostrarse
+  // en tamaños grandes (vitrina del inicio). Se reemplazan por versiones de mayor resolución
+  // solo si el vehículo sigue con esa foto exacta (si el propietario ya la cambió, no se toca).
+  const fotosBajaRes: Record<string, string> = {
+    'https://images.unsplash.com/photo-1621007947382-bb3c3994e3fb?w=400': 'https://images.unsplash.com/photo-1621007947382-bb3c3994e3fb?w=1600&q=80&auto=format&fit=crop',
+    'https://images.unsplash.com/photo-1544636331-e26879cd4d9b?w=400': 'https://images.unsplash.com/photo-1544636331-e26879cd4d9b?w=1600&q=80&auto=format&fit=crop',
+    'https://images.unsplash.com/photo-1503376780353-7e6692767b70?w=400': 'https://images.unsplash.com/photo-1503376780353-7e6692767b70?w=1600&q=80&auto=format&fit=crop',
+  };
+  for (const [vieja, nueva] of Object.entries(fotosBajaRes)) {
+    db.prepare(`UPDATE vehiculos SET fotos = ? WHERE fotos = ?`).run(JSON.stringify([nueva]), JSON.stringify([vieja]));
+  }
 }

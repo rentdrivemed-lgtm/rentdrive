@@ -7,7 +7,11 @@ const nextConfig: NextConfig = {
   // Declaramos los orígenes de desarrollo permitidos.
   allowedDevOrigins: ['localhost', '127.0.0.1', '192.168.1.34', '192.168.1.15', '192.168.1.67'],
   images: {
-    remotePatterns: [{ protocol: 'https', hostname: 'images.unsplash.com' }],
+    remotePatterns: [
+      { protocol: 'https', hostname: 'images.unsplash.com' },
+      { protocol: 'https', hostname: 'res.cloudinary.com' },
+    ],
+    qualities: [75, 90],
   },
 };
 

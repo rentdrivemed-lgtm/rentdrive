@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { IconKey, IconSearch, IconArrowR, IconArrowL, IconShield, IconCar } from '@/components/Icons';
 
 type VehiculoVitrina = {
@@ -88,36 +89,13 @@ export default function HeroSlider() {
   const s = slides[Math.min(cur, slides.length - 1)];
 
   return (
-    <section
-      className="hs relative overflow-hidden bg-bg isolate"
-      style={{ minHeight: 'clamp(540px, 68vh, 700px)' }}
-      onMouseEnter={stop}
-      onMouseLeave={play}
-    >
-      {/* Fondo: slider de imágenes */}
-      <div className="absolute inset-0 -z-20">
-        {slides.map((sl, i) => (
-          sl.img ? (
-            <div
-              key={sl.id ?? i}
-              className={`hs-bgslide${i === cur ? ' is-active' : ''}`}
-              style={{ backgroundImage: `url(${sl.img})` }}
-            />
-          ) : (
-            <div
-              key={sl.id ?? i}
-              className={`hs-bgslide${i === cur ? ' is-active' : ''}`}
-              style={{ background: 'var(--gradient-accent)' }}
-            />
-          )
-        ))}
-      </div>
-      <div className="hs-scrim" />
+    <section className="hs relative overflow-hidden isolate" onMouseEnter={stop} onMouseLeave={play}>
+      {/* Fondo decorativo (ya no es la foto estirada — evita el efecto pixelado) */}
+      <div className="hs-bg" />
 
-      {/* Contenido */}
-      <div className="relative mx-auto flex min-h-[inherit] max-w-[1240px] items-center px-4 sm:px-8 pt-10 pb-[90px]">
+      <div className="relative mx-auto max-w-[1240px] px-4 sm:px-8 py-12 lg:py-20 flex flex-col lg:flex-row items-center gap-10 lg:gap-14">
         {/* Izquierda — texto fijo */}
-        <div className="max-w-[520px]">
+        <div className="max-w-[520px] w-full">
           <span className="inline-flex items-center gap-2 text-accent font-semibold text-sm px-4 py-2 rounded-full border border-accent/40 bg-accent/10 backdrop-blur-sm">
             <IconKey size={15} /> Alquiler entre particulares
           </span>
@@ -141,60 +119,83 @@ export default function HeroSlider() {
           </div>
         </div>
 
-        {/* Derecha — caption rotativo (desktop) */}
-        <div key={cur} className="hidden lg:block absolute right-8 bottom-[52px] max-w-[360px] text-right z-[3]">
-          <span className="fade-up inline-flex items-center gap-2 whitespace-nowrap text-xs font-semibold text-ink px-3 py-1.5 rounded-full glass border border-border-strong capitalize">
-            <i className="w-1.5 h-1.5 rounded-full bg-accent inline-block" /> {s.chip}
-          </span>
-          <h2 className="fade-up font-bold text-white mt-3.5 mb-2 leading-tight tracking-[-0.01em]"
-            style={{ fontSize: 'clamp(22px, 2.4vw, 30px)', textShadow: '0 2px 22px rgba(0,0,0,0.6)', animationDelay: '50ms' }}>
-            {s.h}
-          </h2>
-          <div className="fade-up font-mono text-sm text-ink-soft" style={{ animationDelay: '95ms', fontFeatureSettings: "'tnum' 1" }}>
-            {s.price.pre}{s.price.strong && <b className="text-accent font-semibold">{s.price.strong}</b>}{s.price.post}
-          </div>
-          <Link href={s.href}
-            className="fade-up glow-accent inline-flex items-center gap-2 text-white font-semibold rounded-xl px-4 h-10 text-sm mt-4 transition hover:-translate-y-0.5"
-            style={{ background: 'var(--gradient-accent)', animationDelay: '140ms' }}>
-            {s.cta} <IconArrowR size={17} />
-          </Link>
-        </div>
+        {/* Derecha — tarjeta de foto del vehículo en vitrina (tamaño acotado, buena calidad) */}
+        <div className="w-full max-w-[480px] lg:max-w-[520px] flex-shrink-0 mx-auto lg:mx-0">
+          <div className="relative w-full aspect-[4/3] rounded-[28px] overflow-hidden shadow-[0_24px_70px_rgba(0,0,0,0.45)] border border-white/10">
+            {slides.map((sl, i) => (
+              sl.img ? (
+                <Image
+                  key={sl.id ?? i}
+                  src={sl.img}
+                  alt={sl.chip}
+                  fill
+                  quality={90}
+                  sizes="(min-width: 1024px) 520px, 92vw"
+                  priority={i === 0}
+                  className={`hs-frame-img${i === cur ? ' is-active' : ''}`}
+                />
+              ) : (
+                <div key={sl.id ?? i}
+                  className={`hs-frame-img${i === cur ? ' is-active' : ''}`}
+                  style={{ background: 'var(--gradient-accent)' }} />
+              )
+            ))}
 
-        {/* Badges de confianza flotantes (desktop) */}
-        <div className="hidden lg:flex absolute top-[92px] right-8 z-[4] items-center gap-3 px-4 py-3 rounded-xl glass border border-border-strong"
-          style={{ boxShadow: 'var(--shadow-float)' }}>
-          <span className="w-9 h-9 rounded-lg grid place-items-center bg-accent/15 text-accent flex-none"><IconShield size={18} /></span>
-          <div><div className="font-bold text-sm text-white leading-tight whitespace-nowrap">Pagos Seguros</div><div className="text-xs text-ink-soft whitespace-nowrap">Garantía DrivePass</div></div>
-        </div>
-        <div className="hidden lg:flex absolute top-[176px] right-[calc(2rem+26px)] z-[4] items-center gap-3 px-4 py-3 rounded-xl glass border border-border-strong"
-          style={{ boxShadow: 'var(--shadow-float)' }}>
-          <span className="w-9 h-9 rounded-lg grid place-items-center bg-accent/15 text-accent flex-none"><IconCar size={18} /></span>
-          <div><div className="font-bold text-sm text-white leading-tight whitespace-nowrap">100% Verificados</div><div className="text-xs text-ink-soft whitespace-nowrap">Vehículos con fotos</div></div>
+            {/* Badges de confianza — sobre el borde inferior de la tarjeta */}
+            <div className="hidden sm:flex absolute left-3 bottom-3 items-center gap-2.5 px-3.5 py-2.5 rounded-xl glass border border-border-strong">
+              <span className="w-8 h-8 rounded-lg grid place-items-center bg-accent/15 text-accent flex-none"><IconShield size={16} /></span>
+              <div><div className="font-bold text-xs text-white leading-tight whitespace-nowrap">Pagos Seguros</div><div className="text-[10px] text-ink-soft whitespace-nowrap">Garantía DrivePass</div></div>
+            </div>
+            <div className="hidden sm:flex absolute right-3 top-3 items-center gap-2 px-3 py-2 rounded-xl glass border border-border-strong">
+              <IconCar size={14} className="text-accent" />
+              <span className="font-bold text-[11px] text-white whitespace-nowrap">100% Verificados</span>
+            </div>
+          </div>
+
+          {/* Caption rotativo — debajo de la tarjeta, siempre legible */}
+          <div key={cur} className="mt-4 flex items-end justify-between gap-3 flex-wrap">
+            <div className="min-w-0">
+              <span className="fade-up inline-flex items-center gap-2 whitespace-nowrap text-xs font-semibold text-ink px-3 py-1.5 rounded-full bg-brand-muted border border-border capitalize">
+                <i className="w-1.5 h-1.5 rounded-full bg-accent inline-block" /> {s.chip}
+              </span>
+              <h2 className="fade-up font-bold text-ink mt-2.5 leading-tight tracking-[-0.01em] text-xl"
+                style={{ animationDelay: '50ms' }}>
+                {s.h}
+              </h2>
+              <div className="fade-up font-mono text-sm text-ink-soft mt-1" style={{ animationDelay: '95ms', fontFeatureSettings: "'tnum' 1" }}>
+                {s.price.pre}{s.price.strong && <b className="text-accent font-semibold">{s.price.strong}</b>}{s.price.post}
+              </div>
+            </div>
+            <Link href={s.href}
+              className="fade-up glow-accent inline-flex flex-shrink-0 items-center gap-2 text-white font-semibold rounded-xl px-4 h-10 text-sm transition hover:-translate-y-0.5"
+              style={{ background: 'var(--gradient-accent)', animationDelay: '140ms' }}>
+              {s.cta} <IconArrowR size={17} />
+            </Link>
+          </div>
+
+          {/* Controles */}
+          {slides.length > 1 && (
+            <div className="mt-4 flex items-center gap-3.5">
+              <button onClick={() => go(cur - 1)} aria-label="Anterior"
+                className="w-9 h-9 rounded-full grid place-items-center text-ink bg-surface-2 border border-border transition hover:bg-surface-3 flex-shrink-0">
+                <IconArrowL size={16} />
+              </button>
+              <div className="flex gap-2">
+                {slides.map((_, i) => (
+                  <button key={i} onClick={() => go(i)} aria-label={`Ir al slide ${i + 1}`}
+                    className="relative w-[26px] h-[5px] rounded-full overflow-hidden p-0 border-0 cursor-pointer bg-border">
+                    {i === cur && <span key={cur} className="hs-dotbar" />}
+                  </button>
+                ))}
+              </div>
+              <button onClick={() => go(cur + 1)} aria-label="Siguiente"
+                className="w-9 h-9 rounded-full grid place-items-center text-ink bg-surface-2 border border-border transition hover:bg-surface-3 flex-shrink-0">
+                <IconArrowR size={16} />
+              </button>
+            </div>
+          )}
         </div>
       </div>
-
-      {/* Controles */}
-      {slides.length > 1 && (
-        <div className="absolute left-4 sm:left-8 bottom-10 z-[5] flex items-center gap-3.5">
-          <button onClick={() => go(cur - 1)} aria-label="Anterior"
-            className="w-[42px] h-[42px] rounded-full grid place-items-center text-white glass border border-border-strong transition hover:bg-surface-3">
-            <IconArrowL size={20} />
-          </button>
-          <div className="flex gap-2">
-            {slides.map((_, i) => (
-              <button key={i} onClick={() => go(i)} aria-label={`Ir al slide ${i + 1}`}
-                className="relative w-[26px] h-[5px] rounded-full overflow-hidden p-0 border-0 cursor-pointer"
-                style={{ background: i === cur ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.28)' }}>
-                {i === cur && <span key={cur} className="hs-dotbar" />}
-              </button>
-            ))}
-          </div>
-          <button onClick={() => go(cur + 1)} aria-label="Siguiente"
-            className="w-[42px] h-[42px] rounded-full grid place-items-center text-white glass border border-border-strong transition hover:bg-surface-3">
-            <IconArrowR size={20} />
-          </button>
-        </div>
-      )}
     </section>
   );
 }

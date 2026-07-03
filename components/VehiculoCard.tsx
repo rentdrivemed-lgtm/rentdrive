@@ -1,6 +1,8 @@
 'use client';
+import { useState } from 'react';
 import Link from 'next/link';
-import { IconPin, IconArrowR } from '@/components/Icons';
+import { IconPin, IconArrowR, IconStar } from '@/components/Icons';
+import { useSession } from '@/contexts/SessionContext';
 
 type Vehiculo = {
   id: number;
@@ -13,12 +15,31 @@ type Vehiculo = {
   descripcion: string;
   fotos: string;
   propietario_nombre?: string;
+  en_vitrina?: number;
 };
 
 export default function VehiculoCard({ v }: { v: Vehiculo }) {
+  const { user } = useSession();
+  const [enVitrina, setEnVitrina] = useState(!!v.en_vitrina);
+  const [guardando, setGuardando] = useState(false);
   let fotos: string[] = [];
   try { fotos = JSON.parse(v.fotos); } catch { fotos = []; }
   const foto = fotos[0] || 'https://images.unsplash.com/photo-1503376780353-7e6692767b70?w=400';
+
+  const toggleVitrina = async () => {
+    const nuevo = !enVitrina;
+    setEnVitrina(nuevo);
+    setGuardando(true);
+    try {
+      await fetch(`/api/vehiculos/${v.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ en_vitrina: nuevo ? 1 : 0 }),
+      });
+    } finally {
+      setGuardando(false);
+    }
+  };
 
   return (
     <div className="bg-surface-2 rounded-2xl shadow-sm border border-border overflow-hidden hover:shadow-lg hover:-translate-y-0.5 transition-all group">
@@ -28,11 +49,22 @@ export default function VehiculoCard({ v }: { v: Vehiculo }) {
         <span className="absolute top-3 left-3 bg-brand/80 backdrop-blur-sm text-white text-[11px] font-semibold px-2.5 py-1 rounded-full capitalize">
           {v.tipo}
         </span>
-        {v.precio_dia === 0 && (
-          <span className="absolute top-3 right-3 bg-accent/90 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
-            Precio por asignar
-          </span>
-        )}
+        <div className="absolute top-3 right-3 flex flex-col items-end gap-1.5">
+          {user?.rol === 'admin' && (
+            <button onClick={toggleVitrina} disabled={guardando}
+              title={enVitrina ? 'Quitar de la vitrina del inicio' : 'Mostrar en la vitrina del inicio'}
+              className={`flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-full backdrop-blur-sm transition disabled:opacity-60 ${
+                enVitrina ? 'bg-accent text-white' : 'bg-brand/80 text-white hover:bg-accent/80'
+              }`}>
+              <IconStar size={11} className={enVitrina ? 'fill-current' : ''} /> {enVitrina ? 'En vitrina' : 'Vitrina'}
+            </button>
+          )}
+          {v.precio_dia === 0 && (
+            <span className="bg-accent/90 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
+              Precio por asignar
+            </span>
+          )}
+        </div>
       </div>
       <div className="p-4">
         <div className="mb-2">

@@ -143,30 +143,27 @@ body {
 @keyframes dp-shimmer { 100% { transform: translateX(100%); } }
 @keyframes dp-fade-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
-/* ── Hero slider del banner inicial (diseño Claude Design) ── */
-.hs-bgslide {
-  position: absolute; inset: 0; opacity: 0;
-  transition: opacity 900ms var(--ease);
-  background-size: cover; background-position: right center;
-  transform: scale(1.05);
-}
-.hs-bgslide.is-active { opacity: 1; animation: dp-kenburns 7s linear forwards; }
-@keyframes dp-kenburns { from { transform: scale(1.05); } to { transform: scale(1); } }
-
-/* Fundido a plano azul a la izquierda para que el texto siga legible */
-.hs-scrim {
+/* ── Hero slider del banner inicial (diseño Claude Design) ──
+   Las fotos ya no se estiran a pantalla completa (se veían pixeladas con
+   fuentes de baja resolución); van dentro de una tarjeta con tamaño
+   acotado y `object-fit: cover`, sobre un fondo decorativo con degradado. */
+.hs-bg {
   position: absolute; inset: 0; z-index: -1;
   background:
-    linear-gradient(90deg, #0A1422 0%, #0A1422 20%, rgba(10,20,34,0.78) 38%, rgba(10,20,34,0.30) 56%, rgba(10,20,34,0) 70%),
-    linear-gradient(0deg, rgba(8,15,26,0.65) 0%, rgba(8,15,26,0) 42%);
+    radial-gradient(60% 55% at 85% 8%, rgba(242,92,43,0.20) 0%, rgba(242,92,43,0) 60%),
+    radial-gradient(45% 40% at 10% 95%, rgba(44,79,130,0.35) 0%, rgba(44,79,130,0) 65%),
+    linear-gradient(160deg, #0A1422 0%, #142A47 55%, #1B3356 100%);
 }
-@media (max-width: 980px) {
-  .hs-scrim {
-    background:
-      linear-gradient(90deg, #0A1422 0%, rgba(10,20,34,0.85) 45%, rgba(10,20,34,0.45) 100%),
-      linear-gradient(0deg, rgba(8,15,26,0.7), rgba(8,15,26,0) 50%);
-  }
+
+.hs-frame-img {
+  position: absolute; inset: 0; opacity: 0;
+  transition: opacity 800ms var(--ease);
+  object-fit: cover;
+  transform: scale(1.04);
 }
+.hs-frame-img.is-active { opacity: 1; animation: dp-kenburns 6s linear forwards; }
+@keyframes dp-kenburns { from { transform: scale(1.04); } to { transform: scale(1); } }
+
 .hs-dotbar { position: absolute; inset: 0; transform-origin: left; transform: scaleX(0); background: var(--color-accent); animation: dp-dot-progress 5000ms linear forwards; }
 @keyframes dp-dot-progress { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 
