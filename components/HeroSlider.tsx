@@ -3,32 +3,76 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import { IconKey, IconSearch, IconArrowR, IconArrowL, IconShield, IconCar } from '@/components/Icons';
 
-type Slide = {
-  img: string; chip: string; h: string;
-  price: { pre: string; strong: string; post: string };
-  cta: string;
+type VehiculoVitrina = {
+  id: number; marca: string; modelo: string; anio: number;
+  tipo: string; precio_dia: number; fotos: string;
 };
 
-// Banner inicial diseñado en Claude Design (full-bleed, copy rotativo).
-const SLIDES: Slide[] = [
-  { img: '/hero/wide1.jpg', chip: 'SUV · Hyundai Tucson',  h: 'Estrena una SUV sin comprarla',        price: { pre: 'Desde ', strong: '$180.000', post: ' / día' }, cta: 'Reservar ahora' },
-  { img: '/hero/wide2.jpg', chip: 'SUV · Mazda CX-5',      h: 'Comodidad premium para tu viaje',       price: { pre: 'Desde ', strong: '$210.000', post: ' / día' }, cta: 'Ver disponibles' },
-  { img: '/hero/wide3.jpg', chip: 'Sedán · Mazda 3',       h: 'Muévete ágil por Medellín',             price: { pre: 'Desde ', strong: '$120.000', post: ' / día' }, cta: 'Explorar sedanes' },
-  { img: '/hero/wide4.jpg', chip: 'SUV · Hyundai Tucson',  h: 'Reserva en minutos, conduce libre',     price: { pre: 'Verificada y lista para entregar', strong: '', post: '' }, cta: 'Buscar vehículo' },
+type Slide = {
+  id: number | null; img: string | null; chip: string; h: string;
+  price: { pre: string; strong: string; post: string };
+  cta: string; href: string;
+};
+
+const HEADLINES = [
+  'Estrena sin comprar',
+  'Muévete a tu ritmo por Medellín',
+  'Reserva en minutos, conduce libre',
+  'Tu próximo viaje empieza aquí',
 ];
+
+const FALLBACK_SLIDE: Slide = {
+  id: null, img: null, chip: 'Alquiler entre particulares',
+  h: 'Tu ciudad. Tu ritmo. Tu DrivePass.',
+  price: { pre: 'Verificada y lista para entregar', strong: '', post: '' },
+  cta: 'Buscar vehículo', href: '#vehiculos',
+};
+
 const DELAY = 5000;
 
+function vehiculosASlides(vehiculos: VehiculoVitrina[]): Slide[] {
+  return vehiculos
+    .filter(v => {
+      try { return (JSON.parse(v.fotos) as string[]).length > 0; } catch { return false; }
+    })
+    .map((v, i) => {
+      let fotos: string[] = [];
+      try { fotos = JSON.parse(v.fotos); } catch { fotos = []; }
+      return {
+        id: v.id,
+        img: fotos[0],
+        chip: `${v.tipo} · ${v.marca} ${v.modelo}`,
+        h: HEADLINES[i % HEADLINES.length],
+        price: { pre: 'Desde ', strong: `$${Math.round(v.precio_dia).toLocaleString('es-CO')}`, post: ' / día' },
+        cta: 'Reservar ahora',
+        href: `/vehiculos/${v.id}`,
+      };
+    });
+}
+
 export default function HeroSlider() {
+  const [slides, setSlides] = useState<Slide[]>([FALLBACK_SLIDE]);
   const [cur, setCur] = useState(0);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  useEffect(() => {
+    fetch('/api/vehiculos?vitrina=1')
+      .then(r => r.json())
+      .then((d: { vehiculos?: VehiculoVitrina[] }) => {
+        const s = vehiculosASlides(d.vehiculos || []);
+        if (s.length > 0) setSlides(s);
+      })
+      .catch(() => { /* deja el fallback */ });
+  }, []);
+
   const play = useCallback(() => {
     if (timer.current) clearInterval(timer.current);
-    timer.current = setInterval(() => setCur(c => (c + 1) % SLIDES.length), DELAY);
-  }, []);
+    if (slides.length <= 1) return;
+    timer.current = setInterval(() => setCur(c => (c + 1) % slides.length), DELAY);
+  }, [slides.length]);
   const stop = useCallback(() => { if (timer.current) clearInterval(timer.current); }, []);
 
-  const go = useCallback((n: number) => { setCur((n + SLIDES.length) % SLIDES.length); play(); }, [play]);
+  const go = useCallback((n: number) => { setCur((n + slides.length) % slides.length); play(); }, [play, slides.length]);
 
   useEffect(() => { play(); return stop; }, [play, stop]);
 
@@ -41,7 +85,7 @@ export default function HeroSlider() {
     return () => window.removeEventListener('keydown', onKey);
   }, [cur, go]);
 
-  const s = SLIDES[cur];
+  const s = slides[Math.min(cur, slides.length - 1)];
 
   return (
     <section
@@ -52,12 +96,20 @@ export default function HeroSlider() {
     >
       {/* Fondo: slider de imágenes */}
       <div className="absolute inset-0 -z-20">
-        {SLIDES.map((sl, i) => (
-          <div
-            key={sl.img}
-            className={`hs-bgslide${i === cur ? ' is-active' : ''}`}
-            style={{ backgroundImage: `url(${sl.img})` }}
-          />
+        {slides.map((sl, i) => (
+          sl.img ? (
+            <div
+              key={sl.id ?? i}
+              className={`hs-bgslide${i === cur ? ' is-active' : ''}`}
+              style={{ backgroundImage: `url(${sl.img})` }}
+            />
+          ) : (
+            <div
+              key={sl.id ?? i}
+              className={`hs-bgslide${i === cur ? ' is-active' : ''}`}
+              style={{ background: 'var(--gradient-accent)' }}
+            />
+          )
         ))}
       </div>
       <div className="hs-scrim" />
@@ -91,7 +143,7 @@ export default function HeroSlider() {
 
         {/* Derecha — caption rotativo (desktop) */}
         <div key={cur} className="hidden lg:block absolute right-8 bottom-[52px] max-w-[360px] text-right z-[3]">
-          <span className="fade-up inline-flex items-center gap-2 whitespace-nowrap text-xs font-semibold text-ink px-3 py-1.5 rounded-full glass border border-border-strong">
+          <span className="fade-up inline-flex items-center gap-2 whitespace-nowrap text-xs font-semibold text-ink px-3 py-1.5 rounded-full glass border border-border-strong capitalize">
             <i className="w-1.5 h-1.5 rounded-full bg-accent inline-block" /> {s.chip}
           </span>
           <h2 className="fade-up font-bold text-white mt-3.5 mb-2 leading-tight tracking-[-0.01em]"
@@ -101,11 +153,11 @@ export default function HeroSlider() {
           <div className="fade-up font-mono text-sm text-ink-soft" style={{ animationDelay: '95ms', fontFeatureSettings: "'tnum' 1" }}>
             {s.price.pre}{s.price.strong && <b className="text-accent font-semibold">{s.price.strong}</b>}{s.price.post}
           </div>
-          <a href="#vehiculos"
+          <Link href={s.href}
             className="fade-up glow-accent inline-flex items-center gap-2 text-white font-semibold rounded-xl px-4 h-10 text-sm mt-4 transition hover:-translate-y-0.5"
             style={{ background: 'var(--gradient-accent)', animationDelay: '140ms' }}>
             {s.cta} <IconArrowR size={17} />
-          </a>
+          </Link>
         </div>
 
         {/* Badges de confianza flotantes (desktop) */}
@@ -122,25 +174,27 @@ export default function HeroSlider() {
       </div>
 
       {/* Controles */}
-      <div className="absolute left-4 sm:left-8 bottom-10 z-[5] flex items-center gap-3.5">
-        <button onClick={() => go(cur - 1)} aria-label="Anterior"
-          className="w-[42px] h-[42px] rounded-full grid place-items-center text-white glass border border-border-strong transition hover:bg-surface-3">
-          <IconArrowL size={20} />
-        </button>
-        <div className="flex gap-2">
-          {SLIDES.map((_, i) => (
-            <button key={i} onClick={() => go(i)} aria-label={`Ir al slide ${i + 1}`}
-              className="relative w-[26px] h-[5px] rounded-full overflow-hidden p-0 border-0 cursor-pointer"
-              style={{ background: i === cur ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.28)' }}>
-              {i === cur && <span key={cur} className="hs-dotbar" />}
-            </button>
-          ))}
+      {slides.length > 1 && (
+        <div className="absolute left-4 sm:left-8 bottom-10 z-[5] flex items-center gap-3.5">
+          <button onClick={() => go(cur - 1)} aria-label="Anterior"
+            className="w-[42px] h-[42px] rounded-full grid place-items-center text-white glass border border-border-strong transition hover:bg-surface-3">
+            <IconArrowL size={20} />
+          </button>
+          <div className="flex gap-2">
+            {slides.map((_, i) => (
+              <button key={i} onClick={() => go(i)} aria-label={`Ir al slide ${i + 1}`}
+                className="relative w-[26px] h-[5px] rounded-full overflow-hidden p-0 border-0 cursor-pointer"
+                style={{ background: i === cur ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.28)' }}>
+                {i === cur && <span key={cur} className="hs-dotbar" />}
+              </button>
+            ))}
+          </div>
+          <button onClick={() => go(cur + 1)} aria-label="Siguiente"
+            className="w-[42px] h-[42px] rounded-full grid place-items-center text-white glass border border-border-strong transition hover:bg-surface-3">
+            <IconArrowR size={20} />
+          </button>
         </div>
-        <button onClick={() => go(cur + 1)} aria-label="Siguiente"
-          className="w-[42px] h-[42px] rounded-full grid place-items-center text-white glass border border-border-strong transition hover:bg-surface-3">
-          <IconArrowR size={20} />
-        </button>
-      </div>
+      )}
     </section>
   );
 }

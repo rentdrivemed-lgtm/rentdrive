@@ -111,7 +111,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   // ── Standard field update ──
   const ownFields = ['marca', 'modelo', 'anio', 'tipo', 'ubicacion', 'precio_dia', 'descripcion',
     'disponible', 'dias_disponibles', 'fotos_detalle', 'fotos', 'placa', 'documentos'];
-  const adminOnlyFields = ['documentos_estado', 'documentos_nota'];
+  const adminOnlyFields = ['documentos_estado', 'documentos_nota', 'en_vitrina'];
   const allowed = isAdmin ? [...ownFields, ...adminOnlyFields] : ownFields;
 
   const pairs: string[] = [];

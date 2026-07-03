@@ -22,6 +22,7 @@ export async function GET(req: NextRequest) {
   const propietarioId = searchParams.get('propietarioId');
   const fechaInicio  = searchParams.get('fechaInicio');
   const fechaFin     = searchParams.get('fechaFin');
+  const vitrina      = searchParams.get('vitrina');
 
   let query = `
     SELECT v.*, u.nombre as propietario_nombre
@@ -35,8 +36,9 @@ export async function GET(req: NextRequest) {
   if (ubicacion)    { query += ' AND v.ubicacion LIKE ?';    params.push(`%${ubicacion}%`); }
   if (precioMax)    { query += ' AND v.precio_dia <= ?';     params.push(Number(precioMax)); }
   if (propietarioId){ query += ' AND v.propietario_id = ?';  params.push(Number(propietarioId)); }
+  if (vitrina)      { query += ' AND v.en_vitrina = 1';      query += ' AND v.disponible = 1'; }
   // Listado público: ocultar vehículos inactivos. El propietario sí ve los suyos (filtra por propietarioId).
-  if (!propietarioId) query += ' AND v.disponible = 1';
+  else if (!propietarioId) query += ' AND v.disponible = 1';
 
   let vehiculos = db.prepare(query).all(...params) as Record<string, unknown>[];
 

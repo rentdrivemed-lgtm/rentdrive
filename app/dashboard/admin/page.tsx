@@ -32,6 +32,7 @@ type Vehiculo = {
   precio_dia: number; propietario_id: number; propietario_nombre: string; disponible: number;
   fotos: string; fotos_detalle: string; placa?: string; documentos?: string;
   documentos_estado?: string; documentos_nota?: string; documentos_revisiones?: string;
+  en_vitrina?: number;
 };
 
 const rolColor: Record<string, string> = {
@@ -359,6 +360,16 @@ export default function DashboardAdmin() {
     });
     setVehiculos(vs => vs.map(v => v.id === vid ? { ...v, precio_dia: precio } : v));
     setPrecioEdit(p => { const n = { ...p }; delete n[vid]; return n; });
+  };
+
+  const toggleVitrina = async (v: Vehiculo) => {
+    const nuevo = v.en_vitrina ? 0 : 1;
+    setVehiculos(vs => vs.map(x => x.id === v.id ? { ...x, en_vitrina: nuevo } : x));
+    await fetch(`/api/vehiculos/${v.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ en_vitrina: nuevo }),
+    });
   };
 
   const abrirDocModal = (v: Vehiculo) => {
@@ -754,6 +765,15 @@ export default function DashboardAdmin() {
                         </button>
                       </>
                     )}
+                    <button onClick={() => toggleVitrina(v)}
+                      title={v.en_vitrina ? 'Quitar de la vitrina del inicio' : 'Mostrar en la vitrina del inicio'}
+                      className={`flex items-center gap-1 text-xs border px-2.5 py-1.5 rounded-xl transition font-medium ${
+                        v.en_vitrina
+                          ? 'border-accent bg-accent text-white hover:bg-accent-hover'
+                          : 'border-border text-ink/60 hover:bg-surface'
+                      }`}>
+                      ⭐ {v.en_vitrina ? 'En vitrina' : 'Vitrina'}
+                    </button>
                     <button onClick={() => setFotoModal({ v })}
                       className="flex items-center gap-1 text-xs border border-accent/30 text-accent px-2.5 py-1.5 rounded-xl hover:bg-accent-light transition font-medium">
                       Fotos
