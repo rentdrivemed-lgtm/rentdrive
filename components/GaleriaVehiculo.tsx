@@ -1,9 +1,17 @@
 'use client';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { IconArrowL, IconArrowR, IconPhoto } from '@/components/Icons';
+import { useLang } from '@/contexts/LanguageContext';
+
+const T = {
+  es: { sinFotos: 'Sin fotos aún', anterior: 'Anterior', siguiente: 'Siguiente', foto: 'Foto', miniatura: 'Miniatura' },
+  en: { sinFotos: 'No photos yet', anterior: 'Previous', siguiente: 'Next', foto: 'Photo', miniatura: 'Thumbnail' },
+};
 
 // Galería de las fotos que sube el propietario, con transición (crossfade) + autoplay.
 export default function GaleriaVehiculo({ fotos }: { fotos: string[] }) {
+  const { lang } = useLang();
+  const c = T[lang];
   const [cur, setCur] = useState(0);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const n = fotos.length;
@@ -22,7 +30,7 @@ export default function GaleriaVehiculo({ fotos }: { fotos: string[] }) {
       <div className="aspect-[4/3] rounded-2xl border border-border bg-surface grid place-items-center text-ink/30">
         <div className="text-center">
           <IconPhoto size={40} className="mx-auto mb-2" />
-          <p className="text-sm">Sin fotos aún</p>
+          <p className="text-sm">{c.sinFotos}</p>
         </div>
       </div>
     );
@@ -33,7 +41,7 @@ export default function GaleriaVehiculo({ fotos }: { fotos: string[] }) {
       {/* Imagen principal con crossfade */}
       <div className="relative aspect-[4/3] rounded-2xl overflow-hidden border border-border bg-surface-2 group">
         {fotos.map((src, i) => (
-          <img key={src + i} src={src} alt={`Foto ${i + 1}`}
+          <img key={src + i} src={src} alt={`${c.foto} ${i + 1}`}
             className="absolute inset-0 w-full h-full object-cover transition-opacity duration-[600ms] ease-out"
             style={{ opacity: i === cur ? 1 : 0 }} />
         ))}
@@ -45,11 +53,11 @@ export default function GaleriaVehiculo({ fotos }: { fotos: string[] }) {
 
         {n > 1 && (
           <>
-            <button onClick={() => go(cur - 1)} aria-label="Anterior"
+            <button onClick={() => go(cur - 1)} aria-label={c.anterior}
               className="absolute left-2 top-1/2 -translate-y-1/2 z-10 w-9 h-9 rounded-full grid place-items-center text-white glass border border-border-strong opacity-0 group-hover:opacity-100 transition hover:bg-surface-3">
               <IconArrowL size={17} />
             </button>
-            <button onClick={() => go(cur + 1)} aria-label="Siguiente"
+            <button onClick={() => go(cur + 1)} aria-label={c.siguiente}
               className="absolute right-2 top-1/2 -translate-y-1/2 z-10 w-9 h-9 rounded-full grid place-items-center text-white glass border border-border-strong opacity-0 group-hover:opacity-100 transition hover:bg-surface-3">
               <IconArrowR size={17} />
             </button>
@@ -60,7 +68,7 @@ export default function GaleriaVehiculo({ fotos }: { fotos: string[] }) {
         {n > 1 && (
           <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex gap-1.5">
             {fotos.map((_, i) => (
-              <button key={i} onClick={() => go(i)} aria-label={`Foto ${i + 1}`}
+              <button key={i} onClick={() => go(i)} aria-label={`${c.foto} ${i + 1}`}
                 className={`h-1.5 rounded-full transition-all ${i === cur ? 'w-5 bg-accent' : 'w-1.5 bg-white/50 hover:bg-white/80'}`} />
             ))}
           </div>
@@ -73,7 +81,7 @@ export default function GaleriaVehiculo({ fotos }: { fotos: string[] }) {
           {fotos.map((src, i) => (
             <button key={src + i} onClick={() => go(i)}
               className={`relative flex-none w-16 h-12 rounded-lg overflow-hidden border-2 transition ${i === cur ? 'border-accent' : 'border-border opacity-60 hover:opacity-100'}`}>
-              <img src={src} alt={`Miniatura ${i + 1}`} className="w-full h-full object-cover" />
+              <img src={src} alt={`${c.miniatura} ${i + 1}`} className="w-full h-full object-cover" />
             </button>
           ))}
         </div>

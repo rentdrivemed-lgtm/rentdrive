@@ -52,6 +52,11 @@ function RegistroForm() {
 
   useEffect(() => {
     if (searchParams.get('rol') === 'propietario') setRol('propietario');
+    const nombre = searchParams.get('nombre');
+    const correo = searchParams.get('correo');
+    const celular = searchParams.get('celular');
+    if (nombre || correo) setCuenta(c => ({ ...c, nombre: nombre || c.nombre, correo: correo || c.correo }));
+    if (celular) setPerfil(p => ({ ...p, celular }));
   }, [searchParams]);
 
   /* ── Validación paso 1 ── */

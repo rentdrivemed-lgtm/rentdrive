@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import HeroSlider from '@/components/HeroSlider';
 import VehiculoCard from '@/components/VehiculoCard';
+import { useLang } from '@/contexts/LanguageContext';
 import { IconFilter, IconKey, IconShield, IconRoute, IconCar, IconCalendar, IconX } from '@/components/Icons';
 
 type Vehiculo = {
@@ -17,7 +18,60 @@ function diasEntre(a: string, b: string) {
   return Math.ceil((new Date(b).getTime() - new Date(a).getTime()) / 86400000);
 }
 
+const T = {
+  es: {
+    features: [
+      { title: 'Acceso rápido', desc: 'Reserva en minutos desde cualquier dispositivo' },
+      { title: '100% seguro', desc: 'Verificación de identidad y vehículos documentados' },
+      { title: 'Tu ruta, tu precio', desc: 'Precios definidos por expertos DrivePass' },
+    ],
+    disponibles: 'Vehículos disponibles',
+    ubicacionSub: 'Medellín y área metropolitana',
+    vehiculo: (n: number) => `${n} vehículo${n !== 1 ? 's' : ''}`,
+    disponibilidad: 'Disponibilidad',
+    desde: 'Desde',
+    hasta: 'Hasta',
+    dias: (n: number) => `${n} día${n !== 1 ? 's' : ''}`,
+    tipo: 'Tipo',
+    todos: 'Todos',
+    sedan: 'Sedán', suv: 'SUV', compacto: 'Compacto', pickup: 'Pickup',
+    precioMax: 'Precio máx/día',
+    filtrar: 'Filtrar',
+    limpiar: 'Limpiar',
+    sinResultados: 'No se encontraron vehículos con esos filtros.',
+    ctaTitle: '¿Tienes un vehículo?',
+    ctaSub: 'Publícalo en DrivePass y empieza a generar ingresos.',
+    ctaBtn: 'Publicar mi carro',
+  },
+  en: {
+    features: [
+      { title: 'Quick access', desc: 'Book in minutes from any device' },
+      { title: '100% secure', desc: 'Identity verification and documented vehicles' },
+      { title: 'Your route, your price', desc: 'Prices set by DrivePass experts' },
+    ],
+    disponibles: 'Available vehicles',
+    ubicacionSub: 'Medellín and the metropolitan area',
+    vehiculo: (n: number) => `${n} vehicle${n !== 1 ? 's' : ''}`,
+    disponibilidad: 'Availability',
+    desde: 'From',
+    hasta: 'To',
+    dias: (n: number) => `${n} day${n !== 1 ? 's' : ''}`,
+    tipo: 'Type',
+    todos: 'All',
+    sedan: 'Sedan', suv: 'SUV', compacto: 'Compact', pickup: 'Pickup',
+    precioMax: 'Max price/day',
+    filtrar: 'Filter',
+    limpiar: 'Clear',
+    sinResultados: 'No vehicles found with those filters.',
+    ctaTitle: 'Do you have a vehicle?',
+    ctaSub: 'List it on DrivePass and start generating income.',
+    ctaBtn: 'List my car',
+  },
+};
+
 export default function Home() {
+  const { lang } = useLang();
+  const c = T[lang];
   const [vehiculos, setVehiculos] = useState<Vehiculo[]>([]);
   const [filtros, setFiltros] = useState({
     tipo: '', ubicacion: '', precioMax: '', fechaInicio: '', fechaFin: '',
@@ -49,9 +103,9 @@ export default function Home() {
       <section className="bg-surface-2 border-b border-border">
         <div className="max-w-7xl mx-auto px-6 py-6 grid grid-cols-1 sm:grid-cols-3 gap-6">
           {[
-            { icon: <IconKey size={22} className="text-accent"/>, title: 'Acceso rápido', desc: 'Reserva en minutos desde cualquier dispositivo' },
-            { icon: <IconShield size={22} className="text-accent"/>, title: '100% seguro', desc: 'Verificación de identidad y vehículos documentados' },
-            { icon: <IconRoute size={22} className="text-accent"/>, title: 'Tu ruta, tu precio', desc: 'Precios definidos por expertos DrivePass' },
+            { icon: <IconKey size={22} className="text-accent"/>, ...c.features[0] },
+            { icon: <IconShield size={22} className="text-accent"/>, ...c.features[1] },
+            { icon: <IconRoute size={22} className="text-accent"/>, ...c.features[2] },
           ].map(f => (
             <div key={f.title} className="flex items-center gap-4">
               <div className="w-11 h-11 rounded-xl bg-accent-light flex items-center justify-center flex-shrink-0">{f.icon}</div>
@@ -65,12 +119,12 @@ export default function Home() {
       <section id="vehiculos" className="max-w-7xl mx-auto px-4 sm:px-6 py-8 sm:py-10">
         <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
           <div>
-            <h2 className="text-2xl font-bold text-ink">Vehículos disponibles</h2>
-            <p className="text-ink/50 text-sm">Medellín y área metropolitana</p>
+            <h2 className="text-2xl font-bold text-ink">{c.disponibles}</h2>
+            <p className="text-ink/50 text-sm">{c.ubicacionSub}</p>
           </div>
           {vehiculos.length > 0 && (
             <span className="bg-brand-muted text-ink text-xs font-semibold px-3 py-1.5 rounded-full">
-              {vehiculos.length} vehículo{vehiculos.length !== 1 ? 's' : ''}
+              {c.vehiculo(vehiculos.length)}
             </span>
           )}
         </div>
@@ -81,11 +135,11 @@ export default function Home() {
           <div className="mb-3 pb-3 border-b border-border">
             <div className="flex items-center gap-1.5 mb-2">
               <IconCalendar size={14} className="text-accent"/>
-              <span className="text-xs font-bold text-ink/60 uppercase tracking-wide">Disponibilidad</span>
+              <span className="text-xs font-bold text-ink/60 uppercase tracking-wide">{c.disponibilidad}</span>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-xs font-medium text-ink/60 block mb-1">Desde</label>
+                <label className="text-xs font-medium text-ink/60 block mb-1">{c.desde}</label>
                 <input type="date" min={hoy}
                   className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40"
                   value={filtros.fechaInicio}
@@ -99,7 +153,7 @@ export default function Home() {
                 />
               </div>
               <div>
-                <label className="text-xs font-medium text-ink/60 block mb-1">Hasta</label>
+                <label className="text-xs font-medium text-ink/60 block mb-1">{c.hasta}</label>
                 <input type="date" min={filtros.fechaInicio || hoy}
                   className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40"
                   value={filtros.fechaFin}
@@ -111,7 +165,7 @@ export default function Home() {
               <div className="inline-flex items-center gap-1.5 bg-accent-light border border-accent/20 rounded-xl px-3 py-1.5 mt-2">
                 <IconCalendar size={12} className="text-accent"/>
                 <span className="text-xs font-semibold text-accent">
-                  {diasEntre(filtros.fechaInicio, filtros.fechaFin)} día{diasEntre(filtros.fechaInicio, filtros.fechaFin) !== 1 ? 's' : ''}
+                  {c.dias(diasEntre(filtros.fechaInicio, filtros.fechaFin))}
                 </span>
               </div>
             )}
@@ -120,19 +174,19 @@ export default function Home() {
           {/* Tipo + Precio */}
           <div className="grid grid-cols-2 gap-3 mb-3">
             <div>
-              <label className="text-xs font-medium text-ink/60 block mb-1">Tipo</label>
+              <label className="text-xs font-medium text-ink/60 block mb-1">{c.tipo}</label>
               <select
                 className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40"
                 value={filtros.tipo} onChange={e => setFiltros(f => ({ ...f, tipo: e.target.value }))}>
-                <option value="">Todos</option>
-                <option value="sedan">Sedán</option>
-                <option value="suv">SUV</option>
-                <option value="compacto">Compacto</option>
-                <option value="pickup">Pickup</option>
+                <option value="">{c.todos}</option>
+                <option value="sedan">{c.sedan}</option>
+                <option value="suv">{c.suv}</option>
+                <option value="compacto">{c.compacto}</option>
+                <option value="pickup">{c.pickup}</option>
               </select>
             </div>
             <div>
-              <label className="text-xs font-medium text-ink/60 block mb-1">Precio máx/día</label>
+              <label className="text-xs font-medium text-ink/60 block mb-1">{c.precioMax}</label>
               <input type="number" placeholder="$200.000"
                 className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40"
                 value={filtros.precioMax} onChange={e => setFiltros(f => ({ ...f, precioMax: e.target.value }))} />
@@ -143,7 +197,7 @@ export default function Home() {
           <div className="flex gap-2">
             <button onClick={cargar}
               className="flex-1 flex items-center justify-center gap-2 bg-brand hover:bg-brand-hover text-white font-semibold px-5 py-2.5 rounded-xl transition shadow-sm text-sm">
-              <IconFilter size={15}/> Filtrar
+              <IconFilter size={15}/> {c.filtrar}
             </button>
             {Object.values(filtros).some(Boolean) && (
               <button onClick={async () => {
@@ -155,7 +209,7 @@ export default function Home() {
                 setLoading(false);
               }}
                 className="flex items-center gap-1.5 text-sm text-accent font-medium transition px-3 py-2.5 rounded-xl border border-accent/20 bg-accent-light hover:bg-accent/10">
-                <IconX size={13}/> Limpiar
+                <IconX size={13}/> {c.limpiar}
               </button>
             )}
           </div>
@@ -177,7 +231,7 @@ export default function Home() {
         ) : vehiculos.length === 0 ? (
           <div className="text-center py-20 bg-surface-2 rounded-2xl border border-border">
             <IconCar size={48} className="text-ink/20 mx-auto mb-4"/>
-            <p className="text-ink/40 font-medium">No se encontraron vehículos con esos filtros.</p>
+            <p className="text-ink/40 font-medium">{c.sinResultados}</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -190,12 +244,12 @@ export default function Home() {
       <section className="bg-brand mx-4 sm:mx-6 mb-10 rounded-3xl overflow-hidden">
         <div className="max-w-4xl mx-auto px-6 sm:px-8 py-8 sm:py-12 flex flex-col sm:flex-row items-center justify-between gap-5">
           <div className="text-center sm:text-left">
-            <h3 className="text-xl sm:text-2xl font-bold text-white mb-1">¿Tienes un vehículo?</h3>
-            <p className="text-white/60 text-sm sm:text-base">Publícalo en DrivePass y empieza a generar ingresos.</p>
+            <h3 className="text-xl sm:text-2xl font-bold text-white mb-1">{c.ctaTitle}</h3>
+            <p className="text-white/60 text-sm sm:text-base">{c.ctaSub}</p>
           </div>
           <a href="/registro?rol=propietario"
             className="w-full sm:w-auto flex-shrink-0 flex items-center justify-center gap-2 bg-accent hover:bg-accent-hover text-white font-bold px-8 py-3.5 rounded-xl transition shadow-lg shadow-accent/30">
-            <IconKey size={18}/> Publicar mi carro
+            <IconKey size={18}/> {c.ctaBtn}
           </a>
         </div>
       </section>

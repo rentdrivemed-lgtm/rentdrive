@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import CalendarioReservas, { type ReservaCalendario } from '@/components/CalendarioReservas';
 import OperacionesPanel from '@/components/OperacionesPanel';
 import PicoPlacaConfig from '@/components/PicoPlacaConfig';
+import LeadsPropietariosPanel from '@/components/LeadsPropietariosPanel';
 import { parsePicoPlaca, picoPlacaVacio, placaRestringida, type PicoPlaca } from '@/lib/pico-placa';
 import { IconUser, IconCar, IconX, IconCheck, IconCalendar, IconShield } from '@/components/Icons';
 import type { VerificacionResultado } from '@/lib/verificacion-docs';
@@ -185,7 +186,7 @@ function ResultadoIA({ res, auto }: { res: VerificacionResultado; auto?: string[
 }
 
 export default function DashboardAdmin() {
-  const [tab, setTab] = useState<'usuarios' | 'vehiculos' | 'reservas' | 'operaciones' | 'pagos' | 'mercado' | 'config'>('usuarios');
+  const [tab, setTab] = useState<'usuarios' | 'vehiculos' | 'reservas' | 'operaciones' | 'pagos' | 'mercado' | 'leads' | 'config'>('usuarios');
   const [picoPlaca, setPicoPlaca] = useState<PicoPlaca>(picoPlacaVacio());
   const [usuarios, setUsuarios]   = useState<Usuario[]>([]);
   const [vehiculos, setVehiculos] = useState<Vehiculo[]>([]);
@@ -611,6 +612,7 @@ export default function DashboardAdmin() {
           { key: 'operaciones', label: 'Operaciones' },
           { key: 'pagos', label: `💰 Pagos${pagos.length > 0 ? ` (${pagos.length})` : ''}`, badge: pagos.length },
           { key: 'mercado', label: '📊 Mercado' },
+          { key: 'leads', label: '🎯 Leads' },
           { key: 'config', label: 'Configuración' },
         ] as const).map(t => (
           <button key={t.key} onClick={() => setTab(t.key)}
@@ -1300,6 +1302,8 @@ export default function DashboardAdmin() {
       )}
 
       {/* ── CONFIGURACIÓN (pico y placa) ── */}
+      {tab === 'leads' && <LeadsPropietariosPanel />}
+
       {tab === 'config' && <PicoPlacaConfig />}
 
       {/* Modal documentos del cliente (arrendatario) */}

@@ -3,6 +3,12 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { IconPin, IconArrowR, IconStar } from '@/components/Icons';
 import { useSession } from '@/contexts/SessionContext';
+import { useLang } from '@/contexts/LanguageContext';
+
+const T = {
+  es: { precioPorAsignar: 'Precio por asignar', dia: '/día', enRevision: 'En revisión', verMas: 'Ver más' },
+  en: { precioPorAsignar: 'Price to be set', dia: '/day', enRevision: 'Under review', verMas: 'View more' },
+};
 
 type Vehiculo = {
   id: number;
@@ -20,6 +26,8 @@ type Vehiculo = {
 
 export default function VehiculoCard({ v }: { v: Vehiculo }) {
   const { user } = useSession();
+  const { lang } = useLang();
+  const c = T[lang];
   const [enVitrina, setEnVitrina] = useState(!!v.en_vitrina);
   const [guardando, setGuardando] = useState(false);
   let fotos: string[] = [];
@@ -61,7 +69,7 @@ export default function VehiculoCard({ v }: { v: Vehiculo }) {
           )}
           {v.precio_dia === 0 && (
             <span className="bg-accent/90 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
-              Precio por asignar
+              {c.precioPorAsignar}
             </span>
           )}
         </div>
@@ -80,14 +88,14 @@ export default function VehiculoCard({ v }: { v: Vehiculo }) {
           {v.precio_dia > 0 ? (
             <div>
               <span className="text-accent font-bold text-lg">${v.precio_dia.toLocaleString('es-CO')}</span>
-              <span className="text-ink/40 text-xs font-normal"> /día</span>
+              <span className="text-ink/40 text-xs font-normal"> {c.dia}</span>
             </div>
           ) : (
-            <span className="text-accent/70 text-sm font-medium">En revisión</span>
+            <span className="text-accent/70 text-sm font-medium">{c.enRevision}</span>
           )}
           <Link href={`/vehiculos/${v.id}`}
             className="flex items-center gap-1.5 bg-brand hover:bg-brand-hover text-white text-xs font-semibold px-4 py-2 rounded-xl transition shadow-sm">
-            Ver más <IconArrowR size={12} />
+            {c.verMas} <IconArrowR size={12} />
           </Link>
         </div>
       </div>

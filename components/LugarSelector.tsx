@@ -1,6 +1,7 @@
 'use client';
 import { MUNICIPIOS, getMunicipio, esAeropuerto, RECARGO_AEROPUERTO, type Lugar } from '@/lib/lugares';
 import { IconPin, IconClock, IconPlane } from '@/components/Icons';
+import { useLang } from '@/contexts/LanguageContext';
 
 type Props = {
   label: string;
@@ -10,7 +11,28 @@ type Props = {
   tone?: 'accent' | 'brand';
 };
 
+const T = {
+  es: {
+    municipioLabel: 'Municipio / lugar', selecLugar: 'Selecciona un lugar…',
+    recargoAviso: (n: string) => `Punto especial — aplica un recargo de $${n} por este trayecto.`,
+    terminalLabel: 'Terminal / N.º de vuelo (opcional)', terminalPlaceholder: 'Ej: Terminal 1, vuelo AV8420',
+    barrioLabel: 'Barrio', selecBarrio: 'Selecciona el barrio…',
+    direccionLabel: 'Dirección exacta', direccionPlaceholder: 'Ej: Carrera 43A # 5-15, apto 302 / Torre 2',
+    hora: 'Hora',
+  },
+  en: {
+    municipioLabel: 'City / place', selecLugar: 'Select a place…',
+    recargoAviso: (n: string) => `Special location — a $${n} surcharge applies for this trip.`,
+    terminalLabel: 'Terminal / flight number (optional)', terminalPlaceholder: 'E.g.: Terminal 1, flight AV8420',
+    barrioLabel: 'Neighborhood', selecBarrio: 'Select the neighborhood…',
+    direccionLabel: 'Exact address', direccionPlaceholder: 'E.g.: Carrera 43A # 5-15, apt 302 / Tower 2',
+    hora: 'Time',
+  },
+};
+
 export default function LugarSelector({ label, value, onChange, tone = 'accent' }: Props) {
+  const { lang } = useLang();
+  const c = T[lang];
   const muni = getMunicipio(value.municipio);
   const aeropuerto = esAeropuerto(value.municipio);
   const set = (patch: Partial<Lugar>) => onChange({ ...value, ...patch });
@@ -28,13 +50,13 @@ export default function LugarSelector({ label, value, onChange, tone = 'accent' 
 
       {/* Municipio */}
       <div>
-        <label className="text-[11px] font-medium text-ink/50 block mb-1">Municipio / lugar</label>
+        <label className="text-[11px] font-medium text-ink/50 block mb-1">{c.municipioLabel}</label>
         <select
           className={inputCls}
           value={value.municipio}
           onChange={e => set({ municipio: e.target.value, barrio: '' })}
         >
-          <option value="">Selecciona un lugar…</option>
+          <option value="">{c.selecLugar}</option>
           {MUNICIPIOS.map(m => (
             <option key={m.id} value={m.id}>{m.nombre}</option>
           ))}
@@ -47,14 +69,14 @@ export default function LugarSelector({ label, value, onChange, tone = 'accent' 
           <div className="flex items-start gap-2 bg-accent-light border border-accent/20 rounded-xl px-3 py-2">
             <IconPlane size={14} className="text-accent flex-shrink-0 mt-0.5" />
             <p className="text-[11px] text-accent font-medium">
-              Punto especial — aplica un recargo de ${RECARGO_AEROPUERTO.toLocaleString('es-CO')} por este trayecto.
+              {c.recargoAviso(RECARGO_AEROPUERTO.toLocaleString('es-CO'))}
             </p>
           </div>
           <div>
-            <label className="text-[11px] font-medium text-ink/50 block mb-1">Terminal / N.º de vuelo (opcional)</label>
+            <label className="text-[11px] font-medium text-ink/50 block mb-1">{c.terminalLabel}</label>
             <input
               type="text"
-              placeholder="Ej: Terminal 1, vuelo AV8420"
+              placeholder={c.terminalPlaceholder}
               className={inputCls}
               value={value.direccion}
               onChange={e => set({ direccion: e.target.value })}
@@ -67,23 +89,23 @@ export default function LugarSelector({ label, value, onChange, tone = 'accent' 
       {value.municipio && !aeropuerto && (
         <>
           <div>
-            <label className="text-[11px] font-medium text-ink/50 block mb-1">Barrio</label>
+            <label className="text-[11px] font-medium text-ink/50 block mb-1">{c.barrioLabel}</label>
             <select
               className={inputCls}
               value={value.barrio}
               onChange={e => set({ barrio: e.target.value })}
             >
-              <option value="">Selecciona el barrio…</option>
+              <option value="">{c.selecBarrio}</option>
               {(muni?.barrios ?? []).map(b => (
                 <option key={b} value={b}>{b}</option>
               ))}
             </select>
           </div>
           <div>
-            <label className="text-[11px] font-medium text-ink/50 block mb-1">Dirección exacta</label>
+            <label className="text-[11px] font-medium text-ink/50 block mb-1">{c.direccionLabel}</label>
             <input
               type="text"
-              placeholder="Ej: Carrera 43A # 5-15, apto 302 / Torre 2"
+              placeholder={c.direccionPlaceholder}
               className={inputCls}
               value={value.direccion}
               onChange={e => set({ direccion: e.target.value })}
@@ -96,7 +118,7 @@ export default function LugarSelector({ label, value, onChange, tone = 'accent' 
       {value.municipio && (
         <div>
           <label className="text-[11px] font-medium text-ink/50 mb-1 flex items-center gap-1">
-            <IconClock size={11} className="text-ink/40" /> Hora
+            <IconClock size={11} className="text-ink/40" /> {c.hora}
           </label>
           <input
             type="time"

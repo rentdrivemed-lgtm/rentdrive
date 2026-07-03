@@ -5,10 +5,38 @@ import Link from 'next/link';
 import CalendarioReserva from '@/components/CalendarioReserva';
 import GaleriaVehiculo from '@/components/GaleriaVehiculo';
 import LugarSelector from '@/components/LugarSelector';
+import { useLang } from '@/contexts/LanguageContext';
 import { IconArrowL, IconCalendar, IconPin, IconKey } from '@/components/Icons';
 import {
   LUGAR_VACIO, calcularRecargo, lugarValido, cargarLugares, guardarLugares, guardarDestino, type Lugar,
 } from '@/lib/lugares';
+
+const T = {
+  es: {
+    cargando: 'Cargando...', volver: 'Volver al inicio', publicadoPor: 'Publicado por',
+    precioEnRevision: 'Precio en revisión por el equipo DrivePass', dia: '/día',
+    reservarVehiculo: 'Reservar vehículo', fechasAlquiler: 'Fechas de alquiler',
+    recogidaLabel: 'Recogida', devolucionLabel: 'Devolución',
+    recargoAeropuerto: 'Recargo aeropuerto', totalEstimado: 'Total estimado',
+    noDisponibleAhora: 'No disponible', precioNoDisponible: 'Precio no disponible aún',
+    irAlPago: 'Ir al pago', iniciarSesion: 'Iniciar sesión para reservar',
+    msgInactivo: 'Este vehículo no está disponible actualmente.', msgFechas: 'Selecciona las fechas en el calendario',
+    msgRecogida: 'Completa el lugar y la hora de recogida.', msgEntrega: 'Completa el lugar y la hora de entrega.',
+    dia1: (n: number) => `${n} día${n !== 1 ? 's' : ''}`,
+  },
+  en: {
+    cargando: 'Loading...', volver: 'Back to home', publicadoPor: 'Listed by',
+    precioEnRevision: 'Price under review by the DrivePass team', dia: '/day',
+    reservarVehiculo: 'Book vehicle', fechasAlquiler: 'Rental dates',
+    recogidaLabel: 'Pickup', devolucionLabel: 'Return',
+    recargoAeropuerto: 'Airport surcharge', totalEstimado: 'Estimated total',
+    noDisponibleAhora: 'Not available', precioNoDisponible: 'Price not available yet',
+    irAlPago: 'Go to payment', iniciarSesion: 'Sign in to book',
+    msgInactivo: 'This vehicle is not currently available.', msgFechas: 'Select the dates on the calendar',
+    msgRecogida: 'Complete the pickup place and time.', msgEntrega: 'Complete the drop-off place and time.',
+    dia1: (n: number) => `${n} day${n !== 1 ? 's' : ''}`,
+  },
+};
 
 type Vehiculo = {
   id: number; marca: string; modelo: string; anio: number;
@@ -22,6 +50,8 @@ type User = { id: number; nombre: string; rol: string };
 export default function VehiculoDetalle() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const { lang } = useLang();
+  const c = T[lang];
   const [vehiculo, setVehiculo] = useState<Vehiculo | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [fechaInicio, setFechaInicio] = useState('');
@@ -51,10 +81,10 @@ export default function VehiculoDetalle() {
   const carInactivo = vehiculo?.disponible === 0;
 
   const reservar = () => {
-    if (carInactivo) { setMsg('Este vehículo no está disponible actualmente.'); return; }
-    if (!fechaInicio || !fechaFin || dias <= 0) { setMsg('Selecciona las fechas en el calendario'); return; }
-    if (!lugarValido(recogida)) { setMsg('Completa el lugar y la hora de recogida.'); return; }
-    if (!lugarValido(entrega))  { setMsg('Completa el lugar y la hora de entrega.'); return; }
+    if (carInactivo) { setMsg(c.msgInactivo); return; }
+    if (!fechaInicio || !fechaFin || dias <= 0) { setMsg(c.msgFechas); return; }
+    if (!lugarValido(recogida)) { setMsg(c.msgRecogida); return; }
+    if (!lugarValido(entrega))  { setMsg(c.msgEntrega); return; }
     guardarLugares(recogida, entrega);
     const p = new URLSearchParams({ vehiculo_id: String(id), fecha_inicio: fechaInicio, fecha_fin: fechaFin });
     const destino = `/pago?${p.toString()}`;
@@ -65,7 +95,7 @@ export default function VehiculoDetalle() {
   };
 
   if (!vehiculo) return (
-    <div className="text-center py-20 text-ink/40">Cargando...</div>
+    <div className="text-center py-20 text-ink/40">{c.cargando}</div>
   );
 
   let fotos: string[] = [];
@@ -83,7 +113,7 @@ export default function VehiculoDetalle() {
   return (
     <div className="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-8">
       <Link href="/" className="inline-flex items-center gap-1.5 text-accent hover:text-accent-hover text-sm mb-5 font-medium transition">
-        <IconArrowL size={14} /> Volver al inicio
+        <IconArrowL size={14} /> {c.volver}
       </Link>
 
       <div className="bg-surface-2 rounded-3xl shadow-sm border border-border overflow-hidden">
@@ -101,16 +131,16 @@ export default function VehiculoDetalle() {
             <p className="text-ink/50 text-sm mb-1 flex items-center gap-1.5">
               <IconPin size={13} /> {vehiculo.ubicacion} · {vehiculo.anio}
             </p>
-            <p className="text-ink/40 text-sm mb-4">Publicado por: {vehiculo.propietario_nombre}</p>
+            <p className="text-ink/40 text-sm mb-4">{c.publicadoPor}: {vehiculo.propietario_nombre}</p>
             <p className="text-ink/70 mb-5 text-sm leading-relaxed">{vehiculo.descripcion}</p>
             {vehiculo.precio_dia > 0 ? (
               <div className="flex items-baseline gap-1">
                 <span className="text-accent font-bold text-3xl">${vehiculo.precio_dia.toLocaleString('es-CO')}</span>
-                <span className="text-ink/40 text-sm">/día</span>
+                <span className="text-ink/40 text-sm">{c.dia}</span>
               </div>
             ) : (
               <div className="bg-accent-light border border-accent/20 rounded-xl px-4 py-2.5 text-sm text-accent font-medium inline-block">
-                Precio en revisión por el equipo DrivePass
+                {c.precioEnRevision}
               </div>
             )}
           </div>
@@ -118,11 +148,11 @@ export default function VehiculoDetalle() {
           {/* Reserva */}
           <div className="bg-surface rounded-2xl p-5 border border-border">
             <h2 className="font-bold text-ink mb-4 flex items-center gap-2">
-              <IconCalendar size={16} className="text-accent" /> Reservar vehículo
+              <IconCalendar size={16} className="text-accent" /> {c.reservarVehiculo}
             </h2>
             <div className="space-y-3">
               <div>
-                <label className="text-xs font-semibold text-ink/60 block mb-2 uppercase tracking-wide">Fechas de alquiler</label>
+                <label className="text-xs font-semibold text-ink/60 block mb-2 uppercase tracking-wide">{c.fechasAlquiler}</label>
                 <CalendarioReserva
                   availableDates={diasDisponibles}
                   reservedDates={ocupadas}
@@ -134,28 +164,28 @@ export default function VehiculoDetalle() {
                 />
                 {fechaInicio && fechaFin && (
                   <div className="mt-2 text-xs bg-surface-2 border border-border rounded-xl px-3 py-2 flex justify-between text-ink/60">
-                    <span>Recogida: <b className="text-ink">{fechaInicio}</b></span>
-                    <span>Devolución: <b className="text-ink">{fechaFin}</b></span>
+                    <span>{c.recogidaLabel}: <b className="text-ink">{fechaInicio}</b></span>
+                    <span>{c.devolucionLabel}: <b className="text-ink">{fechaFin}</b></span>
                   </div>
                 )}
               </div>
 
               {/* Lugar y hora de recogida / entrega */}
               <div className="pt-3 mt-1 border-t border-border space-y-4">
-                <LugarSelector label="Recogida" value={recogida} onChange={cambiarRecogida} />
-                <LugarSelector label="Entrega" value={entrega} onChange={cambiarEntrega} tone="brand" />
+                <LugarSelector label={c.recogidaLabel} value={recogida} onChange={cambiarRecogida} />
+                <LugarSelector label={c.devolucionLabel} value={entrega} onChange={cambiarEntrega} tone="brand" />
               </div>
 
               {dias > 0 && vehiculo.precio_dia > 0 && (
                 <div className="bg-accent-light border border-accent/20 rounded-xl p-3 text-sm">
-                  <div className="flex justify-between text-ink/70"><span>{dias} día{dias !== 1 ? 's' : ''} × ${vehiculo.precio_dia.toLocaleString('es-CO')}:</span><span>${subtotal.toLocaleString('es-CO')}</span></div>
+                  <div className="flex justify-between text-ink/70"><span>{c.dia1(dias)} × ${vehiculo.precio_dia.toLocaleString('es-CO')}:</span><span>${subtotal.toLocaleString('es-CO')}</span></div>
                   {recargo > 0 && (
                     <div className="flex justify-between text-ink/70 mt-1">
-                      <span>Recargo aeropuerto:</span><span>+${recargo.toLocaleString('es-CO')}</span>
+                      <span>{c.recargoAeropuerto}:</span><span>+${recargo.toLocaleString('es-CO')}</span>
                     </div>
                   )}
                   <div className="flex justify-between font-bold text-accent mt-1 pt-1 border-t border-accent/15">
-                    <span>Total estimado:</span>
+                    <span>{c.totalEstimado}:</span>
                     <span>${total.toLocaleString('es-CO')}</span>
                   </div>
                 </div>
@@ -169,7 +199,7 @@ export default function VehiculoDetalle() {
                 className="w-full flex items-center justify-center gap-2 bg-accent hover:bg-accent-hover text-white py-2.5 rounded-xl font-bold transition shadow-md shadow-accent/20 disabled:opacity-60 text-sm"
               >
                 <IconKey size={15} />
-                {carInactivo ? 'No disponible' : vehiculo.precio_dia === 0 ? 'Precio no disponible aún' : user ? 'Ir al pago' : 'Iniciar sesión para reservar'}
+                {carInactivo ? c.noDisponibleAhora : vehiculo.precio_dia === 0 ? c.precioNoDisponible : user ? c.irAlPago : c.iniciarSesion}
               </button>
             </div>
           </div>

@@ -166,6 +166,22 @@ function initDb(db: Database.Database) {
       datos_raw TEXT DEFAULT '{}',
       fecha TEXT DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS leads_propietarios (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      nombre TEXT NOT NULL,
+      correo TEXT NOT NULL,
+      celular TEXT NOT NULL,
+      tipo_vehiculo TEXT DEFAULT '',
+      origen TEXT DEFAULT 'calculadora',
+      canal_verificacion TEXT DEFAULT '',
+      codigo TEXT DEFAULT '',
+      codigo_expira TEXT DEFAULT '',
+      codigo_generado_at TEXT DEFAULT '',
+      codigo_intentos INTEGER DEFAULT 0,
+      verificado INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now', 'localtime'))
+    );
   `);
 
   try { db.exec("ALTER TABLE vehiculos ADD COLUMN dias_disponibles TEXT DEFAULT '[]'"); } catch { /* ya existe */ }

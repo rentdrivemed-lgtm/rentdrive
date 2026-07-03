@@ -12,7 +12,8 @@ const T = {
     ctaRegister: 'Registrarme como propietario',
     ctaRent: 'Prefiero alquilar',
     earningsTitle: '¿Cuánto puedes ganar?',
-    earningsDesc: 'Los ingresos dependen del tipo de vehículo, año y disponibilidad. DrivePass asigna precios competitivos basados en el mercado local de Medellín.',
+    earningsDesc: 'Simula tu caso con una calculadora que usa los mismos costos que manejamos internamente: SOAT, impuesto vehicular, seguro, mantenimiento, GPS y depreciación.',
+    calcBtn: 'Calculadora de ganancias según tu vehículo',
     stats: [
       { v: '2018+', l: 'Año mínimo del vehículo' },
       { v: '7 fotos', l: 'Requeridas para publicar' },
@@ -56,7 +57,8 @@ const T = {
     ctaRegister: 'Register as an owner',
     ctaRent: 'I prefer to rent',
     earningsTitle: 'How much can you earn?',
-    earningsDesc: 'Income depends on vehicle type, year and availability. DrivePass sets competitive prices based on the local Medellín market.',
+    earningsDesc: 'Simulate your own case with a calculator that uses the same costs we track internally: SOAT, vehicle tax, insurance, maintenance, GPS and depreciation.',
+    calcBtn: 'Profit calculator for your vehicle',
     stats: [
       { v: '2018+', l: 'Minimum vehicle year' },
       { v: '7 photos', l: 'Required to publish' },
@@ -142,6 +144,26 @@ export default function PropietariosInfoPage() {
               <p className="text-xs text-ink/50 mt-0.5 leading-tight">{s.l}</p>
             </div>
           ))}
+        </div>
+      </section>
+
+      {/* CALCULADORA DE RENTABILIDAD — banner llamativo */}
+      <section className="max-w-4xl mx-auto px-6 pt-14">
+        <div className="relative overflow-hidden rounded-3xl p-6 sm:p-10 text-center"
+          style={{ background: 'var(--gradient-accent)' }}>
+          <div className="absolute -top-10 -right-10 w-56 h-56 rounded-full bg-white/10 blur-2xl" />
+          <div className="absolute -bottom-14 -left-10 w-56 h-56 rounded-full bg-white/10 blur-2xl" />
+          <div className="relative">
+            <div className="w-16 h-16 rounded-2xl bg-white/15 flex items-center justify-center mx-auto mb-4 backdrop-blur-sm">
+              <IconCoin size={30} className="text-white" />
+            </div>
+            <h2 className="font-black text-white text-2xl sm:text-3xl leading-tight mb-2">{c.earningsTitle}</h2>
+            <p className="text-white/85 text-sm sm:text-base max-w-xl mx-auto mb-6">{c.earningsDesc}</p>
+            <Link href="/calculadora-propietarios"
+              className="glow-accent inline-flex items-center gap-2.5 bg-white text-accent font-black text-base sm:text-lg px-8 py-4 rounded-2xl transition hover:-translate-y-0.5 hover:shadow-2xl">
+              <IconCoin size={20} /> {c.calcBtn} <IconArrowR size={18} />
+            </Link>
+          </div>
         </div>
       </section>
 
