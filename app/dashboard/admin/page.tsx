@@ -6,6 +6,7 @@ import OperacionesPanel from '@/components/OperacionesPanel';
 import PicoPlacaConfig from '@/components/PicoPlacaConfig';
 import LeadsPropietariosPanel from '@/components/LeadsPropietariosPanel';
 import { parsePicoPlaca, picoPlacaVacio, placaRestringida, type PicoPlaca } from '@/lib/pico-placa';
+import { fechaHoraRecogida, esNoShowAplicable } from '@/lib/cancelacion';
 import { IconUser, IconCar, IconX, IconCheck, IconCalendar, IconShield } from '@/components/Icons';
 import type { VerificacionResultado } from '@/lib/verificacion-docs';
 
@@ -519,6 +520,20 @@ export default function DashboardAdmin() {
     setReservas(rs => rs.map(r => r.id === id ? { ...r, estado } : r));
   };
 
+  const marcarNoShow = async (id: number) => {
+    setAccionando(id);
+    const res = await fetch(`/api/reservas/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ marcar_no_show: true }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      setReservas(rs => rs.map(r => r.id === id ? { ...r, estado: 'cancelada', cancelacion_pct: data.cancelacion_pct ?? 100 } : r));
+    }
+    setAccionando(null);
+  };
+
   const marcarPagado = async (reservaIds: number[]) => {
     setPagandoIds(prev => new Set([...prev, ...reservaIds]));
     setPagoMsg('');
@@ -975,6 +990,21 @@ export default function DashboardAdmin() {
                         Completar
                       </button>
                     )}
+                    {(r.estado === 'confirmada' || r.estado === 'en_curso') && (() => {
+                      let recogidaObj: { hora?: string } = {};
+                      try { recogidaObj = JSON.parse(r.recogida || '{}'); } catch { recogidaObj = {}; }
+                      const pickup = fechaHoraRecogida(r.fecha_inicio, recogidaObj);
+                      if (!esNoShowAplicable(pickup)) return null;
+                      return (
+                        <button
+                          disabled={accionando === r.id}
+                          onClick={() => marcarNoShow(r.id)}
+                          title="Ya pasaron 3h de la hora de recogida sin que el cliente llegara"
+                          className="text-[11px] px-2 py-1 bg-danger text-white rounded-lg hover:bg-danger/90 transition font-bold disabled:opacity-50">
+                          {accionando === r.id ? 'Marcando…' : '🚫 Marcar no-show (100%)'}
+                        </button>
+                      );
+                    })()}
                     <button
                       onClick={() => setClienteDocs({ r })}
                       className="text-[11px] px-2 py-1 inline-flex items-center gap-1 bg-surface text-ink/60 rounded-lg hover:text-ink transition font-medium">

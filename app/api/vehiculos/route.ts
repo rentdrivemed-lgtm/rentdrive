@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
+import { enviarCorreo } from '@/lib/email';
 
 function datesInRange(start: string, end: string): string[] {
   const dates: string[] = [];
@@ -95,6 +96,14 @@ export async function POST(req: NextRequest) {
     dias_disponibles || '[]',
     (placa || '').toString().toUpperCase().trim(),
   );
+
+  try {
+    await enviarCorreo(user.correo, 'Publicaste un vehículo en RentDrive',
+      `Hola ${user.nombre.split(' ')[0]}, tu ${marca} ${modelo} ${anio} quedó publicado en RentDrive. ` +
+      'Nuestro equipo revisará los documentos y activará el precio antes de que empiece a recibir reservas.');
+  } catch (e) {
+    console.error('[vehiculos] No se pudo enviar el correo de confirmación:', e instanceof Error ? e.message : e);
+  }
 
   return NextResponse.json({ id: result.lastInsertRowid }, { status: 201 });
 }

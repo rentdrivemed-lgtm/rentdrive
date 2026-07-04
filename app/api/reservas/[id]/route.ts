@@ -3,6 +3,10 @@ import { getDb } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
 import { crearOperacionParaReserva, cargarDetalleServicio, mensajeAdmin, getConfig } from '@/lib/operaciones';
 import { enviarWhatsapp } from '@/lib/whatsapp';
+import { enviarCorreo } from '@/lib/email';
+import {
+  fechaHoraRecogida, calcularPoliticaCancelacion, esNoShowAplicable, type Lugar,
+} from '@/lib/cancelacion';
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
@@ -27,12 +31,73 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
   if (!canUpdate) return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
 
+  if (body.marcar_no_show === true && user.rol !== 'admin') {
+    return NextResponse.json({ error: 'Solo un administrador puede marcar no-show' }, { status: 403 });
+  }
+
+  type ReservaConLugar = { fecha_inicio: string; recogida: string; total: number; estado: string; usuario_id: number };
+  const reservaFull = db.prepare('SELECT fecha_inicio, recogida, total, estado, usuario_id FROM reservas WHERE id = ?')
+    .get(Number(id)) as ReservaConLugar | undefined;
+
+  let recogidaLugar: Lugar = {};
+  try { recogidaLugar = JSON.parse(reservaFull?.recogida || '{}'); } catch { recogidaLugar = {}; }
+  const pickup = reservaFull ? fechaHoraRecogida(reservaFull.fecha_inicio, recogidaLugar) : null;
+
+  // ── Marcar no-show (solo admin, solo si ya pasó la ventana de gracia) ──
+  if (user.rol === 'admin' && body.marcar_no_show === true) {
+    if (!reservaFull || !pickup) return NextResponse.json({ error: 'No encontrado' }, { status: 404 });
+    if (!['confirmada', 'en_curso'].includes(reservaFull.estado)) {
+      return NextResponse.json({ error: 'Esta reserva no está en un estado que permita marcar no-show.' }, { status: 400 });
+    }
+    if (!esNoShowAplicable(pickup)) {
+      return NextResponse.json({ error: 'Todavía no se cumplen las 3 horas de gracia tras la hora de recogida.' }, { status: 400 });
+    }
+    const motivo = `El cliente no se presentó — pasadas 3h de la hora de recogida (${pickup.toLocaleString('es-CO')}). Se cobra 100% del total.`;
+    db.prepare(`
+      UPDATE reservas SET estado = 'cancelada', no_show = 1, cancelacion_pct = 100,
+        cancelacion_motivo = ?, cancelado_en = datetime('now', 'localtime') WHERE id = ?
+    `).run(motivo, Number(id));
+
+    const dest = db.prepare('SELECT correo, nombre FROM usuarios WHERE id = ?').get(reservaFull.usuario_id) as { correo: string; nombre: string } | undefined;
+    if (dest) {
+      await enviarCorreo(dest.correo, 'No-show en tu reserva RentDrive',
+        `Hola ${dest.nombre.split(' ')[0]}, no te presentaste a recoger el vehículo dentro de las 3 horas de gracia tras la hora acordada. Según nuestra política, se cobra el 100% del total de la reserva ($${Number(reservaFull.total).toLocaleString('es-CO')}). El vehículo quedó disponible para otro alquiler.`);
+    }
+    return NextResponse.json({ ok: true, cancelacion_pct: 100, no_show: true });
+  }
+
   const allowed = ['estado', 'pago_estado', 'fotos_antes', 'fotos_despues'];
   const updates = allowed.filter(f => body[f] !== undefined).map(f => `${f} = ?`).join(', ');
   const values = allowed.filter(f => body[f] !== undefined).map(f => body[f]);
 
+  // ── El propio arrendatario cancela: la política (72h/50%) la calcula el servidor, no el cliente ──
+  let politicaAplicada: { pct: number; motivo: string } | null = null;
+  if (user.rol === 'usuario' && body.estado === 'cancelada' && pickup) {
+    const politica = calcularPoliticaCancelacion(pickup);
+    politicaAplicada = { pct: politica.pct, motivo: politica.motivo };
+  }
+
   if (updates) {
-    db.prepare(`UPDATE reservas SET ${updates} WHERE id = ?`).run(...values, Number(id));
+    if (politicaAplicada) {
+      db.prepare(`UPDATE reservas SET ${updates}, cancelacion_pct = ?, cancelacion_motivo = ?, cancelado_en = datetime('now', 'localtime') WHERE id = ?`)
+        .run(...values, politicaAplicada.pct, politicaAplicada.motivo, Number(id));
+    } else {
+      db.prepare(`UPDATE reservas SET ${updates} WHERE id = ?`).run(...values, Number(id));
+    }
+  }
+
+  if (politicaAplicada) {
+    const det2 = db.prepare(`
+      SELECT u.correo, u.nombre, v.marca, v.modelo FROM reservas r
+      JOIN usuarios u ON r.usuario_id = u.id JOIN vehiculos v ON r.vehiculo_id = v.id WHERE r.id = ?
+    `).get(Number(id)) as { correo: string; nombre: string; marca: string; modelo: string } | undefined;
+    if (det2) {
+      const montoCobrado = (Number(reservaFull?.total || 0) * politicaAplicada.pct) / 100;
+      const cuerpo = politicaAplicada.pct > 0
+        ? `Hola ${det2.nombre.split(' ')[0]}, confirmamos la cancelación de tu reserva del ${det2.marca} ${det2.modelo}. ${politicaAplicada.motivo} Monto a cobrar: $${montoCobrado.toLocaleString('es-CO')}.`
+        : `Hola ${det2.nombre.split(' ')[0]}, confirmamos la cancelación de tu reserva del ${det2.marca} ${det2.modelo} sin ningún costo. ${politicaAplicada.motivo}`;
+      await enviarCorreo(det2.correo, 'Cancelación de tu reserva RentDrive', cuerpo);
+    }
   }
 
   // When admin approves or rejects, notify both usuario and propietario via chat
@@ -99,5 +164,5 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     }
   }
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, ...(politicaAplicada ? { cancelacion_pct: politicaAplicada.pct, cancelacion_motivo: politicaAplicada.motivo } : {}) });
 }

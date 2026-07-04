@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
 import { enviarCorreo } from '@/lib/email';
-import { enviarWhatsapp } from '@/lib/whatsapp';
+import { enviarWhatsappCodigo } from '@/lib/whatsapp';
 
 const CORREO_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const CODIGO_VIGENCIA_MIN = 10;
@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
   const mensaje = mensajeCodigo(nombre, codigo);
   const envio = canal === 'correo'
     ? await enviarCorreo(correo, 'Tu código de verificación RentDrive', mensaje)
-    : await enviarWhatsapp(celular, mensaje);
+    : await enviarWhatsappCodigo(celular, mensaje, codigo);
 
   if (!envio.enviado) {
     // Fallback de desarrollo: si el envío real no está configurado (falta RESEND_API_KEY o

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
 import { calcularRecargo, lugarValido, type Lugar } from '@/lib/lugares';
+import { enviarCorreo } from '@/lib/email';
 
 export const dynamic = 'force-dynamic';
 
@@ -136,6 +137,15 @@ export async function POST(req: NextRequest) {
     documento_id_url || '', licencia_url || '', firma_contrato || '{}',
     JSON.stringify(recogidaL), JSON.stringify(entregaL), recargo,
   );
+
+  try {
+    await enviarCorreo(user.correo, 'Tu solicitud de reserva en RentDrive',
+      `Hola ${user.nombre.split(' ')[0]}, recibimos tu solicitud de reserva del ${vehiculo.marca} ${vehiculo.modelo} ${vehiculo.anio} ` +
+      `del ${fecha_inicio} al ${fecha_fin} por $${total.toLocaleString('es-CO')}. Te avisamos apenas quede confirmada. ` +
+      'Recuerda: cancelaciones con menos de 72h de anticipación tienen un cargo del 50%, y si no te presentas a la hora de recogida (con 3h de gracia) se cobra el 100%.');
+  } catch (e) {
+    console.error('[reservas] No se pudo enviar el correo de confirmación:', e instanceof Error ? e.message : e);
+  }
 
   return NextResponse.json({ id: result.lastInsertRowid, total, recargo }, { status: 201 });
 }

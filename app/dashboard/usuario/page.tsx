@@ -2,12 +2,14 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { IconCar, IconSearch, IconCalendar } from '@/components/Icons';
+import { IconCar, IconSearch, IconCalendar, IconX } from '@/components/Icons';
+import { fechaHoraRecogida, calcularPoliticaCancelacion } from '@/lib/cancelacion';
 
 type Reserva = {
   id: number; vehiculo_id: number; marca: string; modelo: string; anio: number;
   fecha_inicio: string; fecha_fin: string; total: number;
-  pago_estado: string; estado: string;
+  pago_estado: string; estado: string; recogida?: string;
+  cancelacion_pct?: number | null;
 };
 type User = { nombre: string; correo: string; rol: string };
 
@@ -22,23 +24,52 @@ const estadoColor: Record<string, string> = {
 export default function DashboardUsuario() {
   const [user, setUser] = useState<User | null>(null);
   const [reservas, setReservas] = useState<Reserva[]>([]);
+  const [modal, setModal] = useState<{ reserva: Reserva; pct: number; motivo: string } | null>(null);
+  const [cancelando, setCancelando] = useState(false);
+  const [error, setError] = useState('');
   const router = useRouter();
+
+  const cargarReservas = () =>
+    fetch('/api/reservas').then(r => r.json()).then(d => setReservas(d.reservas || [])).catch(() => {});
 
   useEffect(() => {
     fetch('/api/auth/me').then(r => r.json()).then(d => {
       if (!d.user || d.user.rol !== 'usuario') { router.push('/login'); return; }
       setUser(d.user);
-    });
-    fetch('/api/reservas').then(r => r.json()).then(d => setReservas(d.reservas || []));
+    }).catch(() => router.push('/login'));
+    cargarReservas();
   }, [router]);
 
-  const cancelar = async (id: number) => {
-    await fetch(`/api/reservas/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ estado: 'cancelada' }),
-    });
-    setReservas(r => r.map(x => x.id === id ? { ...x, estado: 'cancelada' } : x));
+  const abrirConfirmacion = (r: Reserva) => {
+    let recogida: { hora?: string } = {};
+    try { recogida = JSON.parse(r.recogida || '{}'); } catch { recogida = {}; }
+    const pickup = fechaHoraRecogida(r.fecha_inicio, recogida);
+    const { pct, motivo } = calcularPoliticaCancelacion(pickup);
+    setError('');
+    setModal({ reserva: r, pct, motivo });
+  };
+
+  const confirmarCancelacion = async () => {
+    if (!modal) return;
+    setCancelando(true);
+    setError('');
+    try {
+      const res = await fetch(`/api/reservas/${modal.reserva.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ estado: 'cancelada' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(data.error || 'No pudimos cancelar la reserva. Intenta de nuevo.'); return; }
+      setReservas(rs => rs.map(x => x.id === modal.reserva.id
+        ? { ...x, estado: 'cancelada', cancelacion_pct: data.cancelacion_pct ?? modal.pct }
+        : x));
+      setModal(null);
+    } catch {
+      setError('Sin conexión — revisa tu internet e intenta de nuevo.');
+    } finally {
+      setCancelando(false);
+    }
   };
 
   if (!user) return <div className="text-center py-20 text-ink/40">Cargando...</div>;
@@ -100,13 +131,18 @@ export default function DashboardUsuario() {
                 <h3 className="font-bold text-ink">{r.marca} {r.modelo} {r.anio}</h3>
                 <p className="text-sm text-ink/50 mt-0.5">{r.fecha_inicio} → {r.fecha_fin}</p>
                 <p className="text-accent font-bold mt-1">${r.total.toLocaleString('es-CO')}</p>
+                {r.estado === 'cancelada' && typeof r.cancelacion_pct === 'number' && (
+                  <p className="text-xs text-danger mt-1">
+                    {r.cancelacion_pct > 0 ? `Se cobró el ${r.cancelacion_pct}% ($${(r.total * r.cancelacion_pct / 100).toLocaleString('es-CO')})` : 'Cancelada sin costo'}
+                  </p>
+                )}
               </div>
               <div className="flex items-center gap-3">
                 <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${estadoColor[r.estado] || 'bg-surface'}`}>
                   {r.estado}
                 </span>
-                {r.estado === 'confirmada' && (
-                  <button onClick={() => cancelar(r.id)}
+                {(r.estado === 'confirmada' || r.estado === 'pendiente') && (
+                  <button onClick={() => abrirConfirmacion(r)}
                     className="text-xs border border-danger/25 text-danger px-3 py-1.5 rounded-xl hover:bg-danger/10 transition font-medium"
                   >
                     Cancelar
@@ -115,6 +151,38 @@ export default function DashboardUsuario() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Modal de confirmación de cancelación */}
+      {modal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4" onClick={() => !cancelando && setModal(null)}>
+          <div className="bg-surface-2 rounded-2xl border border-border shadow-xl max-w-md w-full p-6" onClick={e => e.stopPropagation()}>
+            <div className="flex items-start justify-between mb-3">
+              <h3 className="font-bold text-ink text-lg">¿Cancelar esta reserva?</h3>
+              <button onClick={() => !cancelando && setModal(null)} className="text-ink/40 hover:text-ink" aria-label="Cerrar">
+                <IconX size={18} />
+              </button>
+            </div>
+            <p className="text-sm text-ink/60 mb-2">{modal.reserva.marca} {modal.reserva.modelo} {modal.reserva.anio} · {modal.reserva.fecha_inicio} → {modal.reserva.fecha_fin}</p>
+            <div className={`rounded-xl px-4 py-3 text-sm mb-4 ${modal.pct > 0 ? 'bg-danger/10 text-danger border border-danger/25' : 'bg-success/10 text-success border border-success/25'}`}>
+              {modal.motivo}
+              {modal.pct > 0 && (
+                <p className="font-bold mt-1">Monto a cobrar: ${(modal.reserva.total * modal.pct / 100).toLocaleString('es-CO')}</p>
+              )}
+            </div>
+            {error && <p className="text-xs text-danger font-medium mb-3">{error}</p>}
+            <div className="flex gap-2">
+              <button onClick={() => setModal(null)} disabled={cancelando}
+                className="flex-1 text-sm font-semibold px-4 py-2.5 rounded-xl border border-border text-ink/70 hover:bg-surface transition disabled:opacity-60">
+                Volver
+              </button>
+              <button onClick={confirmarCancelacion} disabled={cancelando}
+                className="flex-1 text-sm font-bold px-4 py-2.5 rounded-xl bg-danger text-white hover:bg-danger/90 transition disabled:opacity-60">
+                {cancelando ? 'Cancelando…' : 'Sí, cancelar'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

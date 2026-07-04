@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { enviarCorreo } from '@/lib/email';
-import { enviarWhatsapp } from '@/lib/whatsapp';
+import { enviarWhatsappCodigo } from '@/lib/whatsapp';
 
 const CODIGO_VIGENCIA_MIN = 10;
 const COOLDOWN_SEGUNDOS = 30;
@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
   const mensaje = `Hola ${lead.nombre.split(' ')[0]}, tu nuevo código RentDrive es: ${codigo}. Vence en ${CODIGO_VIGENCIA_MIN} minutos.`;
   const envio = lead.canal_verificacion === 'correo'
     ? await enviarCorreo(lead.correo, 'Tu código de verificación RentDrive', mensaje)
-    : await enviarWhatsapp(lead.celular, mensaje);
+    : await enviarWhatsappCodigo(lead.celular, mensaje, codigo);
 
   if (!envio.enviado) {
     console.log(`[leads-propietarios] Código reenviado para lead ${id}: ${codigo} (envío real falló: ${envio.detalle})`);

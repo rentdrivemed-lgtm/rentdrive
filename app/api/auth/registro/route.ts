@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { signToken, UserPayload } from '@/lib/auth';
+import { enviarCorreo } from '@/lib/email';
 import bcrypt from 'bcryptjs';
 
 export async function POST(req: NextRequest) {
@@ -53,6 +54,18 @@ export async function POST(req: NextRequest) {
     correo,
     rol: rolFinal as UserPayload['rol'],
   };
+
+  try {
+    const rolLabel = rolFinal === 'propietario' ? 'propietario' : 'usuario';
+    await enviarCorreo(correo, '¡Bienvenido a RentDrive!',
+      `Hola ${nombre.split(' ')[0]}, tu cuenta de ${rolLabel} en RentDrive quedó creada con este correo. ` +
+      (rolFinal === 'propietario'
+        ? 'Ya puedes publicar tu vehículo y empezar a generar ingresos.'
+        : 'Ya puedes buscar y reservar vehículos en Medellín.'));
+  } catch (e) {
+    // No bloquear el registro si el correo falla.
+    console.error('[registro] No se pudo enviar el correo de bienvenida:', e instanceof Error ? e.message : e);
+  }
 
   const token = signToken(payload);
   const res = NextResponse.json({ user: payload }, { status: 201 });
