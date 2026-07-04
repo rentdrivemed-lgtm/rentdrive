@@ -182,6 +182,17 @@ function initDb(db: Database.Database) {
       verificado INTEGER DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now', 'localtime'))
     );
+
+    CREATE TABLE IF NOT EXISTS whatsapp_mensajes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      telefono TEXT NOT NULL,
+      usuario_id INTEGER,
+      rol TEXT DEFAULT '',
+      entrante TEXT NOT NULL,
+      respuesta TEXT DEFAULT '',
+      wa_message_id TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now', 'localtime'))
+    );
   `);
 
   try { db.exec("ALTER TABLE vehiculos ADD COLUMN dias_disponibles TEXT DEFAULT '[]'"); } catch { /* ya existe */ }
