@@ -20,7 +20,7 @@ export default function BottomNav() {
 
   const cls = (active: boolean) =>
     `flex flex-col items-center gap-0.5 py-2.5 flex-1 min-w-0 transition-colors select-none ${
-      active ? 'text-accent' : 'text-ink/40 active:text-ink/70'
+      active ? 'text-accent' : 'text-ink/50 active:text-ink/70'
     }`;
 
   return (
@@ -61,7 +61,7 @@ export default function BottomNav() {
         <>
           <Link href="/para-usuarios" className={cls(isActive('/para-usuarios'))}>
             <IconCar size={21} />
-            <span className="text-[10px] font-semibold leading-none">Alquilar</span>
+            <span className="text-[10px] font-semibold leading-none">Requisitos</span>
           </Link>
 
           <Link href="/propietarios-info" className={cls(isActive('/propietarios-info'))}>

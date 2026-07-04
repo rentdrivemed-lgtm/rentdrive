@@ -19,14 +19,21 @@ type User = { id: number; nombre: string; rol: string };
 export default function ChatListPage() {
   const [user, setUser] = useState<User | null>(null);
   const [convs, setConvs] = useState<Conversacion[]>([]);
+  const [error, setError] = useState('');
   const router = useRouter();
+
+  const cargarConversaciones = () => {
+    setError('');
+    fetch('/api/chat/conversaciones').then(r => r.json()).then(d => setConvs(d.conversaciones || []))
+      .catch(() => setError('No pudimos cargar tus conversaciones. Revisa tu conexión.'));
+  };
 
   useEffect(() => {
     fetch('/api/auth/me').then(r => r.json()).then(d => {
       if (!d.user) { router.push('/login'); return; }
       setUser(d.user);
-    });
-    fetch('/api/chat/conversaciones').then(r => r.json()).then(d => setConvs(d.conversaciones || []));
+    }).catch(() => router.push('/login'));
+    cargarConversaciones();
   }, [router]);
 
   const formatFecha = (ts: string | null) => {
@@ -47,12 +54,17 @@ export default function ChatListPage() {
         </div>
       </div>
 
-      {convs.length === 0 ? (
+      {error ? (
+        <div className="text-center py-20 bg-surface-2 rounded-2xl border border-border">
+          <p className="text-ink/60 mb-4">{error}</p>
+          <button onClick={cargarConversaciones} className="bg-accent text-white font-semibold px-5 py-2.5 rounded-xl text-sm">Reintentar</button>
+        </div>
+      ) : convs.length === 0 ? (
         <div className="text-center py-20 bg-surface-2 rounded-2xl border border-border">
           <IconChat size={48} className="text-ink/20 mx-auto mb-4" />
-          <p className="text-ink/40 font-medium">No tienes conversaciones aún.</p>
+          <p className="text-ink/50 font-medium">No tienes conversaciones aún.</p>
           {user?.rol === 'usuario' && (
-            <p className="text-sm text-ink/30 mt-1">Busca un vehículo y contacta al propietario.</p>
+            <p className="text-sm text-ink/40 mt-1">Busca un vehículo y contacta al propietario.</p>
           )}
         </div>
       ) : (
@@ -81,9 +93,9 @@ export default function ChatListPage() {
                     <p className={`text-sm truncate ${noLeidos > 0 ? 'font-bold text-ink' : 'font-semibold text-ink/80'}`}>
                       {otroNombre}
                     </p>
-                    <span className="text-xs text-ink/30 flex-shrink-0 ml-2">{formatFecha(c.ultimo_at)}</span>
+                    <span className="text-xs text-ink/40 flex-shrink-0 ml-2">{formatFecha(c.ultimo_at)}</span>
                   </div>
-                  <p className={`text-xs truncate mt-0.5 ${noLeidos > 0 ? 'text-ink/70 font-medium' : 'text-ink/40'}`}>
+                  <p className={`text-xs truncate mt-0.5 ${noLeidos > 0 ? 'text-ink/70 font-medium' : 'text-ink/50'}`}>
                     {c.ultimo_mensaje || 'Sin mensajes aún'}
                   </p>
                 </div>

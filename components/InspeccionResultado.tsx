@@ -27,7 +27,7 @@ export default function InspeccionResultado({ res }: { res: InspeccionResultado 
   return (
     <div className="space-y-2.5">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-semibold uppercase tracking-wide text-ink/40">Inspección IA</span>
+        <span className="text-xs font-semibold uppercase tracking-wide text-ink/50">Inspección IA</span>
         <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${SEV_BADGE[res.severidad_general] || SEV_BADGE.leve}`}>
           {SEV_LABEL[res.severidad_general] || res.severidad_general}
         </span>
@@ -42,8 +42,8 @@ export default function InspeccionResultado({ res }: { res: InspeccionResultado 
               <div className="flex items-center gap-1.5">
                 <span>{TIPO_ICON[h.tipo] || '⚠️'}</span>
                 <span className="font-semibold text-ink capitalize">{h.tipo.replace(/_/g, ' ')}</span>
-                <span className="text-ink/40">· {h.ubicacion}</span>
-                <span className="ml-auto text-[10px] text-ink/40">conf. {h.confianza}</span>
+                <span className="text-ink/50">· {h.ubicacion}</span>
+                <span className="ml-auto text-[10px] text-ink/50">conf. {h.confianza}</span>
               </div>
               <p className="text-ink/60 mt-0.5">{h.descripcion}</p>
             </li>
@@ -52,7 +52,7 @@ export default function InspeccionResultado({ res }: { res: InspeccionResultado 
       )}
 
       {res.zonas_no_comparables && (
-        <p className="text-[11px] text-ink/40">⚠️ No comparable: {res.zonas_no_comparables}</p>
+        <p className="text-[11px] text-ink/50">⚠️ No comparable: {res.zonas_no_comparables}</p>
       )}
 
       {res.recomendacion && (
@@ -61,7 +61,7 @@ export default function InspeccionResultado({ res }: { res: InspeccionResultado 
         </p>
       )}
 
-      <p className="text-[10px] text-ink/30">La IA es una ayuda; la verificación final del estado del vehículo es humana.</p>
+      <p className="text-[10px] text-ink/40">La IA es una ayuda; la verificación final del estado del vehículo es humana.</p>
     </div>
   );
 }

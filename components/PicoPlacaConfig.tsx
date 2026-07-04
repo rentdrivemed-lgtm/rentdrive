@@ -11,12 +11,21 @@ export default function PicoPlacaConfig() {
   const [afectadas, setAfectadas] = useState<Afectada[] | null>(null);
   const [enviando, setEnviando] = useState(false);
   const [resultado, setResultado] = useState('');
+  const [errorCarga, setErrorCarga] = useState('');
 
   const cargar = async () => {
-    const res = await fetch('/api/config', { cache: 'no-store' });
-    const d = await res.json().catch(() => ({}));
-    setPp(parsePicoPlaca(d.config?.pico_placa || ''));
-    setCargando(false);
+    setCargando(true);
+    setErrorCarga('');
+    try {
+      const res = await fetch('/api/config', { cache: 'no-store' });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { setErrorCarga('No pudimos cargar la configuración. Intenta de nuevo.'); return; }
+      setPp(parsePicoPlaca(d.config?.pico_placa || ''));
+    } catch {
+      setErrorCarga('Sin conexión — revisa tu internet e intenta de nuevo.');
+    } finally {
+      setCargando(false);
+    }
   };
   useEffect(() => { cargar(); }, []);
 
@@ -30,30 +39,49 @@ export default function PicoPlacaConfig() {
 
   const guardar = async () => {
     setMsg('');
-    const res = await fetch('/api/config', {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pico_placa: JSON.stringify(pp) }),
-    });
-    setMsg(res.ok ? '✓ Guardado' : 'Error al guardar');
+    try {
+      const res = await fetch('/api/config', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pico_placa: JSON.stringify(pp) }),
+      });
+      setMsg(res.ok ? '✓ Guardado' : 'Error al guardar');
+    } catch {
+      setMsg('Sin conexión');
+    }
   };
 
   const previsualizar = async () => {
-    const res = await fetch('/api/pico-placa/alertas', { cache: 'no-store' });
-    const d = await res.json().catch(() => ({}));
-    setAfectadas(d.afectadas || []);
+    try {
+      const res = await fetch('/api/pico-placa/alertas', { cache: 'no-store' });
+      const d = await res.json().catch(() => ({}));
+      setAfectadas(res.ok ? (d.afectadas || []) : []);
+    } catch {
+      setAfectadas([]);
+    }
   };
 
   const enviar = async () => {
     setEnviando(true); setResultado('');
-    const res = await fetch('/api/pico-placa/alertas', { method: 'POST' });
-    const d = await res.json().catch(() => ({}));
-    setEnviando(false);
-    if (res.ok) {
-      setResultado(`Afectadas hoy: ${d.total_afectadas}. Avisos enviados: ${d.enviados}.`);
-      previsualizar();
-    } else setResultado(d.error || 'Error al enviar.');
+    try {
+      const res = await fetch('/api/pico-placa/alertas', { method: 'POST' });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setResultado(`Afectadas hoy: ${d.total_afectadas}. Avisos enviados: ${d.enviados}.`);
+        previsualizar();
+      } else setResultado(d.error || 'Error al enviar.');
+    } catch {
+      setResultado('Sin conexión — intenta de nuevo.');
+    } finally {
+      setEnviando(false);
+    }
   };
 
-  if (cargando) return <div className="text-center py-12 text-ink/40">Cargando…</div>;
+  if (cargando) return <div className="text-center py-12 text-ink/50">Cargando…</div>;
+  if (errorCarga) return (
+    <div className="text-center py-12 bg-surface-2 rounded-2xl border border-border">
+      <p className="text-ink/60 mb-4">{errorCarga}</p>
+      <button onClick={cargar} className="bg-accent text-white font-semibold px-5 py-2.5 rounded-xl text-sm">Reintentar</button>
+    </div>
+  );
 
   const hoy = new Date();
   const restringidosHoy = digitosRestringidos(pp, hoy);
@@ -76,7 +104,7 @@ export default function PicoPlacaConfig() {
             value={pp.vigencia}
             onChange={e => setPp(p => ({ ...p, vigencia: e.target.value }))}
             placeholder="Ej. 2026 · primer semestre"
-            className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink placeholder:text-ink/30" />
+            className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink placeholder:text-ink/40" />
         </div>
 
         <div className="space-y-2">
@@ -87,7 +115,7 @@ export default function PicoPlacaConfig() {
                 const on = (pp.dias[dia.id] || []).includes(n);
                 return (
                   <button key={n} onClick={() => toggleDigito(dia.id, n)}
-                    className={`w-8 h-8 rounded-lg text-sm font-semibold border transition ${on ? 'bg-danger/20 text-danger border-danger/40' : 'bg-surface text-ink/40 border-border hover:border-accent/40'}`}>
+                    className={`w-8 h-8 rounded-lg text-sm font-semibold border transition ${on ? 'bg-danger/20 text-danger border-danger/40' : 'bg-surface text-ink/50 border-border hover:border-accent/40'}`}>
                     {n}
                   </button>
                 );
@@ -120,7 +148,7 @@ export default function PicoPlacaConfig() {
         {afectadas && (
           <div className="mt-3">
             {afectadas.length === 0 ? (
-              <p className="text-sm text-ink/40">Ningún vehículo alquilado hoy está en pico y placa.</p>
+              <p className="text-sm text-ink/50">Ningún vehículo alquilado hoy está en pico y placa.</p>
             ) : (
               <ul className="space-y-1">
                 {afectadas.map(a => (
@@ -132,7 +160,7 @@ export default function PicoPlacaConfig() {
             )}
           </div>
         )}
-        <p className="text-[11px] text-ink/40 mt-3">El envío automático cada mañana requiere la tarea programada (cron). El WhatsApp real solo sale si <code>WHATSAPP_ENABLED=true</code>; las notificaciones dentro de la app llegan siempre.</p>
+        <p className="text-[11px] text-ink/50 mt-3">El envío automático cada mañana requiere la tarea programada (cron). El WhatsApp real solo sale si <code>WHATSAPP_ENABLED=true</code>; las notificaciones dentro de la app llegan siempre.</p>
       </div>
     </div>
   );

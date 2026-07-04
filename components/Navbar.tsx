@@ -243,9 +243,9 @@ export default function Navbar() {
                     </div>
                     <div className="max-h-[360px] overflow-y-auto divide-y divide-border/50">
                       {loadingNotifs ? (
-                        <p className="text-center text-ink/40 py-10 text-sm">Cargando…</p>
+                        <p className="text-center text-ink/50 py-10 text-sm">Cargando…</p>
                       ) : notifList.length === 0 ? (
-                        <p className="text-center text-ink/40 py-10 text-sm">Sin notificaciones</p>
+                        <p className="text-center text-ink/50 py-10 text-sm">Sin notificaciones</p>
                       ) : notifList.map(n => (
                         <div key={n.id} className={`px-4 py-3 transition ${!n.leida ? 'bg-accent/5' : 'hover:bg-surface'}`}>
                           <div className="flex items-start gap-2.5">
@@ -253,7 +253,7 @@ export default function Navbar() {
                             <div className="min-w-0 flex-1">
                               <p className="text-xs font-bold text-ink leading-snug">{n.titulo}</p>
                               <p className="text-xs text-ink/60 mt-0.5 leading-snug break-words">{n.mensaje}</p>
-                              <p className="text-[10px] text-ink/30 mt-1">{relTime(n.created_at)}</p>
+                              <p className="text-[10px] text-ink/40 mt-1">{relTime(n.created_at)}</p>
                             </div>
                             {!n.leida && <span className="w-2 h-2 rounded-full bg-accent flex-shrink-0 mt-1.5"/>}
                           </div>
@@ -354,7 +354,8 @@ export default function Navbar() {
           </div>
 
           {/* Mobile toggle */}
-          <button onClick={() => setOpen(o => !o)} className="md:hidden text-white/80 hover:text-white p-2">
+          <button onClick={() => setOpen(o => !o)} aria-label={open ? 'Cerrar menú' : 'Abrir menú'} aria-expanded={open}
+            className="md:hidden text-white/80 hover:text-white p-2">
             {open ? <IconX size={22}/> : <IconMenu size={22}/>}
           </button>
         </div>

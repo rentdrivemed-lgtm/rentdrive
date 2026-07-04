@@ -27,7 +27,7 @@ export default function GaleriaVehiculo({ fotos }: { fotos: string[] }) {
 
   if (n === 0) {
     return (
-      <div className="aspect-[4/3] rounded-2xl border border-border bg-surface grid place-items-center text-ink/30">
+      <div className="aspect-[4/3] rounded-2xl border border-border bg-surface grid place-items-center text-ink/40">
         <div className="text-center">
           <IconPhoto size={40} className="mx-auto mb-2" />
           <p className="text-sm">{c.sinFotos}</p>

@@ -106,7 +106,7 @@ export default function CalendarioReserva({
         <p className="text-sm font-semibold text-ink capitalize mb-2 text-center">{nombreMes}</p>
         <div className="grid grid-cols-7 gap-0.5 text-xs">
           {c.dias.map(d => (
-            <div key={d} className="text-center text-ink/30 font-semibold py-1">{d}</div>
+            <div key={d} className="text-center text-ink/40 font-semibold py-1">{d}</div>
           ))}
           {celdas.map((fecha, i) => {
             if (!fecha) return <div key={`e${i}`} />;
@@ -128,7 +128,7 @@ export default function CalendarioReserva({
             else if (esInicio || esFin) { cls = 'bg-accent text-white font-bold shadow-sm shadow-accent/30'; }
             else if (dentro) { cls = 'bg-accent/25 text-ink'; }
             else if (sel) { cls = 'text-ink hover:bg-accent/15 ring-1 ring-success/30'; }
-            else { cls = 'text-ink/30'; }
+            else { cls = 'text-ink/40'; }
 
             return (
               <button key={str} type="button" disabled={!sel}

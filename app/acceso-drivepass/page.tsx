@@ -14,25 +14,29 @@ export default function AccesoAdminPage() {
     e.preventDefault();
     setError('');
     setLoading(true);
-    const res = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(form),
-    });
-    const data = await res.json();
-    setLoading(false);
-
-    if (!res.ok) { setError(data.error || 'Credenciales incorrectas'); return; }
-    if (data.user.rol !== 'admin') {
-      setError('Esta área es exclusiva del equipo DrivePass.');
-      await fetch('/api/auth/logout', { method: 'POST' });
-      return;
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(data.error || 'Credenciales incorrectas'); return; }
+      if (data.user.rol !== 'admin') {
+        setError('Esta área es exclusiva del equipo DrivePass.');
+        await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
+        return;
+      }
+      router.push('/dashboard/admin');
+    } catch {
+      setError('Sin conexión — revisa tu internet e intenta de nuevo.');
+    } finally {
+      setLoading(false);
     }
-    router.push('/dashboard/admin');
   };
 
   return (
-    <div className="min-h-screen bg-brand flex items-center justify-center px-4 py-8">
+    <div className="relative min-h-screen bg-brand flex items-center justify-center px-4 py-8">
 
       {/* Fondo decorativo */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">

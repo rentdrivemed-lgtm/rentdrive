@@ -1,5 +1,6 @@
 'use client';
 import { useRef, useState } from 'react';
+import RecortarImagen from '@/components/RecortarImagen';
 
 type Props = {
   label: string;
@@ -12,19 +13,48 @@ export default function DocUpload({ label, value, onChange, required }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [subiendo, setSubiendo] = useState(false);
   const [error, setError] = useState('');
+  const [recorteUrl, setRecorteUrl] = useState<string | null>(null);
 
-  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const subirArchivo = async (file: File | Blob, nombreArchivo: string) => {
     setError('');
     setSubiendo(true);
-    const fd = new FormData();
-    fd.append('file', file);
-    const res = await fetch('/api/upload/documento', { method: 'POST', body: fd });
-    const data = await res.json();
-    setSubiendo(false);
-    if (!res.ok) { setError(data.error || 'Error al subir'); return; }
-    onChange(data.url);
+    try {
+      const fd = new FormData();
+      fd.append('file', file, nombreArchivo);
+      const res = await fetch('/api/upload/documento', { method: 'POST', body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(data.error || 'Error al subir'); return; }
+      onChange(data.url);
+    } catch {
+      setError('Sin conexión — revisa tu internet e intenta de nuevo.');
+    } finally {
+      setSubiendo(false);
+    }
+  };
+
+  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // Los PDF no se recortan — se suben directo. Las imágenes pasan por el editor
+    // (girar/recortar) para mejorar la legibilidad antes de subirlas.
+    if (file.type === 'application/pdf') {
+      subirArchivo(file, file.name);
+    } else {
+      setRecorteUrl(URL.createObjectURL(file));
+    }
+  };
+
+  const confirmarRecorte = (blob: Blob) => {
+    if (recorteUrl) URL.revokeObjectURL(recorteUrl);
+    setRecorteUrl(null);
+    if (inputRef.current) inputRef.current.value = '';
+    subirArchivo(blob, 'documento.jpg');
+  };
+
+  const cancelarRecorte = () => {
+    if (recorteUrl) URL.revokeObjectURL(recorteUrl);
+    setRecorteUrl(null);
+    if (inputRef.current) inputRef.current.value = '';
   };
 
   const isPdf = value?.toLowerCase().endsWith('.pdf');
@@ -36,7 +66,9 @@ export default function DocUpload({ label, value, onChange, required }: Props) {
         {label} {required && <span className="text-accent">*</span>}
       </label>
       <div
+        role="button" tabIndex={0} aria-label={`Subir ${label}`}
         onClick={() => inputRef.current?.click()}
+        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); inputRef.current?.click(); } }}
         className={`relative cursor-pointer rounded-xl border-2 border-dashed transition flex items-center justify-center
           ${value
             ? 'border-success/30 bg-success/10'
@@ -59,13 +91,13 @@ export default function DocUpload({ label, value, onChange, required }: Props) {
             </>
           )
         ) : (
-          <div className="flex flex-col items-center gap-1 text-ink/30 py-3">
+          <div className="flex flex-col items-center gap-1 text-ink/40 py-3">
             {subiendo ? (
               <span className="text-sm text-ink/50">Subiendo…</span>
             ) : (
               <>
                 <span className="text-xl">📎</span>
-                <span className="text-[11px] text-ink/40">Imagen o PDF</span>
+                <span className="text-[11px] text-ink/50">Imagen o PDF</span>
               </>
             )}
           </div>
@@ -79,6 +111,9 @@ export default function DocUpload({ label, value, onChange, required }: Props) {
         className="hidden"
         onChange={handleFile}
       />
+      {recorteUrl && (
+        <RecortarImagen imagenUrl={recorteUrl} onConfirmar={confirmarRecorte} onCancelar={cancelarRecorte} />
+      )}
     </div>
   );
 }

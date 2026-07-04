@@ -34,15 +34,24 @@ export default function MensajeroPage() {
   const [invalido, setInvalido] = useState(false);
   const [inspeccionando, setInspeccionando] = useState<number | null>(null);
   const [errorInsp, setErrorInsp] = useState<Record<number, string>>({});
+  const [errorCarga, setErrorCarga] = useState('');
 
   const cargar = async () => {
-    const res = await fetch(`/api/m/${token}`, { cache: 'no-store' });
-    if (res.status === 404) { setInvalido(true); setCargando(false); return; }
-    const d = await res.json().catch(() => ({}));
-    setNombre(d.mensajero?.nombre || '');
-    setOps(d.operaciones || []);
-    setIaDisponible(!!d.ia_disponible);
-    setCargando(false);
+    setCargando(true);
+    setErrorCarga('');
+    try {
+      const res = await fetch(`/api/m/${token}`, { cache: 'no-store' });
+      if (res.status === 404) { setInvalido(true); return; }
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { setErrorCarga('No pudimos cargar tus servicios. Intenta de nuevo.'); return; }
+      setNombre(d.mensajero?.nombre || '');
+      setOps(d.operaciones || []);
+      setIaDisponible(!!d.ia_disponible);
+    } catch {
+      setErrorCarga('Sin conexión — revisa tu señal e intenta de nuevo.');
+    } finally {
+      setCargando(false);
+    }
   };
   useEffect(() => {
     cargar();
@@ -52,17 +61,25 @@ export default function MensajeroPage() {
   const reemplazar = (op: Operacion) => setOps(list => list.map(o => o.id === op.id ? op : o));
 
   const accion = async (body: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> => {
-    const res = await fetch(`/api/m/${token}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    const d = await res.json().catch(() => ({}));
-    if (res.ok && d.operacion) reemplazar(d.operacion as Operacion);
-    return { ok: res.ok, error: d.error };
+    try {
+      const res = await fetch(`/api/m/${token}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok && d.operacion) reemplazar(d.operacion as Operacion);
+      return { ok: res.ok, error: d.error };
+    } catch {
+      return { ok: false, error: 'Sin conexión — revisa tu señal e intenta de nuevo.' };
+    }
   };
 
   const subirArchivo = async (file: File): Promise<string | null> => {
-    const fd = new FormData(); fd.append('file', file);
-    const res = await fetch(`/api/m/${token}/upload`, { method: 'POST', body: fd });
-    const d = await res.json().catch(() => ({}));
-    return res.ok ? d.url : null;
+    try {
+      const fd = new FormData(); fd.append('file', file);
+      const res = await fetch(`/api/m/${token}/upload`, { method: 'POST', body: fd });
+      const d = await res.json().catch(() => ({}));
+      return res.ok ? d.url : null;
+    } catch {
+      return null;
+    }
   };
 
   const subirFotos = async (op: Operacion, fase: 'salida' | 'entrada', files: FileList) => {
@@ -88,7 +105,16 @@ export default function MensajeroPage() {
     setInspeccionando(null);
   };
 
-  if (cargando) return <div className="min-h-screen flex items-center justify-center text-ink/40">Cargando…</div>;
+  if (cargando) return <div className="min-h-screen flex items-center justify-center text-ink/50">Cargando…</div>;
+  if (errorCarga) return (
+    <div className="min-h-screen flex items-center justify-center p-6 text-center">
+      <div>
+        <p className="text-4xl mb-3">📡</p>
+        <p className="text-ink/60 mb-4">{errorCarga}</p>
+        <button onClick={cargar} className="bg-accent text-white font-semibold px-5 py-2.5 rounded-xl text-sm">Reintentar</button>
+      </div>
+    </div>
+  );
   if (invalido) return (
     <div className="min-h-screen flex items-center justify-center p-6 text-center">
       <div>
@@ -108,7 +134,7 @@ export default function MensajeroPage() {
         </div>
 
         {ops.length === 0 ? (
-          <div className="text-center py-16 text-ink/40 bg-surface-2 rounded-2xl border border-border">
+          <div className="text-center py-16 text-ink/50 bg-surface-2 rounded-2xl border border-border">
             <p className="text-3xl mb-2">📭</p>
             <p>No tienes servicios asignados por ahora.</p>
           </div>
@@ -124,7 +150,7 @@ export default function MensajeroPage() {
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <p className="font-bold text-ink">{d ? `${d.marca} ${d.modelo} ${d.anio}` : `Servicio #${op.id}`}</p>
-                      {d?.placa && <p className="text-xs text-ink/40">Placa {d.placa}</p>}
+                      {d?.placa && <p className="text-xs text-ink/50">Placa {d.placa}</p>}
                     </div>
                     <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-surface text-ink/60 border border-border shrink-0">
                       {OP_LABEL[op.estado] || op.estado}
@@ -133,9 +159,9 @@ export default function MensajeroPage() {
 
                   {d && (
                     <div className="text-xs text-ink/60 space-y-0.5 bg-surface rounded-xl p-2.5 border border-border/60">
-                      <p><span className="text-ink/40">Cliente:</span> {d.usuario_nombre}{d.usuario_celular ? ` · ${d.usuario_celular}` : ''}</p>
-                      <p><span className="text-ink/40">Entrega:</span> {resumenLugar(d.recogida)} · {d.fecha_inicio}</p>
-                      <p><span className="text-ink/40">Devolución:</span> {resumenLugar(d.entrega)} · {d.fecha_fin}</p>
+                      <p><span className="text-ink/50">Cliente:</span> {d.usuario_nombre}{d.usuario_celular ? ` · ${d.usuario_celular}` : ''}</p>
+                      <p><span className="text-ink/50">Entrega:</span> {resumenLugar(d.recogida)} · {d.fecha_inicio}</p>
+                      <p><span className="text-ink/50">Devolución:</span> {resumenLugar(d.entrega)} · {d.fecha_fin}</p>
                     </div>
                   )}
 
@@ -152,8 +178,8 @@ export default function MensajeroPage() {
                               {t.estado === 'hecho' && <IconCheck size={13} />}
                             </span>
                             <span className="min-w-0">
-                              <span className={`text-sm ${t.estado === 'hecho' ? 'line-through text-ink/40' : 'text-ink'}`}>{TAREA_ICON[t.tipo] || '•'} {t.titulo}</span>
-                              {t.detalle && <span className="block text-[11px] text-ink/40">{t.detalle}</span>}
+                              <span className={`text-sm ${t.estado === 'hecho' ? 'line-through text-ink/50' : 'text-ink'}`}>{TAREA_ICON[t.tipo] || '•'} {t.titulo}</span>
+                              {t.detalle && <span className="block text-[11px] text-ink/50">{t.detalle}</span>}
                             </span>
                           </button>
                         </li>
@@ -177,7 +203,7 @@ export default function MensajeroPage() {
                     </button>
                     {!iaDisponible && <p className="text-[11px] text-warning text-center">La IA no está configurada todavía (falta la clave). Puedes subir las fotos igual.</p>}
                     {(fotosSalida.length === 0 || fotosEntrada.length === 0) && iaDisponible && (
-                      <p className="text-[11px] text-ink/40 text-center">Sube al menos una foto de salida y una de entrada para comparar.</p>
+                      <p className="text-[11px] text-ink/50 text-center">Sube al menos una foto de salida y una de entrada para comparar.</p>
                     )}
                     {errorInsp[op.id] && <p className="text-[11px] text-danger text-center">{errorInsp[op.id]}</p>}
                     {insp && (
@@ -205,9 +231,12 @@ function FaseFotos({ label, fotos, onAdd, onRemove }: {
   const handle = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files?.length) return;
     setSubiendo(true);
-    await onAdd(e.target.files);
-    setSubiendo(false);
-    if (inputRef.current) inputRef.current.value = '';
+    try {
+      await onAdd(e.target.files);
+    } finally {
+      setSubiendo(false);
+      if (inputRef.current) inputRef.current.value = '';
+    }
   };
   return (
     <div>
@@ -217,13 +246,13 @@ function FaseFotos({ label, fotos, onAdd, onRemove }: {
           <div key={u} className="relative w-16 h-16 rounded-lg overflow-hidden border border-border">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={u} alt="foto" className="w-full h-full object-cover" />
-            <button onClick={() => onRemove(u)} className="absolute top-0.5 right-0.5 bg-black/60 text-white w-4 h-4 rounded-full text-[10px] leading-none">×</button>
+            <button onClick={() => onRemove(u)} aria-label="Eliminar foto" className="absolute top-0.5 right-0.5 bg-black/60 text-white w-4 h-4 rounded-full text-[10px] leading-none">×</button>
           </div>
         ))}
         <button
           onClick={() => inputRef.current?.click()}
           disabled={subiendo}
-          className="w-16 h-16 rounded-lg border-2 border-dashed border-border flex items-center justify-center text-ink/40 hover:border-accent/50 transition disabled:opacity-50">
+          className="w-16 h-16 rounded-lg border-2 border-dashed border-border flex items-center justify-center text-ink/50 hover:border-accent/50 transition disabled:opacity-50">
           {subiendo ? '…' : '+'}
         </button>
       </div>

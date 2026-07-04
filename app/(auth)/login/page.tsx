@@ -36,28 +36,33 @@ export default function LoginPage() {
     e.preventDefault();
     setError('');
     setLoading(true);
-    const res = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(form),
-    });
-    const data = await res.json();
-    setLoading(false);
-    if (!res.ok) { setError(data.error); return; }
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(data.error || 'No pudimos iniciar sesión. Intenta de nuevo.'); return; }
 
-    // Actualiza la sesión global de inmediato (navbar, polling) sin esperar al
-    // re-fetch por cambio de ruta.
-    setUser(data.user);
-    refetch();
+      // Actualiza la sesión global de inmediato (navbar, polling) sin esperar al
+      // re-fetch por cambio de ruta.
+      setUser(data.user);
+      refetch();
 
-    const userRol = data.user.rol;
-    // Si venía de reservar (reserva en curso guardada), retoma el pago.
-    const destino = tomarDestino();
-    if (destino && userRol === 'usuario') { router.push(destino); return; }
+      const userRol = data.user.rol;
+      // Si venía de reservar (reserva en curso guardada), retoma el pago.
+      const destino = tomarDestino();
+      if (destino && userRol === 'usuario') { router.push(destino); return; }
 
-    if (userRol === 'admin') router.push('/dashboard/admin');
-    else if (userRol === 'propietario') router.push('/dashboard/propietario');
-    else router.push('/dashboard/usuario');
+      if (userRol === 'admin') router.push('/dashboard/admin');
+      else if (userRol === 'propietario') router.push('/dashboard/propietario');
+      else router.push('/dashboard/usuario');
+    } catch {
+      setError('Sin conexión — revisa tu internet e intenta de nuevo.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -165,7 +170,7 @@ export default function LoginPage() {
 
         {/* Acceso oculto admin */}
         <p className="text-center text-[11px] text-ink/20 mt-2">
-          <Link href="/acceso-drivepass" className="hover:text-ink/40 transition">
+          <Link href="/acceso-drivepass" className="hover:text-ink/50 transition">
             Equipo DrivePass
           </Link>
         </p>

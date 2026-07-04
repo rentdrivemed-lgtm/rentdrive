@@ -29,6 +29,7 @@ export default function ChatPage() {
   const [mensajes, setMensajes] = useState<Mensaje[]>([]);
   const [texto, setTexto] = useState('');
   const [enviando, setEnviando] = useState(false);
+  const [errorEnvio, setErrorEnvio] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
   const lastIdRef = useRef(0);
   const esRef = useRef<EventSource | null>(null);
@@ -42,7 +43,7 @@ export default function ChatPage() {
         if (!d.user) { router.push('/login'); return; }
         setUser(d.user);
         userRef.current = d.user;
-      });
+      }).catch(() => router.push('/login'));
   }, [router]);
 
   useEffect(() => {
@@ -132,15 +133,16 @@ export default function ChatPage() {
     e.preventDefault();
     if (!texto.trim() || enviando) return;
     setEnviando(true);
+    setErrorEnvio('');
 
-    const res = await fetch('/api/chat/mensajes', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conversacion_id: Number(id), contenido: texto }),
-    });
-
-    if (res.ok) {
-      const data = await res.json();
+    try {
+      const res = await fetch('/api/chat/mensajes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversacion_id: Number(id), contenido: texto }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.mensaje) { setErrorEnvio('No se pudo enviar el mensaje. Intenta de nuevo.'); return; }
       setMensajes(prev => {
         const ids = new Set(prev.map(m => m.id));
         return ids.has(data.mensaje.id) ? prev : [...prev, data.mensaje];
@@ -148,8 +150,11 @@ export default function ChatPage() {
       lastIdRef.current = data.mensaje.id;
       marcarLeido(data.mensaje.id);
       setTexto('');
+    } catch {
+      setErrorEnvio('Sin conexión — el mensaje no se envió.');
+    } finally {
+      setEnviando(false);
     }
-    setEnviando(false);
   };
 
   const otroNombre = conv
@@ -165,7 +170,7 @@ export default function ChatPage() {
     <div className="flex flex-col h-[calc(100dvh-128px)] sm:h-[calc(100vh-112px)] max-w-2xl mx-auto">
       {/* Header */}
       <div className="bg-surface-2 border-b border-border px-4 py-3 flex items-center gap-3 shadow-sm">
-        <Link href="/chat" className="p-1.5 rounded-lg text-ink/50 hover:text-ink hover:bg-brand-muted transition">
+        <Link href="/chat" aria-label="Volver a mensajes" className="p-1.5 rounded-lg text-ink/50 hover:text-ink hover:bg-brand-muted transition">
           <IconArrowL size={18} />
         </Link>
         <div className="w-9 h-9 rounded-full bg-brand-muted flex items-center justify-center text-ink font-bold text-sm flex-shrink-0">
@@ -180,7 +185,7 @@ export default function ChatPage() {
       {/* Mensajes */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-2 bg-surface">
         {mensajes.length === 0 && (
-          <p className="text-center text-ink/30 text-sm mt-10">
+          <p className="text-center text-ink/40 text-sm mt-10">
             Sé el primero en escribir
           </p>
         )}
@@ -190,7 +195,7 @@ export default function ChatPage() {
             <div key={m.id} className={`flex ${esPropio ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-[75%] ${esPropio ? 'items-end' : 'items-start'} flex flex-col`}>
                 {!esPropio && (
-                  <span className="text-xs text-ink/40 mb-0.5 ml-1">{m.remitente_nombre}</span>
+                  <span className="text-xs text-ink/50 mb-0.5 ml-1">{m.remitente_nombre}</span>
                 )}
                 <div className={`px-4 py-2.5 rounded-2xl text-sm shadow-sm ${
                   esPropio
@@ -199,7 +204,7 @@ export default function ChatPage() {
                 }`}>
                   {m.contenido}
                 </div>
-                <span className="text-[10px] text-ink/30 mt-0.5 mx-1">
+                <span className="text-[10px] text-ink/40 mt-0.5 mx-1">
                   {formatHora(m.created_at)}
                 </span>
               </div>
@@ -210,6 +215,9 @@ export default function ChatPage() {
       </div>
 
       {/* Input */}
+      {errorEnvio && (
+        <p className="text-xs text-danger text-center bg-danger/10 border-t border-danger/25 py-1.5">{errorEnvio}</p>
+      )}
       <form onSubmit={enviar} className="bg-surface-2 border-t border-border px-4 py-3 flex gap-2 items-center">
         <input
           type="text"
@@ -222,6 +230,7 @@ export default function ChatPage() {
         />
         <button
           type="submit"
+          aria-label="Enviar mensaje"
           disabled={!texto.trim() || enviando}
           className="bg-accent hover:bg-accent-hover text-white rounded-full w-10 h-10 flex items-center justify-center transition disabled:opacity-50 flex-shrink-0"
         >

@@ -12,8 +12,8 @@ export async function GET() {
   const usuarios = await db.prepare(`
     SELECT id, nombre, correo, rol, estado_cuenta, created_at,
            tipo_documento, documento_identidad, fecha_nacimiento,
-           celular, direccion, ciudad, numero_licencia, contacto_emergencia,
-           cedula_url
+           celular, celular_indicativo, direccion, ciudad, numero_licencia, contacto_emergencia,
+           cedula_url, cedula_url_dorso
     FROM usuarios
     ORDER BY created_at DESC
   `).all();

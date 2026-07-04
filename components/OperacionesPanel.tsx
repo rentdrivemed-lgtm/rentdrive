@@ -53,22 +53,31 @@ export default function OperacionesPanel() {
   const [nuevoM, setNuevoM] = useState({ nombre: '', celular: '' });
   const [cfgMsg, setCfgMsg] = useState('');
   const [notasLocal, setNotasLocal] = useState<Record<number, string>>({});
+  const [errorCarga, setErrorCarga] = useState('');
 
   const cargar = async () => {
-    const [ro, rm] = await Promise.all([
-      fetch('/api/operaciones', { cache: 'no-store' }),
-      fetch('/api/mensajeros', { cache: 'no-store' }),
-    ]);
-    const dataO = await ro.json().catch(() => ({}));
-    const dataM = await rm.json().catch(() => ({}));
-    const operaciones: Operacion[] = dataO.operaciones || [];
-    setOps(operaciones);
-    setAdminWa(dataO.admin_whatsapp || '');
-    setWaHabilitado(!!dataO.whatsapp_habilitado);
-    setIaDisponible(!!dataO.ia_disponible);
-    setMensajeros(dataM.mensajeros || []);
-    setNotasLocal(Object.fromEntries(operaciones.map(o => [o.id, o.notas || ''])));
-    setCargando(false);
+    setCargando(true);
+    setErrorCarga('');
+    try {
+      const [ro, rm] = await Promise.all([
+        fetch('/api/operaciones', { cache: 'no-store' }),
+        fetch('/api/mensajeros', { cache: 'no-store' }),
+      ]);
+      const dataO = await ro.json().catch(() => ({}));
+      const dataM = await rm.json().catch(() => ({}));
+      if (!ro.ok || !rm.ok) { setErrorCarga('No pudimos cargar Operaciones. Intenta de nuevo.'); return; }
+      const operaciones: Operacion[] = dataO.operaciones || [];
+      setOps(operaciones);
+      setAdminWa(dataO.admin_whatsapp || '');
+      setWaHabilitado(!!dataO.whatsapp_habilitado);
+      setIaDisponible(!!dataO.ia_disponible);
+      setMensajeros(dataM.mensajeros || []);
+      setNotasLocal(Object.fromEntries(operaciones.map(o => [o.id, o.notas || ''])));
+    } catch {
+      setErrorCarga('Sin conexión — revisa tu internet e intenta de nuevo.');
+    } finally {
+      setCargando(false);
+    }
   };
 
   useEffect(() => { cargar(); }, []);
@@ -78,18 +87,27 @@ export default function OperacionesPanel() {
   const reemplazar = (op: Operacion) => setOps(list => list.map(o => o.id === op.id ? op : o));
 
   const accion = async (opId: number, body: Record<string, unknown>) => {
-    const res = await fetch(`/api/operaciones/${opId}`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (res.ok && data.operacion) reemplazar(data.operacion as Operacion);
+    try {
+      const res = await fetch(`/api/operaciones/${opId}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.operacion) reemplazar(data.operacion as Operacion);
+    } catch {
+      // Silencioso a propósito: son acciones puntuales (marcar tarea, asignar mensajero, etc.);
+      // si falla la red, el estado local no cambia y el usuario puede reintentar el clic.
+    }
   };
 
   const subirArchivo = async (file: File): Promise<string | null> => {
-    const fd = new FormData(); fd.append('file', file);
-    const res = await fetch('/api/upload', { method: 'POST', body: fd });
-    const d = await res.json().catch(() => ({}));
-    return res.ok ? d.url : null;
+    try {
+      const fd = new FormData(); fd.append('file', file);
+      const res = await fetch('/api/upload', { method: 'POST', body: fd });
+      const d = await res.json().catch(() => ({}));
+      return res.ok ? d.url : null;
+    } catch {
+      return null;
+    }
   };
   const subirFotos = async (op: Operacion, fase: 'salida' | 'entrada', files: FileList) => {
     const actuales = parseArr(fase === 'salida' ? op.fotos_salida : op.fotos_entrada);
@@ -104,38 +122,59 @@ export default function OperacionesPanel() {
   const inspeccionar = async (op: Operacion) => {
     setInspeccionando(op.id);
     setErrInsp(e => ({ ...e, [op.id]: '' }));
-    const res = await fetch(`/api/operaciones/${op.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accion: 'inspeccion' }) });
-    const d = await res.json().catch(() => ({}));
-    if (res.ok && d.operacion) reemplazar(d.operacion as Operacion);
-    else setErrInsp(e => ({ ...e, [op.id]: d.error || 'No se pudo inspeccionar.' }));
-    setInspeccionando(null);
+    try {
+      const res = await fetch(`/api/operaciones/${op.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accion: 'inspeccion' }) });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok && d.operacion) reemplazar(d.operacion as Operacion);
+      else setErrInsp(e => ({ ...e, [op.id]: d.error || 'No se pudo inspeccionar.' }));
+    } catch {
+      setErrInsp(e => ({ ...e, [op.id]: 'Sin conexión — intenta de nuevo.' }));
+    } finally {
+      setInspeccionando(null);
+    }
   };
 
   const guardarConfig = async () => {
     setCfgMsg('');
-    const res = await fetch('/api/config', {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ admin_whatsapp: adminWa }),
-    });
-    setCfgMsg(res.ok ? '✓ Guardado' : 'Error al guardar');
+    try {
+      const res = await fetch('/api/config', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ admin_whatsapp: adminWa }),
+      });
+      setCfgMsg(res.ok ? '✓ Guardado' : 'Error al guardar');
+    } catch {
+      setCfgMsg('Sin conexión');
+    }
   };
 
   const addMensajero = async () => {
     if (!nuevoM.nombre.trim()) return;
-    const res = await fetch('/api/mensajeros', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(nuevoM),
-    });
-    if (res.ok) { setNuevoM({ nombre: '', celular: '' }); cargar(); }
+    try {
+      const res = await fetch('/api/mensajeros', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(nuevoM),
+      });
+      if (res.ok) { setNuevoM({ nombre: '', celular: '' }); cargar(); }
+    } catch { /* el usuario puede reintentar el clic */ }
   };
   const toggleMensajero = async (m: Mensajero) => {
-    await fetch(`/api/mensajeros/${m.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ activo: !m.activo }) });
-    cargar();
+    try {
+      await fetch(`/api/mensajeros/${m.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ activo: !m.activo }) });
+      cargar();
+    } catch { /* el usuario puede reintentar el clic */ }
   };
   const delMensajero = async (m: Mensajero) => {
-    await fetch(`/api/mensajeros/${m.id}`, { method: 'DELETE' });
-    cargar();
+    try {
+      await fetch(`/api/mensajeros/${m.id}`, { method: 'DELETE' });
+      cargar();
+    } catch { /* el usuario puede reintentar el clic */ }
   };
 
-  if (cargando) return <div className="text-center py-16 text-ink/40">Cargando operaciones…</div>;
+  if (cargando) return <div className="text-center py-16 text-ink/50">Cargando operaciones…</div>;
+  if (errorCarga) return (
+    <div className="text-center py-16 bg-surface-2 rounded-2xl border border-border">
+      <p className="text-ink/60 mb-4">{errorCarga}</p>
+      <button onClick={cargar} className="bg-accent text-white font-semibold px-5 py-2.5 rounded-xl text-sm">Reintentar</button>
+    </div>
+  );
 
   return (
     <div className="space-y-6">
@@ -148,7 +187,7 @@ export default function OperacionesPanel() {
               value={adminWa}
               onChange={e => setAdminWa(e.target.value)}
               placeholder="Ej. 300 123 4567"
-              className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink placeholder:text-ink/30" />
+              className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink placeholder:text-ink/40" />
           </div>
           <button onClick={guardarConfig} className="bg-accent hover:bg-accent-hover text-white px-4 py-2 rounded-xl font-semibold text-sm transition">
             Guardar
@@ -170,18 +209,18 @@ export default function OperacionesPanel() {
             value={nuevoM.nombre}
             onChange={e => setNuevoM(s => ({ ...s, nombre: e.target.value }))}
             placeholder="Nombre del mensajero"
-            className="flex-1 min-w-[160px] bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink placeholder:text-ink/30" />
+            className="flex-1 min-w-[160px] bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink placeholder:text-ink/40" />
           <input
             value={nuevoM.celular}
             onChange={e => setNuevoM(s => ({ ...s, celular: e.target.value }))}
             placeholder="Celular (WhatsApp)"
-            className="flex-1 min-w-[160px] bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink placeholder:text-ink/30" />
+            className="flex-1 min-w-[160px] bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink placeholder:text-ink/40" />
           <button onClick={addMensajero} className="bg-accent/15 text-accent hover:bg-accent/20 px-4 py-2 rounded-xl font-semibold text-sm transition">
             + Agregar
           </button>
         </div>
         {mensajeros.length === 0 ? (
-          <p className="text-xs text-ink/40">Aún no has registrado mensajeros.</p>
+          <p className="text-xs text-ink/50">Aún no has registrado mensajeros.</p>
         ) : (
           <div className="space-y-1.5">
             {mensajeros.map(m => (
@@ -218,7 +257,7 @@ export default function OperacionesPanel() {
       <div>
         <h3 className="font-bold text-ink mb-3">Servicios confirmados ({ops.length})</h3>
         {ops.length === 0 ? (
-          <div className="text-center py-12 bg-surface-2 rounded-2xl border border-border text-ink/40">
+          <div className="text-center py-12 bg-surface-2 rounded-2xl border border-border text-ink/50">
             <p className="text-3xl mb-2">📋</p>
             <p>Aún no hay servicios. Cuando confirmes una reserva, aparecerá aquí con su checklist.</p>
           </div>
@@ -234,7 +273,7 @@ export default function OperacionesPanel() {
                     <div className="min-w-0">
                       <p className="font-bold text-ink truncate">
                         {d ? `${d.marca} ${d.modelo} ${d.anio}` : `Reserva #${op.reserva_id}`}
-                        {d?.placa ? <span className="text-ink/40 font-normal"> · {d.placa}</span> : null}
+                        {d?.placa ? <span className="text-ink/50 font-normal"> · {d.placa}</span> : null}
                       </p>
                       {d && <p className="text-xs text-ink/50">{d.usuario_nombre}{d.usuario_celular ? ` · ${d.usuario_celular}` : ''}</p>}
                     </div>
@@ -246,10 +285,10 @@ export default function OperacionesPanel() {
                   {/* Datos del servicio */}
                   {d && (
                     <div className="text-xs text-ink/60 space-y-0.5 bg-surface rounded-xl p-2.5 border border-border/60">
-                      <p><span className="text-ink/40">Fechas:</span> {d.fecha_inicio} → {d.fecha_fin}</p>
-                      <p><span className="text-ink/40">Entrega al cliente:</span> {resumenLugar(d.recogida)}</p>
-                      <p><span className="text-ink/40">Devolución:</span> {resumenLugar(d.entrega)}</p>
-                      <p><span className="text-ink/40">Total:</span> {pesos(d.total)}{d.recargo ? ` (recargo ${pesos(d.recargo)})` : ''}</p>
+                      <p><span className="text-ink/50">Fechas:</span> {d.fecha_inicio} → {d.fecha_fin}</p>
+                      <p><span className="text-ink/50">Entrega al cliente:</span> {resumenLugar(d.recogida)}</p>
+                      <p><span className="text-ink/50">Devolución:</span> {resumenLugar(d.entrega)}</p>
+                      <p><span className="text-ink/50">Total:</span> {pesos(d.total)}{d.recargo ? ` (recargo ${pesos(d.recargo)})` : ''}</p>
                     </div>
                   )}
 
@@ -284,8 +323,8 @@ export default function OperacionesPanel() {
                               {t.estado === 'hecho' && <IconCheck size={11} />}
                             </span>
                             <span className="min-w-0">
-                              <span className={`${t.estado === 'hecho' ? 'line-through text-ink/40' : 'text-ink'}`}>{TAREA_ICON[t.tipo] || '•'} {t.titulo}</span>
-                              {t.detalle && <span className="block text-[11px] text-ink/40">{t.detalle}</span>}
+                              <span className={`${t.estado === 'hecho' ? 'line-through text-ink/50' : 'text-ink'}`}>{TAREA_ICON[t.tipo] || '•'} {t.titulo}</span>
+                              {t.detalle && <span className="block text-[11px] text-ink/50">{t.detalle}</span>}
                             </span>
                           </button>
                         </li>
@@ -326,7 +365,7 @@ export default function OperacionesPanel() {
                       onBlur={() => accion(op.id, { accion: 'notas', notas: notasLocal[op.id] ?? '' })}
                       placeholder="Notas internas del servicio…"
                       rows={2}
-                      className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-xs text-ink placeholder:text-ink/30 resize-none" />
+                      className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-xs text-ink placeholder:text-ink/40 resize-none" />
                   </div>
 
                   {/* Estados de envío + reenvío */}
@@ -342,7 +381,7 @@ export default function OperacionesPanel() {
                     </button>
                   </div>
                   {(op.wa_mensajero || op.wa_admin) && (
-                    <div className="text-[10px] text-ink/40 space-y-0.5">
+                    <div className="text-[10px] text-ink/50 space-y-0.5">
                       {op.wa_mensajero && <p>Mensajero: {op.wa_mensajero}</p>}
                       {op.wa_admin && <p>Admin: {op.wa_admin}</p>}
                     </div>
@@ -366,9 +405,12 @@ function AdminFaseFotos({ label, fotos, onAdd, onRemove }: {
   const handle = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files?.length) return;
     setSubiendo(true);
-    await onAdd(e.target.files);
-    setSubiendo(false);
-    if (inputRef.current) inputRef.current.value = '';
+    try {
+      await onAdd(e.target.files);
+    } finally {
+      setSubiendo(false);
+      if (inputRef.current) inputRef.current.value = '';
+    }
   };
   return (
     <div>
@@ -378,11 +420,11 @@ function AdminFaseFotos({ label, fotos, onAdd, onRemove }: {
           <div key={u} className="relative w-14 h-14 rounded-lg overflow-hidden border border-border">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={u} alt="foto" className="w-full h-full object-cover" />
-            <button onClick={() => onRemove(u)} className="absolute top-0.5 right-0.5 bg-black/60 text-white w-4 h-4 rounded-full text-[10px] leading-none">×</button>
+            <button onClick={() => onRemove(u)} aria-label="Eliminar foto" className="absolute top-0.5 right-0.5 bg-black/60 text-white w-4 h-4 rounded-full text-[10px] leading-none">×</button>
           </div>
         ))}
         <button onClick={() => inputRef.current?.click()} disabled={subiendo}
-          className="w-14 h-14 rounded-lg border-2 border-dashed border-border flex items-center justify-center text-ink/40 hover:border-accent/50 transition disabled:opacity-50">
+          className="w-14 h-14 rounded-lg border-2 border-dashed border-border flex items-center justify-center text-ink/50 hover:border-accent/50 transition disabled:opacity-50">
           {subiendo ? '…' : '+'}
         </button>
       </div>

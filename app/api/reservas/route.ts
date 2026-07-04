@@ -84,12 +84,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Solo usuarios pueden reservar' }, { status: 403 });
   }
 
-  const { vehiculo_id, fecha_inicio, fecha_fin, documento_id_url, licencia_url, firma_contrato, recogida, entrega } = await req.json();
+  const {
+    vehiculo_id, fecha_inicio, fecha_fin,
+    documento_id_url, documento_id_url_dorso, documento_es_pasaporte,
+    licencia_url, licencia_url_dorso,
+    firma_contrato, recogida, entrega,
+  } = await req.json();
   if (!vehiculo_id || !fecha_inicio || !fecha_fin) {
     return NextResponse.json({ error: 'Faltan datos' }, { status: 400 });
   }
   if (!documento_id_url) return NextResponse.json({ error: 'Debes subir tu documento de identidad.' }, { status: 400 });
-  if (!licencia_url) return NextResponse.json({ error: 'Debes subir tu licencia de conducción.' }, { status: 400 });
+  if (!documento_es_pasaporte && !documento_id_url_dorso) return NextResponse.json({ error: 'Falta el dorso de tu documento de identidad.' }, { status: 400 });
+  if (!licencia_url || !licencia_url_dorso) return NextResponse.json({ error: 'Debes subir frente y dorso de tu licencia de conducción.' }, { status: 400 });
   if (!firma_contrato) return NextResponse.json({ error: 'Debes aceptar el contrato.' }, { status: 400 });
 
   const recogidaL = recogida as Lugar | undefined;
@@ -130,11 +136,18 @@ export async function POST(req: NextRequest) {
   const total = dias * Number(vehiculo.precio_dia) + recargo;
 
   const result = db.prepare(`
-    INSERT INTO reservas (usuario_id, vehiculo_id, fecha_inicio, fecha_fin, total, pago_estado, estado, documento_id_url, licencia_url, firma_contrato, recogida, entrega, recargo)
-    VALUES (?, ?, ?, ?, ?, 'pendiente', 'pendiente', ?, ?, ?, ?, ?, ?)
+    INSERT INTO reservas (
+      usuario_id, vehiculo_id, fecha_inicio, fecha_fin, total, pago_estado, estado,
+      documento_id_url, documento_id_url_dorso, documento_es_pasaporte,
+      licencia_url, licencia_url_dorso,
+      firma_contrato, recogida, entrega, recargo
+    )
+    VALUES (?, ?, ?, ?, ?, 'pendiente', 'pendiente', ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     user.id, Number(vehiculo_id), fecha_inicio, fecha_fin, total,
-    documento_id_url || '', licencia_url || '', firma_contrato || '{}',
+    documento_id_url || '', documento_id_url_dorso || '', documento_es_pasaporte ? 1 : 0,
+    licencia_url || '', licencia_url_dorso || '',
+    firma_contrato || '{}',
     JSON.stringify(recogidaL), JSON.stringify(entregaL), recargo,
   );
 

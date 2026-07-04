@@ -2,18 +2,45 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { signToken, UserPayload } from '@/lib/auth';
 import { enviarCorreo } from '@/lib/email';
+import { validarCelular, validarDireccion, validarDocumentoIdentidad, PAIS_TEL_DEFAULT } from '@/lib/validacion';
 import bcrypt from 'bcryptjs';
+
+function calcularEdad(fechaNac: string): number {
+  if (!fechaNac) return 0;
+  const hoy = new Date();
+  const nac = new Date(fechaNac);
+  if (Number.isNaN(nac.getTime())) return 0;
+  let edad = hoy.getFullYear() - nac.getFullYear();
+  const m = hoy.getMonth() - nac.getMonth();
+  if (m < 0 || (m === 0 && hoy.getDate() < nac.getDate())) edad--;
+  return edad;
+}
 
 export async function POST(req: NextRequest) {
   const {
     nombre, correo, password, rol,
     tipo_documento, documento_identidad, fecha_nacimiento,
-    celular, direccion, ciudad, numero_licencia,
+    celular, celular_indicativo, direccion, ciudad, numero_licencia,
     emergencia_nombre, emergencia_tel,
   } = await req.json();
 
   if (!nombre || !correo || !password) {
     return NextResponse.json({ error: 'Nombre, correo y contraseña son requeridos' }, { status: 400 });
+  }
+
+  // Validación autoritativa: el frontend valida para dar feedback inmediato,
+  // pero esto es lo que realmente impide crear cuentas con datos ficticios.
+  const errDoc = validarDocumentoIdentidad(tipo_documento || 'cedula', documento_identidad || '');
+  if (errDoc) return NextResponse.json({ error: errDoc }, { status: 400 });
+
+  const errCel = validarCelular(celular_indicativo || PAIS_TEL_DEFAULT, celular || '');
+  if (errCel) return NextResponse.json({ error: errCel }, { status: 400 });
+
+  const errDir = validarDireccion(direccion || '');
+  if (errDir) return NextResponse.json({ error: errDir }, { status: 400 });
+
+  if (!fecha_nacimiento || calcularEdad(fecha_nacimiento) < 18) {
+    return NextResponse.json({ error: 'Debes ser mayor de 18 años para registrarte.' }, { status: 400 });
   }
 
   const rolFinal = ['propietario', 'usuario'].includes(rol) ? rol : 'usuario';
@@ -34,14 +61,15 @@ export async function POST(req: NextRequest) {
     INSERT INTO usuarios
       (nombre, correo, password, rol,
        tipo_documento, documento_identidad, fecha_nacimiento,
-       celular, direccion, ciudad, numero_licencia, contacto_emergencia)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       celular, celular_indicativo, direccion, ciudad, numero_licencia, contacto_emergencia)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     nombre, correo, hash, rolFinal,
     tipo_documento || 'cedula',
     documento_identidad || '',
     fecha_nacimiento || '',
     celular || '',
+    celular_indicativo || PAIS_TEL_DEFAULT,
     direccion || '',
     ciudad || 'Medellín',
     numero_licencia || '',

@@ -71,11 +71,11 @@ export default function LeadsPropietariosPanel() {
       )}
 
       {cargando ? (
-        <div className="text-center py-14 text-ink/40 text-sm">Cargando…</div>
+        <div className="text-center py-14 text-ink/50 text-sm">Cargando…</div>
       ) : leads.length === 0 ? (
         <div className="text-center py-14 bg-surface-2 rounded-2xl border border-border">
           <IconUser size={40} className="text-ink/20 mx-auto mb-3" />
-          <p className="text-ink/40">Todavía no hay leads de la calculadora.</p>
+          <p className="text-ink/50">Todavía no hay leads de la calculadora.</p>
         </div>
       ) : (
         <div className="bg-surface-2 rounded-2xl border border-border overflow-x-auto">
@@ -96,7 +96,7 @@ export default function LeadsPropietariosPanel() {
                   <td className="px-4 py-3 text-ink/70">{l.correo}</td>
                   <td className="px-4 py-3 text-ink/70">{l.celular}</td>
                   <td className="px-4 py-3 text-ink/70">{TIPO_LABELS[l.tipo_vehiculo] || l.tipo_vehiculo || '—'}</td>
-                  <td className="px-4 py-3 text-ink/40 text-xs">{l.created_at}</td>
+                  <td className="px-4 py-3 text-ink/50 text-xs">{l.created_at}</td>
                 </tr>
               ))}
             </tbody>

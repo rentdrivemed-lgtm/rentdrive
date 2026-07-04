@@ -126,7 +126,7 @@ export default function TerminosPage() {
         </div>
         <div>
           <h1 className="text-2xl font-bold text-ink">{c.title}</h1>
-          <p className="text-ink/40 text-xs">{c.updated}</p>
+          <p className="text-ink/50 text-xs">{c.updated}</p>
         </div>
       </div>
 
@@ -140,7 +140,7 @@ export default function TerminosPage() {
               onClick={() => setActive(active === i ? null : i)}
             >
               <span className="font-semibold text-ink text-sm">{s.title}</span>
-              <svg className={`w-4 h-4 text-ink/40 transition-transform flex-shrink-0 ${active === i ? 'rotate-180' : ''}`}
+              <svg className={`w-4 h-4 text-ink/50 transition-transform flex-shrink-0 ${active === i ? 'rotate-180' : ''}`}
                 fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7"/>
               </svg>

@@ -14,16 +14,16 @@ type Usuario = {
   id: number; nombre: string; correo: string;
   rol: string; estado_cuenta: string; created_at: string;
   tipo_documento?: string; documento_identidad?: string;
-  fecha_nacimiento?: string; celular?: string;
+  fecha_nacimiento?: string; celular?: string; celular_indicativo?: string;
   direccion?: string; ciudad?: string;
   numero_licencia?: string; contacto_emergencia?: string;
-  cedula_url?: string;
+  cedula_url?: string; cedula_url_dorso?: string;
 };
 type DocItem = { url: string; vence?: string };
 type Documentos = {
   soat?: DocItem;
   tecno?: DocItem;
-  tarjeta?: { url: string };
+  tarjeta?: { url: string; url_dorso?: string };
   todo_riesgo?: { url: string; aseguradora?: string; poliza?: string; vence?: string };
 };
 
@@ -61,14 +61,6 @@ const DOC_LABELS: Record<string, string> = {
   tarjeta: 'Tarjeta de propiedad', todo_riesgo: 'Seguro todo riesgo',
 };
 
-function computeDocEstado(docs: Record<string, { url?: string } | undefined>, revs: Record<string, DocRevision>): string {
-  const uploaded = DOC_KEYS.filter(k => (docs[k] as { url?: string } | undefined)?.url);
-  if (uploaded.length === 0) return 'sin_documentos';
-  if (uploaded.some(k => revs[k]?.estado === 'denegado')) return 'denegado';
-  if (uploaded.every(k => revs[k]?.estado === 'aprobado')) return 'aprobado';
-  return 'en_revision';
-}
-
 function calcularEdad(fechaNac: string) {
   if (!fechaNac) return null;
   const hoy = new Date();
@@ -96,7 +88,7 @@ const VEREDICTO_LABEL: Record<string, string> = {
 };
 const CONFIANZA_LABEL: Record<string, string> = { alta: 'Confianza alta', media: 'Confianza media', baja: 'Confianza baja' };
 const CHEQUEO_ICON: Record<string, string> = { pasa: '✓', falla: '✕', no_aplica: '–' };
-const CHEQUEO_COLOR: Record<string, string> = { pasa: 'text-success', falla: 'text-danger', no_aplica: 'text-ink/40' };
+const CHEQUEO_COLOR: Record<string, string> = { pasa: 'text-success', falla: 'text-danger', no_aplica: 'text-ink/50' };
 
 function ResultadoIA({ res, auto }: { res: VerificacionResultado; auto?: string[] }) {
   return (
@@ -104,7 +96,7 @@ function ResultadoIA({ res, auto }: { res: VerificacionResultado; auto?: string[
       {/* Resumen global */}
       <div className="glass rounded-2xl p-4 border border-border/60">
         <div className="flex items-center justify-between gap-3 mb-1.5">
-          <span className="text-xs font-semibold uppercase tracking-wide text-ink/40">Veredicto de la IA</span>
+          <span className="text-xs font-semibold uppercase tracking-wide text-ink/50">Veredicto de la IA</span>
           <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${VEREDICTO_BADGE[res.veredicto_global] || VEREDICTO_BADGE.revision}`}>
             {VEREDICTO_LABEL[res.veredicto_global] || res.veredicto_global}
           </span>
@@ -134,10 +126,10 @@ function ResultadoIA({ res, auto }: { res: VerificacionResultado; auto?: string[
             <div className="flex items-center justify-between gap-2 mb-2">
               <div>
                 <p className="text-sm font-semibold text-ink">{doc.etiqueta}</p>
-                {doc.tipo_detectado && <p className="text-[11px] text-ink/40">Detectado: {doc.tipo_detectado}{!doc.es_legible && ' · ilegible'}</p>}
+                {doc.tipo_detectado && <p className="text-[11px] text-ink/50">Detectado: {doc.tipo_detectado}{!doc.es_legible && ' · ilegible'}</p>}
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
-                <span className="text-[10px] text-ink/40">{CONFIANZA_LABEL[doc.confianza] || doc.confianza}</span>
+                <span className="text-[10px] text-ink/50">{CONFIANZA_LABEL[doc.confianza] || doc.confianza}</span>
                 <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${VEREDICTO_BADGE[doc.veredicto] || VEREDICTO_BADGE.revision}`}>
                   {VEREDICTO_LABEL[doc.veredicto] || doc.veredicto}
                 </span>
@@ -147,7 +139,7 @@ function ResultadoIA({ res, auto }: { res: VerificacionResultado; auto?: string[
             <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 mb-2.5">
               {filasDatos.filter(([, val]) => val).map(([et, val]) => (
                 <div key={et} className="text-[11px] flex gap-1.5 min-w-0">
-                  <span className="text-ink/40 shrink-0">{et}:</span>
+                  <span className="text-ink/50 shrink-0">{et}:</span>
                   <span className="text-ink/80 truncate">{val}</span>
                 </div>
               ))}
@@ -157,7 +149,7 @@ function ResultadoIA({ res, auto }: { res: VerificacionResultado; auto?: string[
               <ul className="space-y-1 mb-2">
                 {doc.verificaciones.map((c, j) => (
                   <li key={j} className="text-xs flex items-start gap-1.5">
-                    <span className={`${CHEQUEO_COLOR[c.resultado] || 'text-ink/40'} font-bold leading-5`}>{CHEQUEO_ICON[c.resultado] || '·'}</span>
+                    <span className={`${CHEQUEO_COLOR[c.resultado] || 'text-ink/50'} font-bold leading-5`}>{CHEQUEO_ICON[c.resultado] || '·'}</span>
                     <span className="text-ink/70"><span className="text-ink/90">{c.regla}.</span> {c.detalle}</span>
                   </li>
                 ))}
@@ -171,11 +163,11 @@ function ResultadoIA({ res, auto }: { res: VerificacionResultado; auto?: string[
       {/* Cruces entre documentos */}
       {res.cruces.length > 0 && (
         <div className="bg-surface rounded-2xl p-4 border border-border/60">
-          <p className="text-xs font-semibold uppercase tracking-wide text-ink/40 mb-2">Cruces entre documentos</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-ink/50 mb-2">Cruces entre documentos</p>
           <ul className="space-y-1">
             {res.cruces.map((c, j) => (
               <li key={j} className="text-xs flex items-start gap-1.5">
-                <span className={`${CHEQUEO_COLOR[c.resultado] || 'text-ink/40'} font-bold leading-5`}>{CHEQUEO_ICON[c.resultado] || '·'}</span>
+                <span className={`${CHEQUEO_COLOR[c.resultado] || 'text-ink/50'} font-bold leading-5`}>{CHEQUEO_ICON[c.resultado] || '·'}</span>
                 <span className="text-ink/70"><span className="text-ink/90">{c.regla}.</span> {c.detalle}</span>
               </li>
             ))}
@@ -192,16 +184,19 @@ export default function DashboardAdmin() {
   const [usuarios, setUsuarios]   = useState<Usuario[]>([]);
   const [vehiculos, setVehiculos] = useState<Vehiculo[]>([]);
   const [reservas, setReservas]   = useState<ReservaCalendario[]>([]);
+  const [errorListas, setErrorListas] = useState<{ usuarios?: boolean; vehiculos?: boolean; reservas?: boolean }>({});
   const [precioEdit, setPrecioEdit] = useState<Record<number, string>>({});
   const [fotoModal, setFotoModal] = useState<{ v: Vehiculo } | null>(null);
   const [docModal, setDocModal] = useState<{ v: Vehiculo } | null>(null);
   const [docNota, setDocNota] = useState('');
-  const [docGuardando, setDocGuardando] = useState(false);
   const [filtroEstado, setFiltroEstado] = useState('');
   const [filtroBusq, setFiltroBusq] = useState('');
   const [perfilModal, setPerfilModal] = useState<{ u: Usuario } | null>(null);
   const [resetPass, setResetPass] = useState<{ uid: number; nueva: string; confirmar: string; guardando: boolean; ok: string } | null>(null);
-  const [clienteDocs, setClienteDocs] = useState<{ r: ReservaCalendario & { documento_id_url?: string; licencia_url?: string } } | null>(null);
+  const [clienteDocs, setClienteDocs] = useState<{ r: ReservaCalendario & {
+    documento_id_url?: string; documento_id_url_dorso?: string; documento_es_pasaporte?: number;
+    licencia_url?: string; licencia_url_dorso?: string;
+  } } | null>(null);
   const [rechazando, setRechazando] = useState<{ id: number; nota: string } | null>(null);
   const [accionando, setAccionando] = useState<number | null>(null);
   const [docRevisiones, setDocRevisiones] = useState<Record<string, DocRevision>>({});
@@ -234,13 +229,14 @@ export default function DashboardAdmin() {
   const [mercadoChecking, setMercadoChecking] = useState(false);
   const [mercadoMsg, setMercadoMsg] = useState('');
   const [nuevoComp, setNuevoComp] = useState({ nombre: '', url: '', ajuste_pct: '-5', auto_actualizar: false });
+  const [confirmarElimComp, setConfirmarElimComp] = useState<number | null>(null);
 
   const router = useRouter();
 
   useEffect(() => {
     fetch('/api/auth/me').then(r => r.json()).then(d => {
       if (!d.user || d.user.rol !== 'admin') { router.push('/login'); return; }
-    });
+    }).catch(() => router.push('/login'));
     cargarUsuarios();
     cargarVehiculos();
     cargarReservas();
@@ -263,26 +259,36 @@ export default function DashboardAdmin() {
 
   const agregarCompetidor = async () => {
     if (!nuevoComp.nombre || !nuevoComp.url) return;
-    const res = await fetch('/api/admin/mercado', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...nuevoComp, ajuste_pct: Number(nuevoComp.ajuste_pct), auto_actualizar: nuevoComp.auto_actualizar ? 1 : 0 }),
-    });
-    if (res.ok) { setNuevoComp({ nombre: '', url: '', ajuste_pct: '-5', auto_actualizar: false }); cargarMercado(); }
+    try {
+      const res = await fetch('/api/admin/mercado', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...nuevoComp, ajuste_pct: Number(nuevoComp.ajuste_pct), auto_actualizar: nuevoComp.auto_actualizar ? 1 : 0 }),
+      });
+      if (res.ok) { setNuevoComp({ nombre: '', url: '', ajuste_pct: '-5', auto_actualizar: false }); cargarMercado(); }
+    } catch { /* el usuario puede reintentar el clic */ }
   };
 
   const eliminarCompetidor = async (id: number) => {
-    await fetch('/api/admin/mercado', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
-    cargarMercado();
+    if (confirmarElimComp !== id) { setConfirmarElimComp(id); return; }
+    setConfirmarElimComp(null);
+    try {
+      await fetch('/api/admin/mercado', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+      cargarMercado();
+    } catch { /* el usuario puede reintentar el clic */ }
   };
 
   const toggleActivoComp = async (id: number, activo: number) => {
-    await fetch('/api/admin/mercado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, activo: activo ? 0 : 1 }) });
-    cargarMercado();
+    try {
+      await fetch('/api/admin/mercado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, activo: activo ? 0 : 1 }) });
+      cargarMercado();
+    } catch { /* el usuario puede reintentar el clic */ }
   };
 
   const toggleAutoComp = async (id: number, auto: number) => {
-    await fetch('/api/admin/mercado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, auto_actualizar: auto ? 0 : 1 }) });
-    cargarMercado();
+    try {
+      await fetch('/api/admin/mercado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, auto_actualizar: auto ? 0 : 1 }) });
+      cargarMercado();
+    } catch { /* el usuario puede reintentar el clic */ }
   };
 
   const ejecutarCheck = async () => {
@@ -299,13 +305,13 @@ export default function DashboardAdmin() {
   };
 
   const cargarUsuarios = () =>
-    fetch('/api/admin/usuarios').then(r => r.json()).then(d => setUsuarios(d.usuarios || []));
+    fetch('/api/admin/usuarios').then(r => r.json()).then(d => setUsuarios(d.usuarios || [])).catch(() => setErrorListas(e => ({ ...e, usuarios: true })));
 
   const cargarVehiculos = () =>
-    fetch('/api/vehiculos').then(r => r.json()).then(d => setVehiculos(d.vehiculos || []));
+    fetch('/api/vehiculos').then(r => r.json()).then(d => setVehiculos(d.vehiculos || [])).catch(() => setErrorListas(e => ({ ...e, vehiculos: true })));
 
   const cargarReservas = () =>
-    fetch('/api/reservas').then(r => r.json()).then(d => setReservas(d.reservas || []));
+    fetch('/api/reservas').then(r => r.json()).then(d => setReservas(d.reservas || [])).catch(() => setErrorListas(e => ({ ...e, reservas: true })));
 
   const cargarPagos = () => {
     setPagosLoading(true);
@@ -367,11 +373,17 @@ export default function DashboardAdmin() {
   const toggleVitrina = async (v: Vehiculo) => {
     const nuevo = v.en_vitrina ? 0 : 1;
     setVehiculos(vs => vs.map(x => x.id === v.id ? { ...x, en_vitrina: nuevo } : x));
-    await fetch(`/api/vehiculos/${v.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ en_vitrina: nuevo }),
-    });
+    try {
+      const res = await fetch(`/api/vehiculos/${v.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ en_vitrina: nuevo }),
+      });
+      if (!res.ok) throw new Error('No se pudo actualizar');
+    } catch {
+      // Revierte el cambio optimista si el servidor no lo confirmó.
+      setVehiculos(vs => vs.map(x => x.id === v.id ? { ...x, en_vitrina: v.en_vitrina } : x));
+    }
   };
 
   const abrirDocModal = (v: Vehiculo) => {
@@ -407,21 +419,6 @@ export default function DashboardAdmin() {
     setVehiculos(vs => vs.map(v => v.id === vid ? { ...v, documentos_estado: newEstado, documentos_nota: newNota, documentos_revisiones: newRevsStr } : v));
     if (docModal?.v.id === vid) {
       setDocModal(d => d ? { v: { ...d.v, documentos_estado: newEstado, documentos_nota: newNota, documentos_revisiones: newRevsStr } } : null);
-    }
-  };
-
-  const revisarDocumentos = async (vid: number, estado: string) => {
-    setDocGuardando(true);
-    await fetch(`/api/vehiculos/${vid}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ documentos_estado: estado, documentos_nota: estado === 'denegado' ? docNota : '' }),
-    });
-    setDocGuardando(false);
-    const nota = estado === 'denegado' ? docNota : '';
-    setVehiculos(vs => vs.map(v => v.id === vid ? { ...v, documentos_estado: estado, documentos_nota: nota } : v));
-    if (docModal?.v.id === vid) {
-      setDocModal(d => d ? { v: { ...d.v, documentos_estado: estado, documentos_nota: nota } } : null);
     }
   };
 
@@ -490,25 +487,31 @@ export default function DashboardAdmin() {
 
   const aprobarReserva = async (id: number) => {
     setAccionando(id);
-    await fetch(`/api/reservas/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ estado: 'confirmada', pago_estado: 'pagado' }),
-    });
-    setReservas(rs => rs.map(r => r.id === id ? { ...r, estado: 'confirmada', pago_estado: 'pagado' } : r));
-    setAccionando(null);
+    try {
+      const res = await fetch(`/api/reservas/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ estado: 'confirmada', pago_estado: 'pagado' }),
+      });
+      if (res.ok) setReservas(rs => rs.map(r => r.id === id ? { ...r, estado: 'confirmada', pago_estado: 'pagado' } : r));
+    } finally {
+      setAccionando(null);
+    }
   };
 
   const rechazarReserva = async (id: number, motivo: string) => {
     setAccionando(id);
-    await fetch(`/api/reservas/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ estado: 'cancelada', pago_estado: 'cancelado', motivo_rechazo: motivo }),
-    });
-    setReservas(rs => rs.map(r => r.id === id ? { ...r, estado: 'cancelada', pago_estado: 'cancelado' } : r));
-    setRechazando(null);
-    setAccionando(null);
+    try {
+      const res = await fetch(`/api/reservas/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ estado: 'cancelada', pago_estado: 'cancelado', motivo_rechazo: motivo }),
+      });
+      if (res.ok) setReservas(rs => rs.map(r => r.id === id ? { ...r, estado: 'cancelada', pago_estado: 'cancelado' } : r));
+    } finally {
+      setRechazando(null);
+      setAccionando(null);
+    }
   };
 
   const cambiarEstadoReserva = async (id: number, estado: string) => {
@@ -645,6 +648,12 @@ export default function DashboardAdmin() {
       </div>
 
       {/* ── USUARIOS ── */}
+      {tab === 'usuarios' && errorListas.usuarios && (
+        <div className="bg-danger/10 border border-danger/25 rounded-2xl px-4 py-3 mb-4 flex items-center justify-between">
+          <span className="text-sm text-danger">No pudimos cargar los usuarios. Revisa tu conexión.</span>
+          <button onClick={cargarUsuarios} className="text-xs font-semibold text-danger underline">Reintentar</button>
+        </div>
+      )}
       {tab === 'usuarios' && (
         <div className="bg-surface-2 rounded-2xl shadow-sm border border-border overflow-hidden">
           <div className="overflow-x-auto">
@@ -709,10 +718,15 @@ export default function DashboardAdmin() {
       {/* ── VEHÍCULOS ── */}
       {tab === 'vehiculos' && (
         <div className="space-y-3">
-          {vehiculos.length === 0 && (
+          {errorListas.vehiculos ? (
+            <div className="text-center py-14 bg-danger/5 rounded-2xl border border-danger/25">
+              <p className="text-danger mb-4">No pudimos cargar los vehículos. Revisa tu conexión.</p>
+              <button onClick={cargarVehiculos} className="bg-accent text-white font-semibold px-5 py-2.5 rounded-xl text-sm">Reintentar</button>
+            </div>
+          ) : vehiculos.length === 0 && (
             <div className="text-center py-14 bg-surface-2 rounded-2xl border border-border">
               <IconCar size={48} className="text-ink/20 mx-auto mb-3" />
-              <p className="text-ink/40">No hay vehículos publicados aún.</p>
+              <p className="text-ink/50">No hay vehículos publicados aún.</p>
             </div>
           )}
           {vehiculos.map(v => {
@@ -743,7 +757,7 @@ export default function DashboardAdmin() {
                     </div>
                     <p className="text-sm text-ink/50 mt-0.5">Propietario: {v.propietario_nombre}</p>
                     <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                      {v.placa && <span className="text-xs text-ink/40">Placa: {v.placa}</span>}
+                      {v.placa && <span className="text-xs text-ink/50">Placa: {v.placa}</span>}
                       {v.documentos_estado === 'en_revision' && (
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-warning/15 text-warning border border-warning/25">📄 En revisión</span>
                       )}
@@ -760,7 +774,7 @@ export default function DashboardAdmin() {
                     {sinPrecioV || editandoPrecio(v.id) ? (
                       <>
                         <div className="relative">
-                          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink/40 text-xs">$</span>
+                          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink/50 text-xs">$</span>
                           <input
                             type="number" min="1" placeholder="Precio/día"
                             className="border border-border rounded-xl pl-6 pr-2 py-2 text-sm text-ink bg-surface w-32 focus:outline-none focus:ring-2 focus:ring-accent/40"
@@ -886,10 +900,15 @@ export default function DashboardAdmin() {
 
           {/* Lista de reservas */}
           <div className="space-y-3">
-            {reservasFiltradas.length === 0 ? (
+            {errorListas.reservas ? (
+              <div className="text-center py-14 bg-danger/5 rounded-2xl border border-danger/25">
+                <p className="text-danger mb-4">No pudimos cargar las reservas. Revisa tu conexión.</p>
+                <button onClick={cargarReservas} className="bg-accent text-white font-semibold px-5 py-2.5 rounded-xl text-sm">Reintentar</button>
+              </div>
+            ) : reservasFiltradas.length === 0 ? (
               <div className="text-center py-14 bg-surface-2 rounded-2xl border border-border">
                 <IconCalendar size={48} className="text-ink/20 mx-auto mb-3" />
-                <p className="text-ink/40">No hay reservas con esos filtros.</p>
+                <p className="text-ink/50">No hay reservas con esos filtros.</p>
               </div>
             ) : reservasFiltradas.map(r => (
               <div key={r.id} className={`bg-surface-2 rounded-2xl shadow-sm border p-4 ${
@@ -909,7 +928,7 @@ export default function DashboardAdmin() {
                       Cliente: <span className="font-medium text-ink">{r.usuario_nombre}</span>
                     </p>
                     {r.propietario_nombre && (
-                      <p className="text-xs text-ink/40 mt-0.5">Propietario: {r.propietario_nombre}</p>
+                      <p className="text-xs text-ink/50 mt-0.5">Propietario: {r.propietario_nombre}</p>
                     )}
                     <p className="text-sm text-ink/50 mt-1">
                       {r.fecha_inicio} → {r.fecha_fin}
@@ -1052,7 +1071,7 @@ export default function DashboardAdmin() {
                 className="w-full border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40"
               />
             </div>
-            <p className="text-xs text-ink/40 flex-shrink-0">Se incluye en la notificación al propietario.</p>
+            <p className="text-xs text-ink/50 flex-shrink-0">Se incluye en la notificación al propietario.</p>
           </div>
 
           {pagoMsg && (
@@ -1069,7 +1088,7 @@ export default function DashboardAdmin() {
             <div className="text-center py-16 bg-surface-2 rounded-2xl border border-border">
               <p className="text-4xl mb-3">✅</p>
               <p className="font-semibold text-ink">Sin pagos pendientes</p>
-              <p className="text-sm text-ink/40 mt-1">Todos los propietarios tienen sus pagos al día.</p>
+              <p className="text-sm text-ink/50 mt-1">Todos los propietarios tienen sus pagos al día.</p>
             </div>
           ) : (
             <div className="space-y-4">
@@ -1176,7 +1195,7 @@ export default function DashboardAdmin() {
             <code className="text-xs bg-surface rounded-xl px-3 py-2 border border-border block text-ink/70 break-all">
               0 6 * * * /ruta/a/rentdrive/scripts/mercado-cron.sh &gt;&gt; /tmp/mercado-cron.log 2&gt;&amp;1
             </code>
-            <p className="text-[11px] text-ink/40 mt-2">
+            <p className="text-[11px] text-ink/50 mt-2">
               Asegúrate de tener <code>CRON_SECRET</code> y <code>APP_URL</code> en <code>.env.local</code>.
             </p>
           </div>
@@ -1205,7 +1224,7 @@ export default function DashboardAdmin() {
                   value={nuevoComp.ajuste_pct}
                   onChange={e => setNuevoComp(n => ({ ...n, ajuste_pct: e.target.value }))}
                   className="w-full border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40" />
-                <p className="text-[11px] text-ink/40 mt-1">-5 = 5% más barato que el promedio. 0 = igualar el mercado.</p>
+                <p className="text-[11px] text-ink/50 mt-1">-5 = 5% más barato que el promedio. 0 = igualar el mercado.</p>
               </div>
               <div className="flex flex-col justify-center gap-2 pt-3">
                 <label className="flex items-center gap-2 cursor-pointer">
@@ -1215,7 +1234,7 @@ export default function DashboardAdmin() {
                     className="w-4 h-4 accent-accent" />
                   <span className="text-sm text-ink font-medium">Actualizar precios automáticamente</span>
                 </label>
-                <p className="text-[11px] text-ink/40">Si activo, el cron modifica los precios de tus vehículos cada día.</p>
+                <p className="text-[11px] text-ink/50">Si activo, el cron modifica los precios de tus vehículos cada día.</p>
               </div>
             </div>
             <button onClick={agregarCompetidor}
@@ -1231,7 +1250,7 @@ export default function DashboardAdmin() {
           ) : competidores.length === 0 ? (
             <div className="text-center py-12 bg-surface-2 rounded-2xl border border-border">
               <p className="text-3xl mb-2">📊</p>
-              <p className="text-ink/40 text-sm">Aún no has agregado ningún competidor.</p>
+              <p className="text-ink/50 text-sm">Aún no has agregado ningún competidor.</p>
             </div>
           ) : (
             <div className="space-y-3">
@@ -1266,7 +1285,7 @@ export default function DashboardAdmin() {
                           {c.url}
                         </a>
                         {c.ultimo_check && (
-                          <p className="text-[11px] text-ink/40 mt-0.5">
+                          <p className="text-[11px] text-ink/50 mt-0.5">
                             Último check: {c.ultimo_check.split('T')[0]} {c.ultimo_check.split('T')[1]?.slice(0, 5)}
                           </p>
                         )}
@@ -1274,19 +1293,24 @@ export default function DashboardAdmin() {
                       <div className="flex gap-2 flex-wrap">
                         <button onClick={() => toggleActivoComp(c.id, c.activo)}
                           className={`text-xs px-3 py-1.5 rounded-xl border transition font-medium ${
-                            c.activo ? 'border-success/30 text-success hover:bg-success/10' : 'border-border text-ink/40 hover:border-accent/30 hover:text-accent'
+                            c.activo ? 'border-success/30 text-success hover:bg-success/10' : 'border-border text-ink/50 hover:border-accent/30 hover:text-accent'
                           }`}>
                           {c.activo ? 'Activo' : 'Inactivo'}
                         </button>
                         <button onClick={() => toggleAutoComp(c.id, c.auto_actualizar)}
                           className={`text-xs px-3 py-1.5 rounded-xl border transition font-medium ${
-                            c.auto_actualizar ? 'border-accent/30 text-accent bg-accent/10' : 'border-border text-ink/40'
+                            c.auto_actualizar ? 'border-accent/30 text-accent bg-accent/10' : 'border-border text-ink/50'
                           }`}>
                           {c.auto_actualizar ? '⚡ Auto ON' : 'Auto OFF'}
                         </button>
                         <button onClick={() => eliminarCompetidor(c.id)}
-                          className="text-xs border border-danger/25 text-danger px-2.5 py-1.5 rounded-xl hover:bg-danger/10 transition font-medium">
-                          <IconX size={12} />
+                          onBlur={() => setConfirmarElimComp(cur => cur === c.id ? null : cur)}
+                          aria-label={confirmarElimComp === c.id ? 'Confirmar eliminación' : 'Eliminar competidor'}
+                          title={confirmarElimComp === c.id ? 'Confirmar eliminación' : 'Eliminar competidor'}
+                          className={`text-xs border px-2.5 py-1.5 rounded-xl transition font-medium flex items-center gap-1 ${
+                            confirmarElimComp === c.id ? 'border-danger bg-danger text-white' : 'border-danger/25 text-danger hover:bg-danger/10'
+                          }`}>
+                          <IconX size={12} /> {confirmarElimComp === c.id && '¿Seguro?'}
                         </button>
                       </div>
                     </div>
@@ -1302,17 +1326,17 @@ export default function DashboardAdmin() {
                               </span>
                             ))}
                           </div>
-                          {p.nota && <p className="text-[11px] text-ink/40 mt-1">{p.nota}</p>}
+                          {p.nota && <p className="text-[11px] text-ink/50 mt-1">{p.nota}</p>}
                         </div>
                       ) : (
                         <div className="border-t border-border pt-3">
                           <p className="text-xs text-warning">⚠ Sin precios en el último check</p>
-                          {p.nota && <p className="text-[11px] text-ink/40 mt-0.5">{p.nota}</p>}
+                          {p.nota && <p className="text-[11px] text-ink/50 mt-0.5">{p.nota}</p>}
                         </div>
                       )
                     ) : (
                       <div className="border-t border-border pt-3">
-                        <p className="text-xs text-ink/40">Sin verificaciones aún. Haz clic en "Verificar ahora".</p>
+                        <p className="text-xs text-ink/50">Sin verificaciones aún. Haz clic en "Verificar ahora".</p>
                       </div>
                     )}
                   </div>
@@ -1323,7 +1347,7 @@ export default function DashboardAdmin() {
 
           {/* Advertencia JS */}
           <div className="bg-surface-2 rounded-xl border border-border/60 p-4">
-            <p className="text-xs font-bold text-ink/40 uppercase tracking-wide mb-1">Importante</p>
+            <p className="text-xs font-bold text-ink/50 uppercase tracking-wide mb-1">Importante</p>
             <p className="text-xs text-ink/50">
               La IA analiza el HTML estático de las páginas. Sitios que usan JavaScript para cargar precios (Sixt, Europcar, etc.) pueden aparecer como "Sin precios" — en ese caso, agrega la URL de una página de lista de tarifas específica o ingresa los precios de referencia manualmente.
             </p>
@@ -1340,8 +1364,10 @@ export default function DashboardAdmin() {
       {clienteDocs && (() => {
         const r = clienteDocs.r;
         const docs: { label: string; url?: string }[] = [
-          { label: 'Documento de identidad (cédula)', url: r.documento_id_url },
-          { label: 'Licencia de conducción', url: r.licencia_url },
+          { label: r.documento_es_pasaporte ? 'Pasaporte' : 'Documento de identidad (frente)', url: r.documento_id_url },
+          ...(r.documento_es_pasaporte ? [] : [{ label: 'Documento de identidad (dorso)', url: r.documento_id_url_dorso }]),
+          { label: 'Licencia de conducción (frente)', url: r.licencia_url },
+          { label: 'Licencia de conducción (dorso)', url: r.licencia_url_dorso },
         ];
         return (
           <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setClienteDocs(null)}>
@@ -1351,7 +1377,7 @@ export default function DashboardAdmin() {
                   <h3 className="font-bold text-ink">Documentos del cliente</h3>
                   <p className="text-xs text-ink/50 mt-0.5">{r.usuario_nombre} · {r.marca} {r.modelo}</p>
                 </div>
-                <button onClick={() => setClienteDocs(null)} className="p-1.5 rounded-xl text-ink/40 hover:text-ink hover:bg-surface transition">
+                <button onClick={() => setClienteDocs(null)} aria-label="Cerrar" className="p-1.5 rounded-xl text-ink/50 hover:text-ink hover:bg-surface transition">
                   <IconX size={18} />
                 </button>
               </div>
@@ -1366,11 +1392,11 @@ export default function DashboardAdmin() {
                         <a href={d.url} target="_blank" rel="noopener noreferrer" className="block">
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img src={d.url} alt={d.label} className="w-full max-h-56 object-contain rounded-lg border border-border hover:opacity-90 transition" />
-                          <span className="text-[11px] text-ink/40 mt-1 inline-block">Clic para ampliar</span>
+                          <span className="text-[11px] text-ink/50 mt-1 inline-block">Clic para ampliar</span>
                         </a>
                       )
                     ) : (
-                      <p className="text-sm text-ink/40">No subido.</p>
+                      <p className="text-sm text-ink/50">No subido.</p>
                     )}
                   </div>
                 ))}
@@ -1396,7 +1422,7 @@ export default function DashboardAdmin() {
                 <h3 className="font-bold text-ink flex items-center gap-2"><IconShield size={18} /> Verificación del arrendatario</h3>
                 <p className="text-xs text-ink/50 mt-0.5">{arrIa.nombre} · Cédula y licencia de conducción</p>
               </div>
-              <button onClick={() => !arrIaCargando && setArrIa(null)} className="p-1.5 rounded-xl text-ink/40 hover:text-ink hover:bg-surface transition">
+              <button onClick={() => !arrIaCargando && setArrIa(null)} aria-label="Cerrar" className="p-1.5 rounded-xl text-ink/50 hover:text-ink hover:bg-surface transition">
                 <IconX size={18} />
               </button>
             </div>
@@ -1411,7 +1437,7 @@ export default function DashboardAdmin() {
             ) : arrIa.res ? (
               <>
                 <ResultadoIA res={arrIa.res} />
-                <p className="text-[11px] text-ink/40 leading-relaxed mt-3">
+                <p className="text-[11px] text-ink/50 leading-relaxed mt-3">
                   Verifica vigencia de la licencia, categoría apta para automóvil y que el nombre de la licencia coincida con la cédula. La decisión final es humana.
                 </p>
               </>
@@ -1430,8 +1456,8 @@ export default function DashboardAdmin() {
             <div className="bg-surface-2 rounded-3xl shadow-2xl max-w-3xl w-full p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
               <div className="flex justify-between items-center mb-5">
                 <h3 className="font-bold text-ink">{fotoModal.v.marca} {fotoModal.v.modelo} — Fotos</h3>
-                <button onClick={() => setFotoModal(null)}
-                  className="p-1.5 rounded-xl text-ink/40 hover:text-ink hover:bg-surface transition">
+                <button onClick={() => setFotoModal(null)} aria-label="Cerrar"
+                  className="p-1.5 rounded-xl text-ink/50 hover:text-ink hover:bg-surface transition">
                   <IconX size={18} />
                 </button>
               </div>
@@ -1453,7 +1479,7 @@ export default function DashboardAdmin() {
               ) : (
                 <div className="text-center py-12">
                   <IconCar size={48} className="text-ink/20 mx-auto mb-3" />
-                  <p className="text-ink/40">Este vehículo no tiene fotos detalladas.</p>
+                  <p className="text-ink/50">Este vehículo no tiene fotos detalladas.</p>
                 </div>
               )}
             </div>
@@ -1499,13 +1525,13 @@ export default function DashboardAdmin() {
                 <div>
                   <h3 className="font-bold text-ink">{v.marca} {v.modelo} {v.anio} — Documentos</h3>
                   {v.placa && <p className="text-xs text-ink/50 mt-0.5">Placa: {v.placa}</p>}
-                  <p className="text-xs text-ink/40 mt-0.5">Propietario: {v.propietario_nombre}</p>
+                  <p className="text-xs text-ink/50 mt-0.5">Propietario: {v.propietario_nombre}</p>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${ESTADO_BADGE[estado] || ESTADO_BADGE.sin_documentos}`}>
                     {ESTADO_LABEL[estado] || estado}
                   </span>
-                  <button onClick={() => setDocModal(null)} className="p-1.5 rounded-xl text-ink/40 hover:text-ink hover:bg-surface transition">
+                  <button onClick={() => setDocModal(null)} aria-label="Cerrar" className="p-1.5 rounded-xl text-ink/50 hover:text-ink hover:bg-surface transition">
                     <IconX size={18} />
                   </button>
                 </div>
@@ -1524,7 +1550,7 @@ export default function DashboardAdmin() {
                         ? <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Analizando documentos…</>
                         : <><IconShield size={16} /> Verificar con IA</>}
                     </button>
-                    <span className="text-xs text-ink/40">Lee SOAT, tecno, tarjeta y seguro; valida fechas, placa y propietario.</span>
+                    <span className="text-xs text-ink/50">Lee SOAT, tecno, tarjeta y seguro; valida fechas, placa y propietario.</span>
                   </div>
 
                   {iaError && (
@@ -1534,7 +1560,7 @@ export default function DashboardAdmin() {
                   {iaVerif && iaVerif.vid === v.id && (
                     <div className="space-y-3">
                       <ResultadoIA res={iaVerif.res} auto={iaVerif.auto} />
-                      <p className="text-[11px] text-ink/40 leading-relaxed">
+                      <p className="text-[11px] text-ink/50 leading-relaxed">
                         La IA auto-aprueba solo documentos limpios de alta confianza; los marcados como revisión quedan a tu criterio abajo. Decisión final humana.
                       </p>
                     </div>
@@ -1544,7 +1570,7 @@ export default function DashboardAdmin() {
 
               {/* Documentos — revisión individual */}
               {!tieneDocs ? (
-                <div className="text-center py-10 text-ink/40">
+                <div className="text-center py-10 text-ink/50">
                   <p className="text-3xl mb-3">📄</p>
                   <p>Este vehículo no tiene documentos cargados aún.</p>
                 </div>
@@ -1579,6 +1605,15 @@ export default function DashboardAdmin() {
                           </a>
                         ) : (
                           <img src={data.url} alt={label} className="w-full h-24 object-cover rounded-lg border border-border mb-2" />
+                        )}
+                        {key === 'tarjeta' && 'url_dorso' in data && (data as { url_dorso?: string }).url_dorso && (
+                          <div className="mb-2">
+                            <p className="text-[10px] text-ink/50 mb-1">Dorso</p>
+                            <img src={(data as { url_dorso?: string }).url_dorso} alt={`${label} (dorso)`} className="w-full h-24 object-cover rounded-lg border border-border" />
+                          </div>
+                        )}
+                        {key === 'tarjeta' && !('url_dorso' in data && (data as { url_dorso?: string }).url_dorso) && (
+                          <p className="text-[11px] text-warning mb-2">⚠ Falta el dorso.</p>
                         )}
                         {'vence' in data && data.vence && <p className="text-[11px] text-ink/50 mb-1">Vence: {(data as { vence?: string }).vence}</p>}
                         {'aseguradora' in data && (data as { aseguradora?: string }).aseguradora && <p className="text-[11px] text-ink/60">Aseg: {(data as { aseguradora?: string }).aseguradora}</p>}
@@ -1668,7 +1703,7 @@ export default function DashboardAdmin() {
                 </div>
                 <div className="flex items-center gap-2">
                   <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${rolColor[u.rol] || 'bg-surface'}`}>{u.rol}</span>
-                  <button onClick={() => setPerfilModal(null)} className="p-1.5 rounded-xl text-ink/40 hover:text-ink hover:bg-surface transition">
+                  <button onClick={() => setPerfilModal(null)} aria-label="Cerrar" className="p-1.5 rounded-xl text-ink/50 hover:text-ink hover:bg-surface transition">
                     <IconX size={18} />
                   </button>
                 </div>
@@ -1676,80 +1711,84 @@ export default function DashboardAdmin() {
 
               {/* Sección: Identidad */}
               <div className="space-y-3">
-                <p className="text-[10px] font-bold text-ink/40 uppercase tracking-widest">Documento de identidad</p>
+                <p className="text-[10px] font-bold text-ink/50 uppercase tracking-widest">Documento de identidad</p>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="bg-surface rounded-xl p-3 border border-border">
-                    <p className="text-[10px] text-ink/40 uppercase tracking-wide mb-0.5">Tipo</p>
+                    <p className="text-[10px] text-ink/50 uppercase tracking-wide mb-0.5">Tipo</p>
                     <p className="text-sm font-semibold text-ink">{TIPO_DOC_LABELS[u.tipo_documento || ''] || u.tipo_documento || '—'}</p>
                   </div>
                   <div className="bg-surface rounded-xl p-3 border border-border">
-                    <p className="text-[10px] text-ink/40 uppercase tracking-wide mb-0.5">Número</p>
+                    <p className="text-[10px] text-ink/50 uppercase tracking-wide mb-0.5">Número</p>
                     <p className="text-sm font-semibold text-ink font-mono">{u.documento_identidad || '—'}</p>
                   </div>
                 </div>
 
-                {/* Foto de la cédula */}
-                <div className="bg-surface rounded-xl p-3 border border-border">
-                  <p className="text-[10px] text-ink/40 uppercase tracking-wide mb-1.5">Foto de la cédula</p>
-                  {u.cedula_url ? (
-                    u.cedula_url.toLowerCase().endsWith('.pdf') ? (
-                      <a href={u.cedula_url} target="_blank" rel="noopener noreferrer"
-                        className="inline-flex items-center gap-2 text-sm text-accent hover:underline">
-                        📄 Ver cédula (PDF)
-                      </a>
-                    ) : (
-                      <a href={u.cedula_url} target="_blank" rel="noopener noreferrer" className="block">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={u.cedula_url} alt="Cédula" className="max-h-44 w-auto rounded-lg border border-border hover:opacity-90 transition" />
-                        <span className="text-[11px] text-ink/40 mt-1 inline-block">Clic para ampliar</span>
-                      </a>
-                    )
-                  ) : (
-                    <p className="text-sm text-ink/40">El propietario aún no ha subido su cédula.</p>
-                  )}
+                {/* Foto de la cédula (frente y dorso) */}
+                <div className="grid grid-cols-2 gap-3">
+                  {[{ label: 'Cédula (frente)', url: u.cedula_url }, { label: 'Cédula (dorso)', url: u.cedula_url_dorso }].map(d => (
+                    <div key={d.label} className="bg-surface rounded-xl p-3 border border-border">
+                      <p className="text-[10px] text-ink/50 uppercase tracking-wide mb-1.5">{d.label}</p>
+                      {d.url ? (
+                        d.url.toLowerCase().endsWith('.pdf') ? (
+                          <a href={d.url} target="_blank" rel="noopener noreferrer"
+                            className="inline-flex items-center gap-2 text-sm text-accent hover:underline">
+                            📄 Ver PDF
+                          </a>
+                        ) : (
+                          <a href={d.url} target="_blank" rel="noopener noreferrer" className="block">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={d.url} alt={d.label} className="max-h-44 w-auto rounded-lg border border-border hover:opacity-90 transition" />
+                            <span className="text-[11px] text-ink/50 mt-1 inline-block">Clic para ampliar</span>
+                          </a>
+                        )
+                      ) : (
+                        <p className="text-sm text-ink/50">No subido.</p>
+                      )}
+                    </div>
+                  ))}
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div className="bg-surface rounded-xl p-3 border border-border">
-                    <p className="text-[10px] text-ink/40 uppercase tracking-wide mb-0.5">Fecha de nacimiento</p>
+                    <p className="text-[10px] text-ink/50 uppercase tracking-wide mb-0.5">Fecha de nacimiento</p>
                     <p className="text-sm font-semibold text-ink">{u.fecha_nacimiento || '—'}</p>
-                    {edad !== null && <p className="text-[11px] text-ink/40 mt-0.5">{edad} años</p>}
+                    {edad !== null && <p className="text-[11px] text-ink/50 mt-0.5">{edad} años</p>}
                   </div>
                   <div className="bg-surface rounded-xl p-3 border border-border">
-                    <p className="text-[10px] text-ink/40 uppercase tracking-wide mb-0.5">Celular</p>
-                    <p className="text-sm font-semibold text-ink font-mono">{u.celular || '—'}</p>
+                    <p className="text-[10px] text-ink/50 uppercase tracking-wide mb-0.5">Celular</p>
+                    <p className="text-sm font-semibold text-ink font-mono">{u.celular ? `${u.celular_indicativo || '+57'} ${u.celular}` : '—'}</p>
                   </div>
                 </div>
 
                 {/* Sección: Licencia */}
-                <p className="text-[10px] font-bold text-ink/40 uppercase tracking-widest pt-1">Licencia de conducción</p>
+                <p className="text-[10px] font-bold text-ink/50 uppercase tracking-widest pt-1">Licencia de conducción</p>
                 <div className="bg-surface rounded-xl p-3 border border-border">
-                  <p className="text-[10px] text-ink/40 uppercase tracking-wide mb-0.5">Número de licencia</p>
+                  <p className="text-[10px] text-ink/50 uppercase tracking-wide mb-0.5">Número de licencia</p>
                   <p className="text-sm font-semibold text-ink font-mono">{u.numero_licencia || '—'}</p>
                 </div>
 
                 {/* Sección: Dirección */}
-                <p className="text-[10px] font-bold text-ink/40 uppercase tracking-widest pt-1">Dirección</p>
+                <p className="text-[10px] font-bold text-ink/50 uppercase tracking-widest pt-1">Dirección</p>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="bg-surface rounded-xl p-3 border border-border col-span-2">
-                    <p className="text-[10px] text-ink/40 uppercase tracking-wide mb-0.5">Dirección</p>
+                    <p className="text-[10px] text-ink/50 uppercase tracking-wide mb-0.5">Dirección</p>
                     <p className="text-sm font-semibold text-ink">{u.direccion || '—'}</p>
                   </div>
                   <div className="bg-surface rounded-xl p-3 border border-border">
-                    <p className="text-[10px] text-ink/40 uppercase tracking-wide mb-0.5">Ciudad</p>
+                    <p className="text-[10px] text-ink/50 uppercase tracking-wide mb-0.5">Ciudad</p>
                     <p className="text-sm font-semibold text-ink">{u.ciudad || '—'}</p>
                   </div>
                 </div>
 
                 {/* Sección: Contacto de emergencia */}
-                <p className="text-[10px] font-bold text-ink/40 uppercase tracking-widest pt-1">Contacto de emergencia</p>
+                <p className="text-[10px] font-bold text-ink/50 uppercase tracking-widest pt-1">Contacto de emergencia</p>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="bg-surface rounded-xl p-3 border border-border">
-                    <p className="text-[10px] text-ink/40 uppercase tracking-wide mb-0.5">Nombre</p>
+                    <p className="text-[10px] text-ink/50 uppercase tracking-wide mb-0.5">Nombre</p>
                     <p className="text-sm font-semibold text-ink">{emergencia.nombre || '—'}</p>
                   </div>
                   <div className="bg-surface rounded-xl p-3 border border-border">
-                    <p className="text-[10px] text-ink/40 uppercase tracking-wide mb-0.5">Teléfono</p>
+                    <p className="text-[10px] text-ink/50 uppercase tracking-wide mb-0.5">Teléfono</p>
                     <p className="text-sm font-semibold text-ink font-mono">{emergencia.telefono || '—'}</p>
                   </div>
                 </div>
@@ -1758,7 +1797,7 @@ export default function DashboardAdmin() {
                 <div className="flex items-center justify-between pt-2 border-t border-border">
                   <div>
                     <p className="text-xs text-ink/50">Registrado el {u.created_at?.split('T')[0] || u.created_at}</p>
-                    <p className="text-xs text-ink/40">Estado: <span className={u.estado_cuenta === 'activa' ? 'text-success font-semibold' : 'text-danger font-semibold'}>{u.estado_cuenta}</span></p>
+                    <p className="text-xs text-ink/50">Estado: <span className={u.estado_cuenta === 'activa' ? 'text-success font-semibold' : 'text-danger font-semibold'}>{u.estado_cuenta}</span></p>
                   </div>
                   {u.rol !== 'admin' && (
                     <button onClick={() => { toggleEstado(u); setPerfilModal(p => p ? { u: { ...p.u, estado_cuenta: p.u.estado_cuenta === 'activa' ? 'inactiva' : 'activa' } } : null); }}
@@ -1796,7 +1835,7 @@ export default function DashboardAdmin() {
                         </button>
                       </div>
                       <button onClick={() => setResetPass(null)}
-                        className="text-xs text-ink/40 hover:text-ink transition">Cerrar</button>
+                        className="text-xs text-ink/50 hover:text-ink transition">Cerrar</button>
                     </div>
                   ) : (
                     /* Formulario de nueva contraseña */

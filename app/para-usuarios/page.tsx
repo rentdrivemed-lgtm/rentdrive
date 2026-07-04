@@ -246,7 +246,7 @@ export default function ParaUsuariosPage() {
             <details key={i} className="bg-surface-2 rounded-2xl border border-border shadow-sm group">
               <summary className="px-5 py-4 font-semibold text-ink text-sm cursor-pointer list-none flex items-center justify-between gap-4">
                 {f.q}
-                <svg className="w-4 h-4 text-ink/30 group-open:rotate-180 transition-transform flex-shrink-0"
+                <svg className="w-4 h-4 text-ink/40 group-open:rotate-180 transition-transform flex-shrink-0"
                   fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7"/>
                 </svg>

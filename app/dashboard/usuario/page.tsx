@@ -72,7 +72,7 @@ export default function DashboardUsuario() {
     }
   };
 
-  if (!user) return <div className="text-center py-20 text-ink/40">Cargando...</div>;
+  if (!user) return <div className="text-center py-20 text-ink/50">Cargando...</div>;
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-10">
@@ -118,7 +118,7 @@ export default function DashboardUsuario() {
       {reservas.length === 0 ? (
         <div className="bg-surface-2 rounded-2xl shadow-sm border border-border p-10 text-center">
           <IconCar size={48} className="text-ink/20 mx-auto mb-3" />
-          <p className="text-ink/40 font-medium mb-2">No tienes reservas aún.</p>
+          <p className="text-ink/50 font-medium mb-2">No tienes reservas aún.</p>
           <Link href="/" className="text-accent font-semibold hover:text-accent-hover text-sm transition">
             ¡Busca un vehículo!
           </Link>
@@ -160,7 +160,7 @@ export default function DashboardUsuario() {
           <div className="bg-surface-2 rounded-2xl border border-border shadow-xl max-w-md w-full p-6" onClick={e => e.stopPropagation()}>
             <div className="flex items-start justify-between mb-3">
               <h3 className="font-bold text-ink text-lg">¿Cancelar esta reserva?</h3>
-              <button onClick={() => !cancelando && setModal(null)} className="text-ink/40 hover:text-ink" aria-label="Cerrar">
+              <button onClick={() => !cancelando && setModal(null)} className="text-ink/50 hover:text-ink" aria-label="Cerrar">
                 <IconX size={18} />
               </button>
             </div>

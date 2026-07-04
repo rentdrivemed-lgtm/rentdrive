@@ -88,7 +88,7 @@ export default function VehiculoCard({ v }: { v: Vehiculo }) {
           {v.precio_dia > 0 ? (
             <div>
               <span className="text-accent font-bold text-lg">${v.precio_dia.toLocaleString('es-CO')}</span>
-              <span className="text-ink/40 text-xs font-normal"> {c.dia}</span>
+              <span className="text-ink/50 text-xs font-normal"> {c.dia}</span>
             </div>
           ) : (
             <span className="text-accent/70 text-sm font-medium">{c.enRevision}</span>

@@ -23,16 +23,20 @@ export default function FotoUpload({ label, value, onChange, required, blurPlaca
     setSubiendo(true);
     setDifuminada(false);
 
-    const fd = new FormData();
-    fd.append('file', file);
-    if (blurPlaca) fd.append('blurPlaca', '1');
-    const res = await fetch('/api/upload', { method: 'POST', body: fd });
-    const data = await res.json() as { url?: string; error?: string; difuminada?: boolean };
-    setSubiendo(false);
-
-    if (!res.ok) { setError(data.error || 'Error al subir'); return; }
-    if (data.difuminada) setDifuminada(true);
-    onChange(data.url!);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      if (blurPlaca) fd.append('blurPlaca', '1');
+      const res = await fetch('/api/upload', { method: 'POST', body: fd });
+      const data = await res.json().catch(() => ({})) as { url?: string; error?: string; difuminada?: boolean };
+      if (!res.ok || !data.url) { setError(data.error || 'Error al subir'); return; }
+      if (data.difuminada) setDifuminada(true);
+      onChange(data.url);
+    } catch {
+      setError('Sin conexión — revisa tu internet e intenta de nuevo.');
+    } finally {
+      setSubiendo(false);
+    }
   };
 
   return (
@@ -41,7 +45,9 @@ export default function FotoUpload({ label, value, onChange, required, blurPlaca
         {label} {required && <span className="text-accent">*</span>}
       </label>
       <div
+        role="button" tabIndex={0} aria-label={`Subir ${label}`}
         onClick={() => inputRef.current?.click()}
+        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); inputRef.current?.click(); } }}
         className={`relative cursor-pointer rounded-xl border-2 border-dashed transition
           ${value
             ? 'border-success/30 bg-success/10'
@@ -62,13 +68,13 @@ export default function FotoUpload({ label, value, onChange, required, blurPlaca
             )}
           </>
         ) : (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 text-ink/30">
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 text-ink/40">
             {subiendo ? (
               <span className="text-sm text-ink/50">Subiendo…</span>
             ) : (
               <>
                 <IconPhoto size={22} className="text-ink/25" />
-                <span className="text-[11px] text-center px-2 text-ink/40">Clic para subir</span>
+                <span className="text-[11px] text-center px-2 text-ink/50">Clic para subir</span>
               </>
             )}
           </div>

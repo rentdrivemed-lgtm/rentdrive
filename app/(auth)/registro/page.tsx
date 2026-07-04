@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { LogoMark } from '@/components/Logo';
 import { IconKey, IconCar, IconUser, IconArrowR, IconArrowL, IconShield } from '@/components/Icons';
 import { tomarDestino } from '@/lib/lugares';
+import { validarCelular, validarDireccion, validarDocumentoIdentidad, PAIS_TEL_DEFAULT } from '@/lib/validacion';
+import TelefonoInput from '@/components/TelefonoInput';
 
 type Rol = 'usuario' | 'propietario';
 
@@ -43,6 +45,7 @@ function RegistroForm() {
     documento_identidad: '',
     fecha_nacimiento: '',
     celular: '',
+    celular_indicativo: PAIS_TEL_DEFAULT,
     direccion: '',
     ciudad: 'Medellín',
     numero_licencia: '',
@@ -71,12 +74,14 @@ function RegistroForm() {
 
   /* ── Validación paso 2 ── */
   const validarPaso2 = (): string => {
-    if (!perfil.documento_identidad.trim()) return 'Ingresa tu número de documento.';
+    const errDoc = validarDocumentoIdentidad(perfil.tipo_documento, perfil.documento_identidad);
+    if (errDoc) return errDoc;
     if (!perfil.fecha_nacimiento)           return 'Ingresa tu fecha de nacimiento.';
     if (calcularEdad(perfil.fecha_nacimiento) < 18) return 'Debes ser mayor de 18 años para registrarte.';
-    if (!perfil.celular.trim())             return 'Ingresa tu número de celular.';
-    if (!/^3\d{9}$/.test(perfil.celular.replace(/\s/g, ''))) return 'El celular debe ser un número colombiano de 10 dígitos (ej: 3001234567).';
-    if (!perfil.direccion.trim())           return 'Ingresa tu dirección residencial.';
+    const errCel = validarCelular(perfil.celular_indicativo, perfil.celular);
+    if (errCel) return errCel;
+    const errDir = validarDireccion(perfil.direccion);
+    if (errDir) return errDir;
     if (!perfil.ciudad.trim())              return 'Ingresa tu ciudad.';
     return '';
   };
@@ -95,18 +100,23 @@ function RegistroForm() {
     setError('');
     setLoading(true);
 
-    const res = await fetch('/api/auth/registro', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...cuenta, ...perfil, rol }),
-    });
-    const data = await res.json();
-    setLoading(false);
-    if (!res.ok) { setError(data.error); return; }
-    // Si venía de reservar, retoma el pago (solo arrendatarios).
-    const destino = tomarDestino();
-    if (destino && rol === 'usuario') { router.push(destino); return; }
-    router.push(rol === 'propietario' ? '/dashboard/propietario' : '/dashboard/usuario');
+    try {
+      const res = await fetch('/api/auth/registro', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...cuenta, ...perfil, rol }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(data.error || 'No pudimos completar el registro. Intenta de nuevo.'); return; }
+      // Si venía de reservar, retoma el pago (solo arrendatarios).
+      const destino = tomarDestino();
+      if (destino && rol === 'usuario') { router.push(destino); return; }
+      router.push(rol === 'propietario' ? '/dashboard/propietario' : '/dashboard/usuario');
+    } catch {
+      setError('Sin conexión — revisa tu internet e intenta de nuevo.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const inputCls = "w-full border border-border rounded-xl px-4 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40";
@@ -152,16 +162,16 @@ function RegistroForm() {
           <div className="flex items-center gap-3 mb-5">
             <div className="flex-1 flex items-center gap-2">
               <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 transition ${
-                paso >= 1 ? 'bg-accent text-white' : 'bg-surface text-ink/40 border border-border'
+                paso >= 1 ? 'bg-accent text-white' : 'bg-surface text-ink/50 border border-border'
               }`}>
                 {paso > 1 ? '✓' : '1'}
               </div>
               <div className={`h-1 flex-1 rounded-full transition ${paso > 1 ? 'bg-accent' : 'bg-border'}`} />
               <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 transition ${
-                paso >= 2 ? 'bg-accent text-white' : 'bg-surface text-ink/40 border border-border'
+                paso >= 2 ? 'bg-accent text-white' : 'bg-surface text-ink/50 border border-border'
               }`}>2</div>
             </div>
-            <span className="text-xs text-ink/40 flex-shrink-0">Paso {paso} de 2</span>
+            <span className="text-xs text-ink/50 flex-shrink-0">Paso {paso} de 2</span>
           </div>
 
           {/* Encabezado del paso */}
@@ -243,9 +253,16 @@ function RegistroForm() {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-ink/60 mb-1.5 uppercase tracking-wide">Número</label>
-                  <input type="text" required placeholder="1234567890"
+                  <input type="text" required
+                    placeholder={perfil.tipo_documento === 'pasaporte' ? 'AB1234567' : '1234567890'}
                     className={inputCls} value={perfil.documento_identidad}
-                    onChange={e => setPerfil(f => ({ ...f, documento_identidad: e.target.value.replace(/\D/g, '') }))} />
+                    onChange={e => {
+                      // La cédula colombiana es solo dígitos; pasaporte/cédula de extranjería sí pueden traer letras.
+                      const limpio = perfil.tipo_documento === 'cedula'
+                        ? e.target.value.replace(/\D/g, '')
+                        : e.target.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+                      setPerfil(f => ({ ...f, documento_identidad: limpio }));
+                    }} />
                 </div>
               </div>
 
@@ -257,14 +274,17 @@ function RegistroForm() {
                     className={inputCls} value={perfil.fecha_nacimiento}
                     onChange={e => setPerfil(f => ({ ...f, fecha_nacimiento: e.target.value }))} />
                   {perfil.fecha_nacimiento && (
-                    <p className="text-[11px] text-ink/40 mt-1">{calcularEdad(perfil.fecha_nacimiento)} años</p>
+                    <p className="text-[11px] text-ink/50 mt-1">{calcularEdad(perfil.fecha_nacimiento)} años</p>
                   )}
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-ink/60 mb-1.5 uppercase tracking-wide">Celular</label>
-                  <input type="tel" required placeholder="3001234567"
-                    className={inputCls} value={perfil.celular}
-                    onChange={e => setPerfil(f => ({ ...f, celular: e.target.value.replace(/\D/g, '').slice(0, 10) }))} />
+                  <TelefonoInput
+                    indicativo={perfil.celular_indicativo}
+                    numero={perfil.celular}
+                    onChangeIndicativo={dial => setPerfil(f => ({ ...f, celular_indicativo: dial }))}
+                    onChangeNumero={num => setPerfil(f => ({ ...f, celular: num }))}
+                  />
                 </div>
               </div>
 
@@ -289,12 +309,12 @@ function RegistroForm() {
                 <label className="block text-xs font-semibold text-ink/60 mb-1.5 uppercase tracking-wide">
                   Número de licencia de conducción
                   {rol === 'usuario' && <span className="text-accent ml-1">*</span>}
-                  {rol === 'propietario' && <span className="font-normal text-ink/30 ml-1">(opcional)</span>}
+                  {rol === 'propietario' && <span className="font-normal text-ink/40 ml-1">(opcional)</span>}
                 </label>
                 <input type="text" required={rol === 'usuario'} placeholder="Ej: 80123456"
                   className={inputCls} value={perfil.numero_licencia}
                   onChange={e => setPerfil(f => ({ ...f, numero_licencia: e.target.value }))} />
-                <p className="text-[11px] text-ink/40 mt-1">
+                <p className="text-[11px] text-ink/50 mt-1">
                   {rol === 'usuario'
                     ? 'Requerido para poder realizar reservas de vehículos.'
                     : 'Solo si también deseas alquilar vehículos de otros propietarios.'}

@@ -23,6 +23,7 @@ const T = {
     msgInactivo: 'Este vehículo no está disponible actualmente.', msgFechas: 'Selecciona las fechas en el calendario',
     msgRecogida: 'Completa el lugar y la hora de recogida.', msgEntrega: 'Completa el lugar y la hora de entrega.',
     dia1: (n: number) => `${n} día${n !== 1 ? 's' : ''}`,
+    errorVehiculo: 'No pudimos cargar este vehículo. Revisa tu conexión.', reintentar: 'Reintentar',
   },
   en: {
     cargando: 'Loading...', volver: 'Back to home', publicadoPor: 'Listed by',
@@ -35,6 +36,7 @@ const T = {
     msgInactivo: 'This vehicle is not currently available.', msgFechas: 'Select the dates on the calendar',
     msgRecogida: 'Complete the pickup place and time.', msgEntrega: 'Complete the drop-off place and time.',
     dia1: (n: number) => `${n} day${n !== 1 ? 's' : ''}`,
+    errorVehiculo: 'We could not load this vehicle. Check your connection.', reintentar: 'Retry',
   },
 };
 
@@ -60,9 +62,17 @@ export default function VehiculoDetalle() {
   const [recogida, setRecogida] = useState<Lugar>({ ...LUGAR_VACIO });
   const [entrega, setEntrega] = useState<Lugar>({ ...LUGAR_VACIO });
   const [msg, setMsg] = useState('');
+  const [errorCarga, setErrorCarga] = useState('');
+
+  const cargarVehiculo = () => {
+    setErrorCarga('');
+    fetch(`/api/vehiculos/${id}`).then(r => r.json()).then(d => { setVehiculo(d.vehiculo); setOcupadas(d.ocupadas || []); })
+      .catch(() => setErrorCarga(c.errorVehiculo));
+  };
+
   useEffect(() => {
-    fetch(`/api/vehiculos/${id}`).then(r => r.json()).then(d => { setVehiculo(d.vehiculo); setOcupadas(d.ocupadas || []); });
-    fetch('/api/auth/me').then(r => r.json()).then(d => setUser(d.user));
+    cargarVehiculo();
+    fetch('/api/auth/me').then(r => r.json()).then(d => setUser(d.user)).catch(() => setUser(null));
     // Precarga lo elegido en el buscador del inicio.
     const { recogida: r, entrega: e } = cargarLugares();
     setRecogida(r);
@@ -94,8 +104,15 @@ export default function VehiculoDetalle() {
     router.push(destino);
   };
 
+  if (errorCarga) return (
+    <div className="text-center py-20">
+      <p className="text-ink/60 mb-4">{errorCarga}</p>
+      <button onClick={cargarVehiculo} className="bg-accent text-white font-semibold px-5 py-2.5 rounded-xl text-sm">{c.reintentar}</button>
+    </div>
+  );
+
   if (!vehiculo) return (
-    <div className="text-center py-20 text-ink/40">{c.cargando}</div>
+    <div className="text-center py-20 text-ink/50">{c.cargando}</div>
   );
 
   let fotos: string[] = [];
@@ -131,12 +148,12 @@ export default function VehiculoDetalle() {
             <p className="text-ink/50 text-sm mb-1 flex items-center gap-1.5">
               <IconPin size={13} /> {vehiculo.ubicacion} · {vehiculo.anio}
             </p>
-            <p className="text-ink/40 text-sm mb-4">{c.publicadoPor}: {vehiculo.propietario_nombre}</p>
+            <p className="text-ink/50 text-sm mb-4">{c.publicadoPor}: {vehiculo.propietario_nombre}</p>
             <p className="text-ink/70 mb-5 text-sm leading-relaxed">{vehiculo.descripcion}</p>
             {vehiculo.precio_dia > 0 ? (
               <div className="flex items-baseline gap-1">
                 <span className="text-accent font-bold text-3xl">${vehiculo.precio_dia.toLocaleString('es-CO')}</span>
-                <span className="text-ink/40 text-sm">{c.dia}</span>
+                <span className="text-ink/50 text-sm">{c.dia}</span>
               </div>
             ) : (
               <div className="bg-accent-light border border-accent/20 rounded-xl px-4 py-2.5 text-sm text-accent font-medium inline-block">

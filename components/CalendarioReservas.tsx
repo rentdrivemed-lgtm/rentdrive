@@ -163,12 +163,12 @@ export default function CalendarioReservas({ reservas }: { reservas: ReservaCale
 
       {/* Cabecera de navegación */}
       <div className="flex items-center justify-between">
-        <button onClick={() => navMes(-1)}
+        <button onClick={() => navMes(-1)} aria-label="Mes anterior"
           className="p-2 rounded-xl hover:bg-brand-muted transition text-ink/60 hover:text-ink">
           <IconArrowL size={16} />
         </button>
         <span className="font-bold text-ink">{MESES[mesN]} {año}</span>
-        <button onClick={() => navMes(1)}
+        <button onClick={() => navMes(1)} aria-label="Mes siguiente"
           className="p-2 rounded-xl hover:bg-brand-muted transition text-ink/60 hover:text-ink">
           <IconArrowR size={16} />
         </button>
@@ -217,7 +217,11 @@ export default function CalendarioReservas({ reservas }: { reservas: ReservaCale
             return (
               <div
                 key={dStr}
+                role="button" tabIndex={0}
+                aria-label={`${dStr}${nReservas > 0 ? `, ${nReservas} reserva${nReservas !== 1 ? 's' : ''}` : ''}`}
+                aria-pressed={selec}
                 onClick={() => setDiaSelec(selec ? null : dStr)}
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDiaSelec(selec ? null : dStr); } }}
                 className={`border-r border-b border-border last:border-r-0 p-1.5 cursor-pointer transition select-none
                   ${selec ? 'bg-accent/5 ring-1 ring-inset ring-accent/30' : nReservas > 0 ? 'hover:bg-accent/5' : 'hover:bg-surface'}
                 `}
@@ -241,7 +245,7 @@ export default function CalendarioReservas({ reservas }: { reservas: ReservaCale
                     </div>
                   ))}
                   {nReservas > 3 && (
-                    <div className="text-[9px] text-ink/40 pl-1 font-medium">+{nReservas - 3} más</div>
+                    <div className="text-[9px] text-ink/50 pl-1 font-medium">+{nReservas - 3} más</div>
                   )}
                   {nReservas === 0 && (
                     <div className="w-full h-0.5 rounded bg-border mt-1 opacity-0" />
@@ -264,7 +268,7 @@ export default function CalendarioReservas({ reservas }: { reservas: ReservaCale
           </div>
 
           {detalles.length === 0 ? (
-            <div className="px-4 py-6 text-center text-ink/40 text-sm">
+            <div className="px-4 py-6 text-center text-ink/50 text-sm">
               Sin reservas activas este día.
             </div>
           ) : (
@@ -278,7 +282,7 @@ export default function CalendarioReservas({ reservas }: { reservas: ReservaCale
                     <p className="text-xs text-ink/50 truncate">
                       Cliente: {r.usuario_nombre}
                     </p>
-                    <p className="text-xs text-ink/40">
+                    <p className="text-xs text-ink/50">
                       {r.fecha_inicio} → {r.fecha_fin}
                     </p>
                   </div>

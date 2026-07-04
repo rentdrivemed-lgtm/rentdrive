@@ -3,7 +3,7 @@ import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { IconArrowL, IconShield, IconPin } from '@/components/Icons';
-import DocUpload from '@/components/DocUpload';
+import DocUploadDoble from '@/components/DocUploadDoble';
 import { LUGAR_VACIO, calcularRecargo, lugarResumen, cargarLugares, type Lugar } from '@/lib/lugares';
 
 type Vehiculo = {
@@ -43,6 +43,7 @@ function PagoContent() {
   const [loading, setLoading] = useState(false);
   const [exito, setExito] = useState(false);
   const [error, setError] = useState('');
+  const [errorCarga, setErrorCarga] = useState('');
 
   // Lugares de recogida/entrega (elegidos en el detalle del vehículo)
   const [recogida, setRecogida] = useState<Lugar>({ ...LUGAR_VACIO });
@@ -50,7 +51,10 @@ function PagoContent() {
 
   // Step 1 — Documentos
   const [docIdUrl, setDocIdUrl] = useState('');
+  const [docIdUrlDorso, setDocIdUrlDorso] = useState('');
+  const [esPasaporte, setEsPasaporte] = useState(false);
   const [licenciaUrl, setLicenciaUrl] = useState('');
+  const [licenciaUrlDorso, setLicenciaUrlDorso] = useState('');
 
   // Step 2 — Contrato
   const [firmaNombre, setFirmaNombre] = useState('');
@@ -62,27 +66,42 @@ function PagoContent() {
   const [vence, setVence] = useState('');
   const [cvv, setCvv] = useState('');
 
-  useEffect(() => {
+  const cargarInicial = () => {
+    setErrorCarga('');
     fetch('/api/auth/me').then(r => r.json()).then(d => {
       if (!d.user) { router.push('/login'); return; }
       setUser(d.user);
       setFirmaNombre(d.user.nombre || '');
-    });
+    }).catch(() => setErrorCarga('No pudimos verificar tu sesión. Revisa tu conexión.'));
     const { recogida: r, entrega: e } = cargarLugares();
     setRecogida(r);
     setEntrega(e);
     if (vehiculo_id) {
       fetch(`/api/vehiculos/${vehiculo_id}`)
         .then(r => r.json())
-        .then(d => setVehiculo(d.vehiculo ?? null));
+        .then(d => setVehiculo(d.vehiculo ?? null))
+        .catch(() => setErrorCarga('No pudimos cargar el vehículo. Revisa tu conexión.'));
     }
+  };
+  useEffect(() => {
+    cargarInicial();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vehiculo_id, router]);
 
   if (!vehiculo_id || !fecha_inicio || !fecha_fin) {
     return (
-      <div className="max-w-lg mx-auto px-4 py-20 text-center text-ink/40">
+      <div className="max-w-lg mx-auto px-4 py-20 text-center text-ink/50">
         <p className="mb-4">Datos de reserva incompletos.</p>
         <Link href="/" className="text-accent font-medium">Volver al inicio</Link>
+      </div>
+    );
+  }
+
+  if (errorCarga) {
+    return (
+      <div className="max-w-lg mx-auto px-4 py-20 text-center">
+        <p className="text-ink/60 mb-4">{errorCarga}</p>
+        <button onClick={cargarInicial} className="bg-accent text-white font-semibold px-5 py-2.5 rounded-xl text-sm">Reintentar</button>
       </div>
     );
   }
@@ -119,31 +138,38 @@ function PagoContent() {
     if (cvv.length < 3) { setError('CVV inválido.'); return; }
 
     setLoading(true);
-    const res = await fetch('/api/reservas', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        vehiculo_id,
-        fecha_inicio,
-        fecha_fin,
-        documento_id_url: docIdUrl,
-        licencia_url: licenciaUrl,
-        recogida,
-        entrega,
-        firma_contrato: JSON.stringify({
-          nombre: firmaNombre,
-          fecha: new Date().toISOString(),
-          vehiculo: vehiculo ? `${vehiculo.marca} ${vehiculo.modelo} ${vehiculo.anio}` : '',
-          recogida: lugarResumen(recogida),
-          entrega: lugarResumen(entrega),
+    try {
+      const res = await fetch('/api/reservas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vehiculo_id,
+          fecha_inicio,
+          fecha_fin,
+          documento_id_url: docIdUrl,
+          documento_id_url_dorso: docIdUrlDorso,
+          documento_es_pasaporte: esPasaporte,
+          licencia_url: licenciaUrl,
+          licencia_url_dorso: licenciaUrlDorso,
+          recogida,
+          entrega,
+          firma_contrato: JSON.stringify({
+            nombre: firmaNombre,
+            fecha: new Date().toISOString(),
+            vehiculo: vehiculo ? `${vehiculo.marca} ${vehiculo.modelo} ${vehiculo.anio}` : '',
+            recogida: lugarResumen(recogida),
+            entrega: lugarResumen(entrega),
+          }),
         }),
-      }),
-    });
-    const data = await res.json();
-    setLoading(false);
-
-    if (!res.ok) { setError(data.error || 'Error al procesar el pago. Intenta de nuevo.'); return; }
-    setExito(true);
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(data.error || 'Error al procesar el pago. Intenta de nuevo.'); return; }
+      setExito(true);
+    } catch {
+      setError('Sin conexión — revisa tu internet e intenta de nuevo.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   /* ── ÉXITO ── */
@@ -156,7 +182,7 @@ function PagoContent() {
           </div>
           <h1 className="text-2xl font-bold text-ink mb-1">¡Solicitud enviada!</h1>
           <p className="text-ink/50 mb-0.5">{vehiculo?.marca} {vehiculo?.modelo} {vehiculo?.anio}</p>
-          <p className="text-ink/40 text-sm mb-4">{fecha_inicio} → {fecha_fin} · {dias} día{dias !== 1 ? 's' : ''}</p>
+          <p className="text-ink/50 text-sm mb-4">{fecha_inicio} → {fecha_fin} · {dias} día{dias !== 1 ? 's' : ''}</p>
           <p className="text-accent font-bold text-2xl mb-5">${total.toLocaleString('es-CO')}</p>
 
           <div className="bg-warning/10 border border-warning/25 rounded-2xl px-5 py-4 text-left mb-4">
@@ -206,7 +232,7 @@ function PagoContent() {
       {/* Resumen reserva */}
       {vehiculo && (
         <div className="bg-surface-2 rounded-2xl border border-border p-4 mb-4">
-          <p className="text-[10px] font-bold text-ink/40 uppercase tracking-widest mb-2">Resumen de reserva</p>
+          <p className="text-[10px] font-bold text-ink/50 uppercase tracking-widest mb-2">Resumen de reserva</p>
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <p className="font-bold text-ink truncate">{vehiculo.marca} {vehiculo.modelo} {vehiculo.anio}</p>
@@ -220,7 +246,7 @@ function PagoContent() {
             </div>
             <div className="text-right flex-shrink-0">
               <p className="text-2xl font-black text-accent">${total.toLocaleString('es-CO')}</p>
-              <p className="text-[11px] text-ink/40">${vehiculo.precio_dia.toLocaleString('es-CO')}/día</p>
+              <p className="text-[11px] text-ink/50">${vehiculo.precio_dia.toLocaleString('es-CO')}/día</p>
             </div>
           </div>
 
@@ -257,11 +283,11 @@ function PagoContent() {
             <div key={s} className="flex items-center flex-1">
               <div className="flex flex-col items-center flex-1">
                 <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition
-                  ${done ? 'bg-success/100 text-white' : active ? 'bg-accent text-white' : 'bg-border text-ink/30'}`}>
+                  ${done ? 'bg-success/100 text-white' : active ? 'bg-accent text-white' : 'bg-border text-ink/40'}`}>
                   {done ? '✓' : s}
                 </div>
                 <span className={`text-[10px] mt-1 font-semibold uppercase tracking-wide
-                  ${active ? 'text-accent' : done ? 'text-success' : 'text-ink/30'}`}>
+                  ${active ? 'text-accent' : done ? 'text-success' : 'text-ink/40'}`}>
                   {label}
                 </span>
               </div>
@@ -276,23 +302,29 @@ function PagoContent() {
       {/* ── STEP 1: Documentos ── */}
       {step === 1 && (
         <div className="bg-surface-2 rounded-2xl border border-border p-5">
-          <p className="text-[10px] font-bold text-ink/40 uppercase tracking-widest mb-1">Paso 1 de 3</p>
+          <p className="text-[10px] font-bold text-ink/50 uppercase tracking-widest mb-1">Paso 1 de 3</p>
           <h2 className="font-bold text-ink text-base mb-1">Sube tus documentos</h2>
           <p className="text-sm text-ink/50 mb-5">
             Necesitamos verificar tu identidad antes de confirmar la reserva. Los originales también deben presentarse físicamente al recoger el vehículo.
           </p>
 
-          <div className="grid grid-cols-2 gap-4 mb-4">
-            <DocUpload
+          <label className="flex items-center gap-2 text-xs text-ink/60 mb-3">
+            <input type="checkbox" checked={esPasaporte} onChange={e => setEsPasaporte(e.target.checked)} />
+            Mi documento de identidad es un pasaporte (sin dorso)
+          </label>
+
+          <div className="space-y-4 mb-4">
+            <DocUploadDoble
               label="Cédula o pasaporte"
-              value={docIdUrl}
-              onChange={setDocIdUrl}
+              valueFrente={docIdUrl} valueDorso={docIdUrlDorso}
+              onChangeFrente={setDocIdUrl} onChangeDorso={setDocIdUrlDorso}
+              soloUnLado={esPasaporte}
               required
             />
-            <DocUpload
+            <DocUploadDoble
               label="Licencia de conducción"
-              value={licenciaUrl}
-              onChange={setLicenciaUrl}
+              valueFrente={licenciaUrl} valueDorso={licenciaUrlDorso}
+              onChangeFrente={setLicenciaUrl} onChangeDorso={setLicenciaUrlDorso}
               required
             />
           </div>
@@ -303,25 +335,32 @@ function PagoContent() {
 
           {error && <p className="text-sm text-danger mb-3 text-center">{error}</p>}
 
-          <button
-            onClick={() => {
-              if (!docIdUrl) { setError('Debes subir tu documento de identidad.'); return; }
-              if (!licenciaUrl) { setError('Debes subir tu licencia de conducción.'); return; }
-              setError('');
-              setStep(2);
-            }}
-            disabled={!docIdUrl || !licenciaUrl}
-            className="w-full bg-accent hover:bg-accent-hover text-white font-bold py-3 rounded-xl transition shadow-md shadow-accent/20 disabled:opacity-50 text-sm"
-          >
-            Continuar al contrato →
-          </button>
+          {(() => {
+            const faltaDocId = !docIdUrl || (!esPasaporte && !docIdUrlDorso);
+            const faltaLicencia = !licenciaUrl || !licenciaUrlDorso;
+            return (
+              <button
+                onClick={() => {
+                  if (!docIdUrl) { setError('Debes subir tu documento de identidad.'); return; }
+                  if (!esPasaporte && !docIdUrlDorso) { setError('Falta el dorso de tu documento de identidad.'); return; }
+                  if (!licenciaUrl || !licenciaUrlDorso) { setError('Debes subir frente y dorso de tu licencia de conducción.'); return; }
+                  setError('');
+                  setStep(2);
+                }}
+                disabled={faltaDocId || faltaLicencia}
+                className="w-full bg-accent hover:bg-accent-hover text-white font-bold py-3 rounded-xl transition shadow-md shadow-accent/20 disabled:opacity-50 text-sm"
+              >
+                Continuar al contrato →
+              </button>
+            );
+          })()}
         </div>
       )}
 
       {/* ── STEP 2: Contrato ── */}
       {step === 2 && (
         <div className="bg-surface-2 rounded-2xl border border-border p-5">
-          <p className="text-[10px] font-bold text-ink/40 uppercase tracking-widest mb-1">Paso 2 de 3</p>
+          <p className="text-[10px] font-bold text-ink/50 uppercase tracking-widest mb-1">Paso 2 de 3</p>
           <h2 className="font-bold text-ink text-base mb-4">Contrato de arrendamiento</h2>
 
           <div className="bg-surface border border-border rounded-xl p-4 mb-5 max-h-72 overflow-y-auto text-xs text-ink/70 space-y-3 leading-relaxed">
@@ -389,7 +428,7 @@ function PagoContent() {
               className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface-2 focus:outline-none focus:ring-2 focus:ring-accent/40"
             />
             {firmaNombre.trim() && (
-              <p className="text-[11px] text-ink/40 mt-1 italic text-right">
+              <p className="text-[11px] text-ink/50 mt-1 italic text-right">
                 Firmado por: {firmaNombre} · {new Date().toLocaleDateString('es-CO')}
               </p>
             )}
@@ -434,7 +473,7 @@ function PagoContent() {
       {/* ── STEP 3: Pago ── */}
       {step === 3 && (
         <div className="bg-surface-2 rounded-2xl border border-border p-5">
-          <p className="text-[10px] font-bold text-ink/40 uppercase tracking-widest mb-4">Paso 3 de 3 — Pago con tarjeta de crédito</p>
+          <p className="text-[10px] font-bold text-ink/50 uppercase tracking-widest mb-4">Paso 3 de 3 — Pago con tarjeta de crédito</p>
 
           <div className={`relative rounded-2xl p-5 mb-5 bg-gradient-to-br ${bgTarjeta} text-white overflow-hidden`}
             style={{ minHeight: 130 }}>
@@ -547,7 +586,7 @@ function PagoContent() {
 
 export default function PagoPage() {
   return (
-    <Suspense fallback={<div className="text-center py-20 text-ink/40">Cargando…</div>}>
+    <Suspense fallback={<div className="text-center py-20 text-ink/50">Cargando…</div>}>
       <PagoContent />
     </Suspense>
   );

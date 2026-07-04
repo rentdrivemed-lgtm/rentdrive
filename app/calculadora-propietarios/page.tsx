@@ -198,14 +198,14 @@ function LeadGate({ tipo, onDesbloqueado }: { tipo: TipoVehiculo; onDesbloqueado
             <button onClick={() => { setPaso('datos'); setCodigo(''); setError(''); }} className="text-ink/50 hover:text-ink flex items-center gap-1">
               <IconArrowL size={12} /> Cambiar mis datos
             </button>
-            <button onClick={reenviar} disabled={reenviando || cooldown > 0} className="text-accent font-medium disabled:opacity-50 disabled:text-ink/40">
+            <button onClick={reenviar} disabled={reenviando || cooldown > 0} className="text-accent font-medium disabled:opacity-50 disabled:text-ink/50">
               {cooldown > 0 ? `Reenviar en ${cooldown}s` : reenviando ? 'Reenviando…' : `Reenviar por ${canal === 'correo' ? 'correo' : 'WhatsApp'}`}
             </button>
           </div>
         </div>
       )}
 
-      <p className="text-[11px] text-ink/40 text-center mt-4">
+      <p className="text-[11px] text-ink/50 text-center mt-4">
         Usamos estos datos solo para contactarte sobre tu vehículo y RentDrive — nunca los compartimos con terceros.
       </p>
     </div>
@@ -291,7 +291,7 @@ export default function CalculadoraPropietariosPage() {
           Simula tu propio caso con los mismos costos que usamos internamente: SOAT, impuesto vehicular,
           seguro todo riesgo, mantenimiento, GPS y depreciación. Ajusta cualquier campo — es tu vehículo, tus números.
         </p>
-        <p className="text-ink/40 text-xs mt-2 flex items-center justify-center gap-1.5">
+        <p className="text-ink/50 text-xs mt-2 flex items-center justify-center gap-1.5">
           <IconUser size={12} /> Hola {lead.nombre.split(' ')[0]} — guardamos tus datos para que no tengas que repetirlos.
         </p>
       </div>
@@ -317,7 +317,7 @@ export default function CalculadoraPropietariosPage() {
             ))}
           </tbody>
         </table>
-        <p className="text-[11px] text-ink/40 mt-3">
+        <p className="text-[11px] text-ink/50 mt-3">
           Referencia general, no una cotización por modelo específico. Elige tu categoría abajo y ajusta cualquier campo con los datos reales de tu carro.
         </p>
       </div>
@@ -379,7 +379,7 @@ export default function CalculadoraPropietariosPage() {
                 <input type="text" inputMode="numeric" value={valorComercial.toLocaleString('es-CO')}
                   onChange={e => setValorComercial(numInput(e.target.value))}
                   className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40" />
-                <p className="text-[11px] text-ink/40 mt-1">Si no lo sabes con certeza, usa ~80% del precio 0&nbsp;km.</p>
+                <p className="text-[11px] text-ink/50 mt-1">Si no lo sabes con certeza, usa ~80% del precio 0&nbsp;km.</p>
               </div>
             </div>
           </div>
@@ -414,7 +414,7 @@ export default function CalculadoraPropietariosPage() {
                   className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40" />
               </div>
             </div>
-            <p className="text-[11px] text-ink/40 mt-2">
+            <p className="text-[11px] text-ink/50 mt-2">
               % Impuesto vehicular (Antioquia) se calcula automático según el valor comercial: {pct(r.pctImpuesto)}.
             </p>
 
@@ -489,7 +489,7 @@ export default function CalculadoraPropietariosPage() {
         <div className="space-y-5">
           <div className={`rounded-2xl p-6 border-2 ${r.esRentable ? 'border-success/40 bg-success/5' : 'border-danger/40 bg-danger/5'}`}>
             <p className="text-xs font-bold uppercase tracking-wide text-ink/50 mb-1">Utilidad neta estimada</p>
-            <p className={`text-4xl font-black ${r.esRentable ? 'text-success' : 'text-danger'}`}>{cop(r.utilidadNetaMensual)}<span className="text-base font-semibold text-ink/40"> /mes</span></p>
+            <p className={`text-4xl font-black ${r.esRentable ? 'text-success' : 'text-danger'}`}>{cop(r.utilidadNetaMensual)}<span className="text-base font-semibold text-ink/50"> /mes</span></p>
             <p className="text-sm text-ink/60 mt-1">{cop(r.utilidadNetaAnual)} al año · retorno de {pct(r.roiAnual)} anual sobre el valor de tu carro</p>
             {!r.esRentable && (
               <p className="text-xs text-danger mt-2 font-medium">A este precio y ocupación no cubres tus costos — sube el precio por día o la ocupación esperada.</p>
@@ -518,7 +518,7 @@ export default function CalculadoraPropietariosPage() {
                   <dt className="text-ink font-semibold">Costo de caja anual</dt>
                   <dd className="font-bold text-ink">{cop(r.costoCajaAnual)}</dd>
                 </div>
-                <p className="text-[11px] text-ink/40 mt-1 leading-relaxed">
+                <p className="text-[11px] text-ink/50 mt-1 leading-relaxed">
                   Es lo que sale de tu bolsillo cada año (no incluye la depreciación): SOAT {cop(soat)} + impuesto vehicular {cop(r.impuesto)} + seguro todo riesgo {cop(r.seguro)} + mantenimiento {cop(mantenimiento)} + GPS amortizado {cop(r.gpsAnualAmortizado)} = {cop(r.costoCajaAnual)}.
                 </p>
               </div>
@@ -556,7 +556,7 @@ export default function CalculadoraPropietariosPage() {
                 <div key={s.ocupacion} className={`rounded-xl p-3 border ${Math.abs(s.ocupacion - ocupacion) < 0.001 ? 'border-accent bg-accent-light' : 'border-border bg-surface'}`}>
                   <p className="text-xs font-bold text-ink/60">{pct(s.ocupacion)}</p>
                   <p className="text-sm font-bold text-ink mt-1">{cop(s.utilidadNetaMensual)}</p>
-                  <p className="text-[10px] text-ink/40">/mes</p>
+                  <p className="text-[10px] text-ink/50">/mes</p>
                 </div>
               ))}
             </div>
@@ -573,7 +573,7 @@ export default function CalculadoraPropietariosPage() {
         </div>
       </div>
 
-      <p className="text-[11px] text-ink/40 text-center mt-8 max-w-2xl mx-auto leading-relaxed flex items-center justify-center gap-1.5">
+      <p className="text-[11px] text-ink/50 text-center mt-8 max-w-2xl mx-auto leading-relaxed flex items-center justify-center gap-1.5">
         <IconCheck size={12} className="flex-shrink-0" />
         Simulación con datos de mercado de julio 2026 (SOAT, impuesto vehicular Antioquia, seguros). Es una guía, no una cotización — tu caso real puede variar.
       </p>

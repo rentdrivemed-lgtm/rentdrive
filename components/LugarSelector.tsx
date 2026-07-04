@@ -118,7 +118,7 @@ export default function LugarSelector({ label, value, onChange, tone = 'accent' 
       {value.municipio && (
         <div>
           <label className="text-[11px] font-medium text-ink/50 mb-1 flex items-center gap-1">
-            <IconClock size={11} className="text-ink/40" /> {c.hora}
+            <IconClock size={11} className="text-ink/50" /> {c.hora}
           </label>
           <input
             type="time"

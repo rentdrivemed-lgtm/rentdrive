@@ -19,9 +19,12 @@
   --color-brand-hover:  #142743;
   --color-brand-light:  #2C4F82;
   --color-brand-muted:  #16263F;  /* chips/píldoras sobre oscuro */
-  --color-accent:       #F25C2B;
+  /* Antes #F25C2B: con texto blanco encima (los 27+ botones CTA de la app) daba 3.31:1,
+     por debajo del mínimo WCAG AA de 4.5:1. Este tono da 4.74:1 y sigue siendo el mismo
+     naranja de marca, solo un poco más oscuro. */
+  --color-accent:       #C74A21;
   --color-accent-hover: #FF8A5B;
-  --color-accent-light: color-mix(in srgb, #F25C2B 14%, transparent);
+  --color-accent-light: color-mix(in srgb, #C74A21 14%, transparent);
 
   /* ── Bordes ── */
   --color-border:        rgba(255, 255, 255, 0.08);

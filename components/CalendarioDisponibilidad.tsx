@@ -85,7 +85,7 @@ export default function CalendarioDisponibilidad({ value, onChange, readOnly, re
         </div>
         <div className="grid grid-cols-7 gap-0.5 text-xs">
           {DIAS.map(d => (
-            <div key={d} className="text-center text-ink/30 font-semibold py-1">{d}</div>
+            <div key={d} className="text-center text-ink/40 font-semibold py-1">{d}</div>
           ))}
           {celdas.map((fecha, i) => {
             if (!fecha) return <div key={`e${i}`} />;

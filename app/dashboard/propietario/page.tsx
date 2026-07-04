@@ -3,6 +3,9 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import FotoUpload from '@/components/FotoUpload';
 import DocUpload from '@/components/DocUpload';
+import DocUploadDoble from '@/components/DocUploadDoble';
+import TelefonoInput from '@/components/TelefonoInput';
+import { validarCelular, validarDocumentoIdentidad, PAIS_TEL_DEFAULT } from '@/lib/validacion';
 import CalendarioDisponibilidad from '@/components/CalendarioDisponibilidad';
 import CalendarioReservas, { type ReservaCalendario } from '@/components/CalendarioReservas';
 import { IconCar, IconCalendar, IconChat, IconCheck, IconArrowL } from '@/components/Icons';
@@ -12,7 +15,7 @@ type DocItem = { url: string; vence?: string };
 type Documentos = {
   soat?: DocItem;
   tecno?: DocItem;
-  tarjeta?: { url: string };
+  tarjeta?: { url: string; url_dorso?: string };
   todo_riesgo?: { url: string; aseguradora?: string; poliza?: string; vence?: string };
 };
 type DocRevision = { estado: string; nota: string };
@@ -29,7 +32,7 @@ type Reserva = ReservaCalendario & { usuario_id: number };
 type User = {
   id: number; nombre: string; correo: string;
   tipo_documento?: string; documento_identidad?: string;
-  celular?: string; cedula_url?: string;
+  celular?: string; celular_indicativo?: string; cedula_url?: string; cedula_url_dorso?: string;
   banco?: string; numero_cuenta?: string; certificado_bancario_url?: string;
 };
 type Fotos = {
@@ -84,7 +87,7 @@ function calcProgreso(v: Vehiculo): { pct: number; items: ProgresoItem[] } {
     { key: 'dias',   label: `Disponibilidad`,         done: dias.length > 0 },
     { key: 'soat',       label: 'SOAT',               done: !!(docs.soat as { url?: string } | undefined)?.url },
     { key: 'tecno',      label: 'Tecno-mecánica',     done: !!(docs.tecno as { url?: string } | undefined)?.url },
-    { key: 'tarjeta',    label: 'Tarjeta propiedad',  done: !!(docs.tarjeta as { url?: string } | undefined)?.url },
+    { key: 'tarjeta',    label: 'Tarjeta propiedad (frente y dorso)',  done: !!((docs.tarjeta as { url?: string; url_dorso?: string } | undefined)?.url && (docs.tarjeta as { url?: string; url_dorso?: string } | undefined)?.url_dorso) },
     { key: 'todo_riesgo',label: 'Todo riesgo',        done: !!(docs.todo_riesgo as { url?: string } | undefined)?.url },
     { key: 'aprobacion', label: 'Aprobación DrivePass', done: v.documentos_estado === 'aprobado' },
   ];
@@ -123,7 +126,8 @@ export default function DashboardPropietario() {
 
   // Perfil
   const [perfil, setPerfil] = useState({
-    tipo_documento: 'cedula', documento_identidad: '', celular: '', cedula_url: '',
+    tipo_documento: 'cedula', documento_identidad: '', celular: '', celular_indicativo: PAIS_TEL_DEFAULT,
+    cedula_url: '', cedula_url_dorso: '',
     banco: '', numero_cuenta: '', certificado_bancario_url: '',
   });
   const [perfilMsg, setPerfilMsg] = useState('');
@@ -172,14 +176,16 @@ export default function DashboardPropietario() {
         tipo_documento: d.user.tipo_documento || 'cedula',
         documento_identidad: d.user.documento_identidad || '',
         celular: d.user.celular || '',
+        celular_indicativo: d.user.celular_indicativo || PAIS_TEL_DEFAULT,
         cedula_url: d.user.cedula_url || '',
+        cedula_url_dorso: d.user.cedula_url_dorso || '',
         banco: d.user.banco || '',
         numero_cuenta: d.user.numero_cuenta || '',
         certificado_bancario_url: d.user.certificado_bancario_url || '',
       });
       cargarVehiculos(d.user.id);
       cargarReservas();
-    });
+    }).catch(() => router.push('/login'));
 
     // Notification popups: check for unread doc / payment notifications
     fetch('/api/notificaciones')
@@ -316,6 +322,10 @@ export default function DashboardPropietario() {
 
   // ── Perfil ─────────────────────────────────────────────────────────────────
   const guardarPerfil = async () => {
+    const errDoc = validarDocumentoIdentidad(perfil.tipo_documento, perfil.documento_identidad);
+    if (errDoc) { setPerfilMsg(errDoc); return; }
+    const errCel = validarCelular(perfil.celular_indicativo, perfil.celular);
+    if (errCel) { setPerfilMsg(errCel); return; }
     if (!perfil.banco.trim() || !perfil.numero_cuenta.trim() || !perfil.certificado_bancario_url) {
       setPerfilMsg('Los datos bancarios son obligatorios para procesar pagos.');
       return;
@@ -353,7 +363,7 @@ export default function DashboardPropietario() {
     return [...set];
   };
 
-  if (!user) return <div className="text-center py-20 text-ink/40">Cargando...</div>;
+  if (!user) return <div className="text-center py-20 text-ink/50">Cargando...</div>;
 
   // ── Tabs ──────────────────────────────────────────────────────────────────
   const TABS = [
@@ -434,7 +444,7 @@ export default function DashboardPropietario() {
           {vehiculos.length === 0 ? (
             <div className="text-center py-14 bg-surface-2 rounded-2xl border border-border">
               <IconCar size={48} className="text-ink/20 mx-auto mb-3" />
-              <p className="text-ink/40">No tienes vehículos publicados.</p>
+              <p className="text-ink/50">No tienes vehículos publicados.</p>
             </div>
           ) : vehiculos.map(v => {
             const { pct, items } = calcProgreso(v);
@@ -457,13 +467,13 @@ export default function DashboardPropietario() {
                     </p>
                     {/* Placa inline */}
                     <div className="flex items-center gap-1.5 mt-1.5">
-                      <span className="text-xs text-ink/40">Placa:</span>
+                      <span className="text-xs text-ink/50">Placa:</span>
                       <input
                         defaultValue={v.placa || ''}
                         onBlur={e => guardarPlaca(v.id, e.target.value)}
                         placeholder="Sin placa"
                         maxLength={7}
-                        className="text-xs bg-surface border border-border rounded-lg px-2 py-0.5 w-24 text-ink uppercase placeholder:text-ink/30 focus:border-accent/50 outline-none" />
+                        className="text-xs bg-surface border border-border rounded-lg px-2 py-0.5 w-24 text-ink uppercase placeholder:text-ink/40 focus:border-accent/50 outline-none" />
                       {!v.placa && <span className="text-[10px] text-warning">⚠ falta</span>}
                       {placaMsg[v.id] && <span className="text-[10px] text-success">{placaMsg[v.id]}</span>}
                     </div>
@@ -505,7 +515,7 @@ export default function DashboardPropietario() {
                     />
                   </div>
                   {faltantes.length > 0 && (
-                    <p className="text-[11px] text-ink/40 mt-1">
+                    <p className="text-[11px] text-ink/50 mt-1">
                       Falta: {faltantes.join(' · ')}
                     </p>
                   )}
@@ -580,7 +590,7 @@ export default function DashboardPropietario() {
                 {reservas.length === 0 ? (
                   <div className="text-center py-14 bg-surface-2 rounded-2xl border border-border">
                     <IconCalendar size={40} className="text-ink/15 mx-auto mb-3" />
-                    <p className="text-ink/40 font-medium">No hay reservas aún.</p>
+                    <p className="text-ink/50 font-medium">No hay reservas aún.</p>
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -690,7 +700,7 @@ export default function DashboardPropietario() {
                 className="flex items-center gap-1.5 text-sm text-ink/60 hover:text-ink transition font-medium">
                 <IconArrowL size={16} /> Mis vehículos
               </button>
-              <span className="text-ink/30">/</span>
+              <span className="text-ink/40">/</span>
               <span className="text-sm font-semibold text-ink">
                 {vehiculoEditando.marca} {vehiculoEditando.modelo} {vehiculoEditando.anio}
               </span>
@@ -717,7 +727,7 @@ export default function DashboardPropietario() {
                   <div key={item.key} className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-xl border ${
                     item.done
                       ? 'bg-success/10 border-success/30 text-success'
-                      : 'bg-surface border-border text-ink/40'
+                      : 'bg-surface border-border text-ink/50'
                   }`}>
                     <span>{item.done ? '✓' : '○'}</span>
                     <span className="truncate">{item.label}</span>
@@ -725,7 +735,7 @@ export default function DashboardPropietario() {
                 ))}
               </div>
               {faltantes.length > 0 && (
-                <p className="text-[11px] text-ink/40 mt-2">Pendiente: {faltantes.join(' · ')}</p>
+                <p className="text-[11px] text-ink/50 mt-2">Pendiente: {faltantes.join(' · ')}</p>
               )}
             </div>
 
@@ -953,9 +963,12 @@ export default function DashboardPropietario() {
                 <div className="bg-surface rounded-xl p-3 border border-border space-y-2">
                   <div className="flex items-center justify-between">
                     <p className="text-xs font-semibold text-ink">Tarjeta de propiedad</p>
-                    {fDet.tarjeta && (fDet.tarjeta as { url?: string }).url && <span className="text-[10px] text-success font-bold">✓ Subido</span>}
+                    {(() => { const t = fDet.tarjeta as { url?: string; url_dorso?: string } | undefined; return t?.url && t?.url_dorso && <span className="text-[10px] text-success font-bold">✓ Subido</span>; })()}
                   </div>
-                  <DocUpload label="Tarjeta de propiedad" value={(editDocs.tarjeta?.url) || ''} onChange={url => setEditDocs(d => ({ ...d, tarjeta: { url } }))} />
+                  <DocUploadDoble label="Tarjeta de propiedad"
+                    valueFrente={editDocs.tarjeta?.url || ''} valueDorso={editDocs.tarjeta?.url_dorso || ''}
+                    onChangeFrente={url => setEditDocs(d => ({ ...d, tarjeta: { url, url_dorso: d.tarjeta?.url_dorso || '' } }))}
+                    onChangeDorso={url_dorso => setEditDocs(d => ({ ...d, tarjeta: { url: d.tarjeta?.url || '', url_dorso } }))} />
                 </div>
 
                 {/* Todo riesgo */}
@@ -1029,23 +1042,32 @@ export default function DashboardPropietario() {
               <div>
                 <label className="text-[11px] text-ink/50 block mb-1">Número de documento</label>
                 <input value={perfil.documento_identidad}
-                  onChange={e => setPerfil(p => ({ ...p, documento_identidad: e.target.value }))}
-                  placeholder="Ej. 1.234.567.890"
-                  className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink placeholder:text-ink/30" />
+                  onChange={e => {
+                    const limpio = perfil.tipo_documento === 'pasaporte'
+                      ? e.target.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase()
+                      : e.target.value.replace(/\D/g, '');
+                    setPerfil(p => ({ ...p, documento_identidad: limpio }));
+                  }}
+                  placeholder={perfil.tipo_documento === 'pasaporte' ? 'AB1234567' : '1234567890'}
+                  className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink placeholder:text-ink/40" />
               </div>
             </div>
             <div className="mb-4">
               <label className="text-[11px] text-ink/50 block mb-1">Celular</label>
-              <input value={perfil.celular}
-                onChange={e => setPerfil(p => ({ ...p, celular: e.target.value }))}
-                placeholder="Ej. 300 123 4567"
-                className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink placeholder:text-ink/30" />
+              <TelefonoInput
+                indicativo={perfil.celular_indicativo}
+                numero={perfil.celular}
+                onChangeIndicativo={dial => setPerfil(p => ({ ...p, celular_indicativo: dial }))}
+                onChangeNumero={num => setPerfil(p => ({ ...p, celular: num }))}
+              />
             </div>
             <div className="mb-1">
-              <DocUpload label="Foto de tu cédula (frente)"
-                value={perfil.cedula_url}
-                onChange={url => setPerfil(p => ({ ...p, cedula_url: url }))} />
-              <p className="text-[11px] text-ink/40 mt-1">
+              <DocUploadDoble label="Foto de tu cédula"
+                valueFrente={perfil.cedula_url} valueDorso={perfil.cedula_url_dorso}
+                onChangeFrente={url => setPerfil(p => ({ ...p, cedula_url: url }))}
+                onChangeDorso={url => setPerfil(p => ({ ...p, cedula_url_dorso: url }))}
+                soloUnLado={perfil.tipo_documento === 'pasaporte'} />
+              <p className="text-[11px] text-ink/50 mt-1">
                 Imagen o PDF claro y legible. Solo la vemos para validar tus documentos.
               </p>
             </div>
@@ -1084,14 +1106,14 @@ export default function DashboardPropietario() {
                 <input value={perfil.numero_cuenta}
                   onChange={e => setPerfil(p => ({ ...p, numero_cuenta: e.target.value }))}
                   placeholder="Ej. 123-456789-00"
-                  className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink placeholder:text-ink/30" />
+                  className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink placeholder:text-ink/40" />
               </div>
             </div>
             <div className="mb-1">
               <DocUpload label="Certificado bancario (PDF o imagen) *"
                 value={perfil.certificado_bancario_url}
                 onChange={url => setPerfil(p => ({ ...p, certificado_bancario_url: url }))} />
-              <p className="text-[11px] text-ink/40 mt-1">
+              <p className="text-[11px] text-ink/50 mt-1">
                 Documento emitido por el banco. Máximo 3 meses de antigüedad.
               </p>
             </div>

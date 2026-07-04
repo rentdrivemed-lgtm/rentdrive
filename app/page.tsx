@@ -231,7 +231,7 @@ export default function Home() {
         ) : vehiculos.length === 0 ? (
           <div className="text-center py-20 bg-surface-2 rounded-2xl border border-border">
             <IconCar size={48} className="text-ink/20 mx-auto mb-4"/>
-            <p className="text-ink/40 font-medium">{c.sinResultados}</p>
+            <p className="text-ink/50 font-medium">{c.sinResultados}</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
