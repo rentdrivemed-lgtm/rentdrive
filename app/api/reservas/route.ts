@@ -3,6 +3,7 @@ import { getDb } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
 import { calcularRecargo, lugarValido, type Lugar } from '@/lib/lugares';
 import { enviarCorreo } from '@/lib/email';
+import { generarCotizacion } from '@/lib/contabilidad';
 
 export const dynamic = 'force-dynamic';
 
@@ -158,6 +159,12 @@ export async function POST(req: NextRequest) {
       'Recuerda: cancelaciones con menos de 72h de anticipación tienen un cargo del 50%, y si no te presentas a la hora de recogida (con 3h de gracia) se cobra el 100%.');
   } catch (e) {
     console.error('[reservas] No se pudo enviar el correo de confirmación:', e instanceof Error ? e.message : e);
+  }
+
+  try {
+    await generarCotizacion(db, Number(result.lastInsertRowid), true);
+  } catch (e) {
+    console.error('[contabilidad] No se pudo generar la cotización:', e instanceof Error ? e.message : e);
   }
 
   return NextResponse.json({ id: result.lastInsertRowid, total, recargo }, { status: 201 });

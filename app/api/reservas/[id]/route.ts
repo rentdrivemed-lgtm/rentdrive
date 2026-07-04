@@ -7,6 +7,7 @@ import { enviarCorreo } from '@/lib/email';
 import {
   fechaHoraRecogida, calcularPoliticaCancelacion, esNoShowAplicable, type Lugar,
 } from '@/lib/cancelacion';
+import { procesarPagoConfirmado } from '@/lib/contabilidad';
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
@@ -83,6 +84,16 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         .run(...values, politicaAplicada.pct, politicaAplicada.motivo, Number(id));
     } else {
       db.prepare(`UPDATE reservas SET ${updates} WHERE id = ?`).run(...values, Number(id));
+    }
+  }
+
+  // Al confirmarse el pago (nunca antes): factura + liquidación al propietario.
+  // Aislado en try/catch — un fallo de facturación no debe romper la confirmación del pago.
+  if (reserva.pago_estado !== 'pagado' && body.pago_estado === 'pagado') {
+    try {
+      await procesarPagoConfirmado(db, Number(id));
+    } catch (e) {
+      console.error('[contabilidad] No se pudo procesar el pago confirmado:', e instanceof Error ? e.message : e);
     }
   }
 

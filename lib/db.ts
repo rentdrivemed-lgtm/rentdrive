@@ -193,6 +193,55 @@ function initDb(db: Database.Database) {
       wa_message_id TEXT DEFAULT '',
       created_at TEXT DEFAULT (datetime('now', 'localtime'))
     );
+
+    CREATE TABLE IF NOT EXISTS cotizaciones (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      reserva_id INTEGER NOT NULL REFERENCES reservas(id),
+      numero TEXT NOT NULL,
+      cliente_nombre TEXT DEFAULT '',
+      cliente_correo TEXT DEFAULT '',
+      vehiculo_descripcion TEXT DEFAULT '',
+      dias INTEGER DEFAULT 0,
+      precio_dia REAL DEFAULT 0,
+      recargo REAL DEFAULT 0,
+      total REAL DEFAULT 0,
+      estado TEXT DEFAULT 'enviada' CHECK(estado IN ('enviada','aceptada','vencida','cancelada')),
+      enviada_en TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now', 'localtime'))
+    );
+
+    CREATE TABLE IF NOT EXISTS facturas (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      reserva_id INTEGER NOT NULL REFERENCES reservas(id),
+      numero TEXT NOT NULL,
+      cliente_nombre TEXT DEFAULT '',
+      cliente_documento TEXT DEFAULT '',
+      cliente_correo TEXT DEFAULT '',
+      subtotal REAL DEFAULT 0,
+      iva REAL DEFAULT 0,
+      total REAL DEFAULT 0,
+      estado TEXT DEFAULT 'borrador' CHECK(estado IN ('borrador','emitida','anulada','error')),
+      dataico_id TEXT DEFAULT '',
+      dataico_cufe TEXT DEFAULT '',
+      dataico_pdf_url TEXT DEFAULT '',
+      dataico_error TEXT DEFAULT '',
+      emitida_en TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now', 'localtime'))
+    );
+
+    CREATE TABLE IF NOT EXISTS liquidaciones (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      reserva_id INTEGER NOT NULL UNIQUE REFERENCES reservas(id),
+      propietario_id INTEGER NOT NULL REFERENCES usuarios(id),
+      bruto REAL NOT NULL,
+      comision_pct REAL NOT NULL,
+      comision_valor REAL NOT NULL,
+      neto REAL NOT NULL,
+      estado TEXT DEFAULT 'pendiente' CHECK(estado IN ('pendiente','pagado')),
+      pagado_en TEXT DEFAULT '',
+      comprobante TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now', 'localtime'))
+    );
   `);
 
   try { db.exec("ALTER TABLE vehiculos ADD COLUMN dias_disponibles TEXT DEFAULT '[]'"); } catch { /* ya existe */ }

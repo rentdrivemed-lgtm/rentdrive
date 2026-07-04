@@ -6,7 +6,7 @@ import { getConfig, setConfig } from '@/lib/operaciones';
 export const dynamic = 'force-dynamic';
 
 // Claves de configuración editables desde el panel admin.
-const CLAVES = ['admin_whatsapp', 'pico_placa'] as const;
+const CLAVES = ['admin_whatsapp', 'pico_placa', 'comision_plataforma_pct', 'empresa_nombre', 'empresa_nit'] as const;
 
 export async function GET() {
   const user = await getCurrentUser();
