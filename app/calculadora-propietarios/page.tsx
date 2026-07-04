@@ -18,6 +18,9 @@ const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
 
 const TIPOS = Object.keys(TIPO_VEHICULO_LABELS) as TipoVehiculo[];
 const LEAD_STORAGE_KEY = 'rentdrive:lead_propietario';
+// Interruptor temporal para probar la calculadora sin correo/WhatsApp configurados.
+// Pon NEXT_PUBLIC_CALCULADORA_VERIFICACION=on en .env.local para volver a exigir el código.
+const VERIFICACION_ACTIVA = process.env.NEXT_PUBLIC_CALCULADORA_VERIFICACION === 'on';
 
 type Lead = { nombre: string; correo: string; celular: string };
 
@@ -232,6 +235,11 @@ export default function CalculadoraPropietariosPage() {
   const [revisandoLead, setRevisandoLead] = useState(true);
 
   useEffect(() => {
+    if (!VERIFICACION_ACTIVA) {
+      setLead({ nombre: 'Invitado', correo: '', celular: '' });
+      setRevisandoLead(false);
+      return;
+    }
     try {
       const raw = localStorage.getItem(LEAD_STORAGE_KEY);
       if (raw) setLead(JSON.parse(raw));
