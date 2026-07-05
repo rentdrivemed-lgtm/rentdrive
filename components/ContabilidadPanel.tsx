@@ -29,6 +29,12 @@ type Factura = {
   marca: string; modelo: string; anio: number; fecha_inicio: string; fecha_fin: string;
 };
 
+type ReservaPendiente = {
+  id: number; fecha_inicio: string; fecha_fin: string; total: number;
+  usuario_nombre: string; marca: string; modelo: string; anio: number;
+  estado?: string; pago_estado?: string;
+};
+
 type LiquidacionFila = {
   reserva_id: number; bruto: number; comision_pct: number; comision_valor: number; neto: number;
   marca: string; modelo: string; anio: number; fecha_inicio: string; fecha_fin: string; usuario_nombre: string;
@@ -65,12 +71,14 @@ export default function ContabilidadPanel() {
 
   // Cotizaciones
   const [cotizaciones, setCotizaciones] = useState<Cotizacion[]>([]);
+  const [reservasSinCotizacion, setReservasSinCotizacion] = useState<ReservaPendiente[]>([]);
   const [cargandoCot, setCargandoCot] = useState(false);
   const [errorCot, setErrorCot] = useState('');
   const [reenviandoId, setReenviandoId] = useState<number | null>(null);
 
   // Facturas
   const [facturas, setFacturas] = useState<Factura[]>([]);
+  const [reservasSinFactura, setReservasSinFactura] = useState<ReservaPendiente[]>([]);
   const [cargandoFac, setCargandoFac] = useState(false);
   const [errorFac, setErrorFac] = useState('');
   const [emitiendoId, setEmitiendoId] = useState<number | null>(null);
@@ -112,6 +120,7 @@ export default function ContabilidadPanel() {
       const d = await res.json().catch(() => ({}));
       if (!res.ok) { setErrorCot('No pudimos cargar las cotizaciones.'); return; }
       setCotizaciones(d.cotizaciones || []);
+      setReservasSinCotizacion(d.reservas_sin_cotizacion || []);
     } catch {
       setErrorCot('Sin conexión — intenta de nuevo.');
     } finally {
@@ -126,6 +135,7 @@ export default function ContabilidadPanel() {
       const d = await res.json().catch(() => ({}));
       if (!res.ok) { setErrorFac('No pudimos cargar las facturas.'); return; }
       setFacturas(d.facturas || []);
+      setReservasSinFactura(d.reservas_sin_factura || []);
     } catch {
       setErrorFac('Sin conexión — intenta de nuevo.');
     } finally {
@@ -355,6 +365,26 @@ export default function ContabilidadPanel() {
       {/* ── COTIZACIONES ── */}
       {subTab === 'cotizaciones' && (
         <div className="space-y-3">
+          {!errorCot && !cargandoCot && reservasSinCotizacion.length > 0 && (
+            <div className="bg-warning/10 border border-warning/25 rounded-2xl p-4 space-y-2">
+              <p className="text-xs font-bold text-warning uppercase tracking-wide">Reservas sin cotización ({reservasSinCotizacion.length})</p>
+              <p className="text-[11px] text-ink/50 -mt-1">Reservas de antes de este módulo, o donde no se generó automáticamente. Genérala manualmente aquí.</p>
+              <div className="space-y-2">
+                {reservasSinCotizacion.map(r => (
+                  <div key={r.id} className="flex items-center justify-between gap-3 bg-surface rounded-xl px-3 py-2.5 border border-border flex-wrap">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-ink truncate">#{r.id} · {r.marca} {r.modelo} {r.anio} · {r.usuario_nombre}</p>
+                      <p className="text-xs text-ink/50">{r.fecha_inicio} → {r.fecha_fin} · {cop(r.total)} · {r.estado}</p>
+                    </div>
+                    <button onClick={() => reenviarCotizacion(r.id)} disabled={reenviandoId === r.id}
+                      className="text-xs font-semibold bg-accent hover:bg-accent-hover text-white px-3 py-1.5 rounded-xl transition disabled:opacity-60 flex-shrink-0">
+                      {reenviandoId === r.id ? 'Generando…' : 'Generar y enviar'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {errorCot ? (
             <div className="text-center py-14 bg-danger/5 rounded-2xl border border-danger/25">
               <p className="text-danger mb-4">{errorCot}</p>
@@ -395,6 +425,26 @@ export default function ContabilidadPanel() {
       {/* ── FACTURAS ── */}
       {subTab === 'facturas' && (
         <div className="space-y-3">
+          {!errorFac && !cargandoFac && reservasSinFactura.length > 0 && (
+            <div className="bg-warning/10 border border-warning/25 rounded-2xl p-4 space-y-2">
+              <p className="text-xs font-bold text-warning uppercase tracking-wide">Reservas pagadas sin factura ({reservasSinFactura.length})</p>
+              <p className="text-[11px] text-ink/50 -mt-1">Ya tienen el pago confirmado pero no se les generó factura (respaldo manual, esto debería pasar solo).</p>
+              <div className="space-y-2">
+                {reservasSinFactura.map(r => (
+                  <div key={r.id} className="flex items-center justify-between gap-3 bg-surface rounded-xl px-3 py-2.5 border border-border flex-wrap">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-ink truncate">#{r.id} · {r.marca} {r.modelo} {r.anio} · {r.usuario_nombre}</p>
+                      <p className="text-xs text-ink/50">{r.fecha_inicio} → {r.fecha_fin} · {cop(r.total)}</p>
+                    </div>
+                    <button onClick={() => emitirFacturaClick(r.id)} disabled={emitiendoId === r.id}
+                      className="text-xs font-semibold bg-accent hover:bg-accent-hover text-white px-3 py-1.5 rounded-xl transition disabled:opacity-60 flex-shrink-0">
+                      {emitiendoId === r.id ? 'Emitiendo…' : 'Emitir factura'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {errorFac ? (
             <div className="text-center py-14 bg-danger/5 rounded-2xl border border-danger/25">
               <p className="text-danger mb-4">{errorFac}</p>

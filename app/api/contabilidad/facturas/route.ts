@@ -18,7 +18,19 @@ export async function GET() {
     ORDER BY f.id DESC LIMIT 200
   `).all();
 
-  return NextResponse.json({ facturas });
+  // Reservas ya pagadas que todavía no tienen factura (el enganche automático
+  // debería cubrir esto siempre, pero se deja como respaldo manual).
+  const reservasSinFactura = db.prepare(`
+    SELECT r.id, r.fecha_inicio, r.fecha_fin, r.total, u.nombre AS usuario_nombre, v.marca, v.modelo, v.anio
+    FROM reservas r
+    JOIN usuarios u ON r.usuario_id = u.id
+    JOIN vehiculos v ON r.vehiculo_id = v.id
+    LEFT JOIN facturas f ON f.reserva_id = r.id
+    WHERE r.pago_estado = 'pagado' AND f.id IS NULL
+    ORDER BY r.id DESC
+  `).all();
+
+  return NextResponse.json({ facturas, reservas_sin_factura: reservasSinFactura });
 }
 
 // Emitir (o reintentar) la factura de una reserva ya pagada — manual, por si el

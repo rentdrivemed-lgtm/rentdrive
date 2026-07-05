@@ -16,7 +16,20 @@ export async function GET() {
     ORDER BY c.id DESC LIMIT 200
   `).all();
 
-  return NextResponse.json({ cotizaciones });
+  // Reservas que todavía no tienen cotización (ej. de antes de este módulo, o si el
+  // enganche automático falló) — para poder generarla manualmente desde el panel.
+  const reservasSinCotizacion = db.prepare(`
+    SELECT r.id, r.fecha_inicio, r.fecha_fin, r.total, r.estado, r.pago_estado,
+           u.nombre AS usuario_nombre, v.marca, v.modelo, v.anio
+    FROM reservas r
+    JOIN usuarios u ON r.usuario_id = u.id
+    JOIN vehiculos v ON r.vehiculo_id = v.id
+    LEFT JOIN cotizaciones c ON c.reserva_id = r.id
+    WHERE c.id IS NULL AND r.estado != 'cancelada'
+    ORDER BY r.id DESC
+  `).all();
+
+  return NextResponse.json({ cotizaciones, reservas_sin_cotizacion: reservasSinCotizacion });
 }
 
 // Reenviar (o generar, si por algún motivo no existe) la cotización de una reserva.
