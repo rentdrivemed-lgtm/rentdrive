@@ -40,6 +40,7 @@ function RegistroForm() {
   const [cuenta, setCuenta] = useState({
     nombre: '', correo: '', password: '', confirmar: '',
   });
+  const [codigoReferido, setCodigoReferido] = useState('');
   const [perfil, setPerfil] = useState({
     tipo_documento: 'cedula',
     documento_identidad: '',
@@ -60,6 +61,8 @@ function RegistroForm() {
     const celular = searchParams.get('celular');
     if (nombre || correo) setCuenta(c => ({ ...c, nombre: nombre || c.nombre, correo: correo || c.correo }));
     if (celular) setPerfil(p => ({ ...p, celular }));
+    const ref = searchParams.get('ref');
+    if (ref) setCodigoReferido(ref.toUpperCase());
   }, [searchParams]);
 
   /* ── Validación paso 1 ── */
@@ -104,7 +107,7 @@ function RegistroForm() {
       const res = await fetch('/api/auth/registro', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...cuenta, ...perfil, rol }),
+        body: JSON.stringify({ ...cuenta, ...perfil, rol, codigo_referido: codigoReferido }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setError(data.error || 'No pudimos completar el registro. Intenta de nuevo.'); return; }
@@ -230,6 +233,15 @@ function RegistroForm() {
                 {cuenta.confirmar && cuenta.confirmar === cuenta.password && (
                   <p className="text-[11px] text-success mt-1">✓ Las contraseñas coinciden</p>
                 )}
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-ink/60 mb-1.5 uppercase tracking-wide">
+                  Código de referido <span className="font-normal text-ink/40 normal-case">(opcional)</span>
+                </label>
+                <input type="text" placeholder="Ej. CAMILA4821"
+                  className={inputCls} value={codigoReferido}
+                  onChange={e => setCodigoReferido(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))} />
+                <p className="text-[11px] text-ink/50 mt-1">Si un amigo te invitó, pon su código y ambos ganan un descuento.</p>
               </div>
               <button type="button" onClick={avanzar}
                 className="w-full flex items-center justify-center gap-2 bg-accent hover:bg-accent-hover text-white py-3 rounded-xl font-bold transition shadow-md shadow-accent/20 mt-2">

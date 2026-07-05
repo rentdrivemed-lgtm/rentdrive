@@ -3,6 +3,7 @@ import { getDb } from '@/lib/db';
 import { signToken, UserPayload } from '@/lib/auth';
 import { enviarCorreo } from '@/lib/email';
 import { validarCelular, validarDireccion, validarDocumentoIdentidad, PAIS_TEL_DEFAULT } from '@/lib/validacion';
+import { asignarCodigoReferido, vincularReferido } from '@/lib/referidos';
 import bcrypt from 'bcryptjs';
 
 function calcularEdad(fechaNac: string): number {
@@ -21,7 +22,7 @@ export async function POST(req: NextRequest) {
     nombre, correo, password, rol,
     tipo_documento, documento_identidad, fecha_nacimiento,
     celular, celular_indicativo, direccion, ciudad, numero_licencia,
-    emergencia_nombre, emergencia_tel,
+    emergencia_nombre, emergencia_tel, codigo_referido,
   } = await req.json();
 
   if (!nombre || !correo || !password) {
@@ -76,12 +77,20 @@ export async function POST(req: NextRequest) {
     contacto_emergencia,
   );
 
+  const nuevoId = Number(result.lastInsertRowid);
   const payload: UserPayload = {
-    id: Number(result.lastInsertRowid),
+    id: nuevoId,
     nombre,
     correo,
     rol: rolFinal as UserPayload['rol'],
   };
+
+  try {
+    asignarCodigoReferido(db, nuevoId, nombre);
+    if (codigo_referido) vincularReferido(db, nuevoId, String(codigo_referido));
+  } catch (e) {
+    console.error('[registro] No se pudo procesar el código de referido:', e instanceof Error ? e.message : e);
+  }
 
   try {
     const rolLabel = rolFinal === 'propietario' ? 'propietario' : 'usuario';

@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { validarCelular, validarDireccion, validarDocumentoIdentidad } from '@/lib/validacion';
+import { referidoHabilitado } from '@/lib/referidos';
 
-const CAMPOS_SELECT = 'tipo_documento, documento_identidad, celular, celular_indicativo, direccion, ciudad, cedula_url, cedula_url_dorso, banco, numero_cuenta, certificado_bancario_url';
+const CAMPOS_SELECT = 'tipo_documento, documento_identidad, celular, celular_indicativo, direccion, ciudad, cedula_url, cedula_url_dorso, banco, numero_cuenta, certificado_bancario_url, codigo_referido, creditos_referido';
 
 export async function GET() {
   const user = await getCurrentUser();
@@ -13,7 +14,7 @@ export async function GET() {
   const db = getDb();
   const fila = db.prepare(`SELECT ${CAMPOS_SELECT} FROM usuarios WHERE id = ?`).get(user.id) as Record<string, unknown> | undefined;
 
-  return NextResponse.json({ user: { ...user, ...(fila || {}) } });
+  return NextResponse.json({ user: { ...user, ...(fila || {}), referido_habilitado: referidoHabilitado(db) } });
 }
 
 // Campos que el usuario puede editar de su propio perfil.

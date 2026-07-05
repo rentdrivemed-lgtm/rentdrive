@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { IconCar, IconSearch, IconCalendar, IconX } from '@/components/Icons';
 import { fechaHoraRecogida, calcularPoliticaCancelacion } from '@/lib/cancelacion';
+import ReferidosCard from '@/components/ReferidosCard';
 
 type Reserva = {
   id: number; vehiculo_id: number; marca: string; modelo: string; anio: number;
@@ -87,6 +88,10 @@ export default function DashboardUsuario() {
           className="flex items-center gap-2 bg-accent hover:bg-accent-hover text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition shadow-sm shadow-accent/20">
           <IconSearch size={15} /> Buscar vehículos
         </Link>
+      </div>
+
+      <div className="mb-8">
+        <ReferidosCard />
       </div>
 
       {/* Stats rápidas */}

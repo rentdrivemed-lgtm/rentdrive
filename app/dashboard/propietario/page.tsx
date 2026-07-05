@@ -7,6 +7,7 @@ import DocUploadDoble from '@/components/DocUploadDoble';
 import TelefonoInput from '@/components/TelefonoInput';
 import { validarCelular, validarDocumentoIdentidad, PAIS_TEL_DEFAULT } from '@/lib/validacion';
 import CalendarioDisponibilidad from '@/components/CalendarioDisponibilidad';
+import ReferidosCard from '@/components/ReferidosCard';
 import CalendarioReservas, { type ReservaCalendario } from '@/components/CalendarioReservas';
 import { IconCar, IconCalendar, IconChat, IconCheck, IconArrowL } from '@/components/Icons';
 
@@ -423,6 +424,12 @@ export default function DashboardPropietario() {
         <h1 className="text-2xl font-bold text-ink">Panel Propietario</h1>
         <p className="text-ink/50 text-sm">{user.nombre} · {user.correo}</p>
       </div>
+
+      {tab !== 'editar' && (
+        <div className="mb-6">
+          <ReferidosCard />
+        </div>
+      )}
 
       {/* Tabs (hide in edit mode) */}
       {tab !== 'editar' && (

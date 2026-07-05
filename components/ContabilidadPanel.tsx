@@ -94,7 +94,10 @@ export default function ContabilidadPanel() {
   const [liqMsg, setLiqMsg] = useState('');
 
   // Config
-  const [config, setConfig] = useState({ comision_plataforma_pct: '', empresa_nombre: '', empresa_nit: '' });
+  const [config, setConfig] = useState({
+    comision_plataforma_pct: '', empresa_nombre: '', empresa_nit: '',
+    referido_habilitado: '', referido_recompensa_referrer: '', referido_recompensa_referido: '',
+  });
   const [cargandoConfig, setCargandoConfig] = useState(false);
   const [guardandoConfig, setGuardandoConfig] = useState(false);
   const [configMsg, setConfigMsg] = useState('');
@@ -168,6 +171,9 @@ export default function ContabilidadPanel() {
           comision_plataforma_pct: d.config?.comision_plataforma_pct || '',
           empresa_nombre: d.config?.empresa_nombre || '',
           empresa_nit: d.config?.empresa_nit || '',
+          referido_habilitado: d.config?.referido_habilitado || '',
+          referido_recompensa_referrer: d.config?.referido_recompensa_referrer || '',
+          referido_recompensa_referido: d.config?.referido_recompensa_referido || '',
         });
       }
     } catch { /* silencioso — se puede reintentar cambiando de pestaña */ }
@@ -232,6 +238,16 @@ export default function ContabilidadPanel() {
       const pct = Number(config.comision_plataforma_pct);
       if (config.comision_plataforma_pct && (!Number.isFinite(pct) || pct <= 0 || pct >= 1)) {
         setConfigMsg('La comisión debe ser un número entre 0 y 1 (ej. 0.33 para 33%).');
+        return;
+      }
+      const rRef = Number(config.referido_recompensa_referrer);
+      const rInv = Number(config.referido_recompensa_referido);
+      if (config.referido_recompensa_referrer && (!Number.isFinite(rRef) || rRef < 0)) {
+        setConfigMsg('La recompensa para quien invita debe ser un número mayor o igual a 0.');
+        return;
+      }
+      if (config.referido_recompensa_referido && (!Number.isFinite(rInv) || rInv < 0)) {
+        setConfigMsg('La recompensa para el invitado debe ser un número mayor o igual a 0.');
         return;
       }
       const res = await fetch('/api/config', {
@@ -630,6 +646,37 @@ export default function ContabilidadPanel() {
                 ? '✅ Configurado — las facturas se emiten de verdad ante la DIAN.'
                 : '⚠ No configurado — faltan las variables DATAICO_ACCOUNT_ID y DATAICO_AUTH_TOKEN en el servidor. Mientras tanto, las facturas se generan como borrador local (sin validez tributaria).'}
             </p>
+          </div>
+
+          <div className="bg-surface-2 rounded-2xl border border-border p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-bold text-ink/60 uppercase tracking-wide">🎁 Programa de referidos</p>
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" checked={config.referido_habilitado === 'true'}
+                  onChange={e => setConfig(c => ({ ...c, referido_habilitado: e.target.checked ? 'true' : 'false' }))} />
+                <span className="text-ink/70">Activo</span>
+              </label>
+            </div>
+            <p className="text-[11px] text-ink/40 -mt-2">
+              Quien invita gana su recompensa solo cuando su referido completa su primera reserva pagada (evita premiar cuentas falsas). El invitado gana su descuento apenas se registra con el código.
+            </p>
+            <div>
+              <label className="text-[11px] text-ink/50 block mb-1">Recompensa para quien invita (COP)</label>
+              <input value={config.referido_recompensa_referrer} onChange={e => setConfig(c => ({ ...c, referido_recompensa_referrer: e.target.value.replace(/\D/g, '') }))}
+                placeholder="30000" className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+            </div>
+            <div>
+              <label className="text-[11px] text-ink/50 block mb-1">Descuento de bienvenida para el invitado (COP)</label>
+              <input value={config.referido_recompensa_referido} onChange={e => setConfig(c => ({ ...c, referido_recompensa_referido: e.target.value.replace(/\D/g, '') }))}
+                placeholder="30000" className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+            </div>
+            <div className="flex items-center gap-3">
+              <button onClick={guardarConfig} disabled={guardandoConfig || cargandoConfig}
+                className="bg-accent hover:bg-accent-hover text-white px-4 py-2 rounded-xl font-semibold text-sm transition disabled:opacity-60">
+                {guardandoConfig ? 'Guardando…' : 'Guardar'}
+              </button>
+              {configMsg && <span className={`text-xs ${configMsg.startsWith('✓') ? 'text-success' : 'text-danger'}`}>{configMsg}</span>}
+            </div>
           </div>
         </div>
       )}

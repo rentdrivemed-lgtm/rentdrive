@@ -8,6 +8,7 @@ import {
   fechaHoraRecogida, calcularPoliticaCancelacion, esNoShowAplicable, type Lugar,
 } from '@/lib/cancelacion';
 import { procesarPagoConfirmado } from '@/lib/contabilidad';
+import { procesarRecompensaReferido } from '@/lib/referidos';
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
@@ -87,13 +88,19 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     }
   }
 
-  // Al confirmarse el pago (nunca antes): factura + liquidación al propietario.
-  // Aislado en try/catch — un fallo de facturación no debe romper la confirmación del pago.
+  // Al confirmarse el pago (nunca antes): factura + liquidación al propietario,
+  // y si el cliente fue referido, la recompensa a quien lo invitó.
+  // Aislado en try/catch — un fallo aquí no debe romper la confirmación del pago.
   if (reserva.pago_estado !== 'pagado' && body.pago_estado === 'pagado') {
     try {
       await procesarPagoConfirmado(db, Number(id));
     } catch (e) {
       console.error('[contabilidad] No se pudo procesar el pago confirmado:', e instanceof Error ? e.message : e);
+    }
+    try {
+      procesarRecompensaReferido(db, Number(reserva.usuario_id), Number(id));
+    } catch (e) {
+      console.error('[referidos] No se pudo procesar la recompensa:', e instanceof Error ? e.message : e);
     }
   }
 

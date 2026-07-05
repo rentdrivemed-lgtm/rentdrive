@@ -4,6 +4,7 @@ import { getCurrentUser } from '@/lib/auth';
 import { calcularRecargo, lugarValido, type Lugar } from '@/lib/lugares';
 import { enviarCorreo } from '@/lib/email';
 import { generarCotizacion } from '@/lib/contabilidad';
+import { consumirCreditos } from '@/lib/referidos';
 
 export const dynamic = 'force-dynamic';
 
@@ -89,7 +90,7 @@ export async function POST(req: NextRequest) {
     vehiculo_id, fecha_inicio, fecha_fin,
     documento_id_url, documento_id_url_dorso, documento_es_pasaporte,
     licencia_url, licencia_url_dorso,
-    firma_contrato, recogida, entrega,
+    firma_contrato, recogida, entrega, usar_creditos,
   } = await req.json();
   if (!vehiculo_id || !fecha_inicio || !fecha_fin) {
     return NextResponse.json({ error: 'Faltan datos' }, { status: 400 });
@@ -134,22 +135,27 @@ export async function POST(req: NextRequest) {
 
   const dias = Math.ceil((new Date(fecha_fin).getTime() - new Date(fecha_inicio).getTime()) / (1000 * 60 * 60 * 24));
   const recargo = calcularRecargo(recogidaL, entregaL); // autoritativo: server-side
-  const total = dias * Number(vehiculo.precio_dia) + recargo;
+  const totalBruto = dias * Number(vehiculo.precio_dia) + recargo;
+
+  // Créditos de referidos: se descuentan del servidor (nunca se confía en un monto
+  // que mande el cliente), y solo hasta el saldo real disponible.
+  const creditosUsados = usar_creditos ? consumirCreditos(db, user.id, totalBruto) : 0;
+  const total = totalBruto - creditosUsados;
 
   const result = db.prepare(`
     INSERT INTO reservas (
       usuario_id, vehiculo_id, fecha_inicio, fecha_fin, total, pago_estado, estado,
       documento_id_url, documento_id_url_dorso, documento_es_pasaporte,
       licencia_url, licencia_url_dorso,
-      firma_contrato, recogida, entrega, recargo
+      firma_contrato, recogida, entrega, recargo, creditos_usados
     )
-    VALUES (?, ?, ?, ?, ?, 'pendiente', 'pendiente', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, 'pendiente', 'pendiente', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     user.id, Number(vehiculo_id), fecha_inicio, fecha_fin, total,
     documento_id_url || '', documento_id_url_dorso || '', documento_es_pasaporte ? 1 : 0,
     licencia_url || '', licencia_url_dorso || '',
     firma_contrato || '{}',
-    JSON.stringify(recogidaL), JSON.stringify(entregaL), recargo,
+    JSON.stringify(recogidaL), JSON.stringify(entregaL), recargo, creditosUsados,
   );
 
   try {
@@ -167,5 +173,5 @@ export async function POST(req: NextRequest) {
     console.error('[contabilidad] No se pudo generar la cotización:', e instanceof Error ? e.message : e);
   }
 
-  return NextResponse.json({ id: result.lastInsertRowid, total, recargo }, { status: 201 });
+  return NextResponse.json({ id: result.lastInsertRowid, total, recargo, creditos_usados: creditosUsados }, { status: 201 });
 }

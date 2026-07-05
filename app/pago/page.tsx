@@ -10,7 +10,7 @@ type Vehiculo = {
   id: number; marca: string; modelo: string; anio: number;
   tipo: string; precio_dia: number; ubicacion: string;
 };
-type User = { id: number; nombre: string; rol: string };
+type User = { id: number; nombre: string; rol: string; creditos_referido?: number };
 
 function detectarTarjeta(num: string) {
   const n = num.replace(/\s/g, '');
@@ -65,6 +65,7 @@ function PagoContent() {
   const [nombreTarjeta, setNombreTarjeta] = useState('');
   const [vence, setVence] = useState('');
   const [cvv, setCvv] = useState('');
+  const [usarCreditos, setUsarCreditos] = useState(true);
 
   const cargarInicial = () => {
     setErrorCarga('');
@@ -111,7 +112,10 @@ function PagoContent() {
   ));
   const recargo = calcularRecargo(recogida, entrega);
   const subtotal = vehiculo ? dias * vehiculo.precio_dia : 0;
-  const total = subtotal + recargo;
+  const totalBruto = subtotal + recargo;
+  const creditosDisponibles = user?.creditos_referido || 0;
+  const creditosAplicados = usarCreditos ? Math.min(creditosDisponibles, totalBruto) : 0;
+  const total = totalBruto - creditosAplicados;
   const tipoTarj = detectarTarjeta(numero);
   const bgTarjeta = tipoTarj === 'Visa'
     ? 'from-brand to-brand/80'
@@ -151,6 +155,7 @@ function PagoContent() {
           documento_es_pasaporte: esPasaporte,
           licencia_url: licenciaUrl,
           licencia_url_dorso: licenciaUrlDorso,
+          usar_creditos: usarCreditos,
           recogida,
           entrega,
           firma_contrato: JSON.stringify({
@@ -262,11 +267,22 @@ function PagoContent() {
             </div>
           </div>
 
-          {/* Desglose con recargo */}
-          {recargo > 0 && (
+          {/* Desglose con recargo y créditos */}
+          {(recargo > 0 || creditosDisponibles > 0) && (
             <div className="mt-2 pt-2 border-t border-border text-xs space-y-0.5">
               <div className="flex justify-between text-ink/50"><span>Subtotal ({dias} día{dias !== 1 ? 's' : ''})</span><span>${subtotal.toLocaleString('es-CO')}</span></div>
-              <div className="flex justify-between text-ink/50"><span>Recargo aeropuerto</span><span>+${recargo.toLocaleString('es-CO')}</span></div>
+              {recargo > 0 && (
+                <div className="flex justify-between text-ink/50"><span>Recargo aeropuerto</span><span>+${recargo.toLocaleString('es-CO')}</span></div>
+              )}
+              {creditosDisponibles > 0 && (
+                <label className="flex items-center justify-between gap-2 text-success cursor-pointer">
+                  <span className="flex items-center gap-1.5">
+                    <input type="checkbox" checked={usarCreditos} onChange={e => setUsarCreditos(e.target.checked)} />
+                    Usar mis créditos (tienes ${creditosDisponibles.toLocaleString('es-CO')})
+                  </span>
+                  {creditosAplicados > 0 && <span>−${creditosAplicados.toLocaleString('es-CO')}</span>}
+                </label>
+              )}
               <div className="flex justify-between font-bold text-ink"><span>Total</span><span>${total.toLocaleString('es-CO')}</span></div>
             </div>
           )}
