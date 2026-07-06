@@ -4,10 +4,11 @@ import Link from 'next/link';
 import { IconPin, IconArrowR, IconStar } from '@/components/Icons';
 import { useSession } from '@/contexts/SessionContext';
 import { useLang } from '@/contexts/LanguageContext';
+import { tieneAltaDisponibilidadEsteMes } from '@/lib/disponibilidad-reglas';
 
 const T = {
-  es: { precioPorAsignar: 'Precio por asignar', dia: '/día', enRevision: 'En revisión', verMas: 'Ver más' },
-  en: { precioPorAsignar: 'Price to be set', dia: '/day', enRevision: 'Under review', verMas: 'View more' },
+  es: { precioPorAsignar: 'Precio por asignar', dia: '/día', enRevision: 'En revisión', verMas: 'Ver más', altaDisp: 'Alta disponibilidad' },
+  en: { precioPorAsignar: 'Price to be set', dia: '/day', enRevision: 'Under review', verMas: 'View more', altaDisp: 'High availability' },
 };
 
 type Vehiculo = {
@@ -22,6 +23,7 @@ type Vehiculo = {
   fotos: string;
   propietario_nombre?: string;
   en_vitrina?: number;
+  dias_disponibles?: string;
 };
 
 export default function VehiculoCard({ v }: { v: Vehiculo }) {
@@ -33,6 +35,9 @@ export default function VehiculoCard({ v }: { v: Vehiculo }) {
   let fotos: string[] = [];
   try { fotos = JSON.parse(v.fotos); } catch { fotos = []; }
   const foto = fotos[0] || 'https://images.unsplash.com/photo-1503376780353-7e6692767b70?w=400';
+  let diasDisp: string[] = [];
+  try { diasDisp = JSON.parse(v.dias_disponibles || '[]'); } catch { diasDisp = []; }
+  const altaDisponibilidad = tieneAltaDisponibilidadEsteMes(diasDisp);
 
   const toggleVitrina = async () => {
     const nuevo = !enVitrina;
@@ -76,7 +81,14 @@ export default function VehiculoCard({ v }: { v: Vehiculo }) {
       </div>
       <div className="p-4">
         <div className="mb-2">
-          <h3 className="font-bold text-base text-ink leading-tight">{v.marca} {v.modelo}</h3>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <h3 className="font-bold text-base text-ink leading-tight">{v.marca} {v.modelo}</h3>
+            {altaDisponibilidad && (
+              <span title={c.altaDisp} className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-success/15 text-success border border-success/30 whitespace-nowrap">
+                ⭐ {c.altaDisp}
+              </span>
+            )}
+          </div>
           <p className="text-ink/50 text-xs mt-0.5 flex items-center gap-1">
             <IconPin size={11} /> {v.ubicacion} · {v.anio}
           </p>

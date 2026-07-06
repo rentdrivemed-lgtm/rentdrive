@@ -10,6 +10,7 @@ import { IconArrowL, IconCalendar, IconPin, IconKey } from '@/components/Icons';
 import {
   LUGAR_VACIO, calcularRecargo, lugarValido, cargarLugares, guardarLugares, guardarDestino, type Lugar,
 } from '@/lib/lugares';
+import { MIN_NOCHES_RESERVA } from '@/lib/disponibilidad-reglas';
 
 const T = {
   es: {
@@ -21,6 +22,7 @@ const T = {
     noDisponibleAhora: 'No disponible', precioNoDisponible: 'Precio no disponible aún',
     irAlPago: 'Ir al pago', iniciarSesion: 'Iniciar sesión para reservar',
     msgInactivo: 'Este vehículo no está disponible actualmente.', msgFechas: 'Selecciona las fechas en el calendario',
+    msgMinNoches: `El alquiler mínimo es de ${MIN_NOCHES_RESERVA} noches.`,
     msgRecogida: 'Completa el lugar y la hora de recogida.', msgEntrega: 'Completa el lugar y la hora de entrega.',
     dia1: (n: number) => `${n} día${n !== 1 ? 's' : ''}`,
     errorVehiculo: 'No pudimos cargar este vehículo. Revisa tu conexión.', reintentar: 'Reintentar',
@@ -34,6 +36,7 @@ const T = {
     noDisponibleAhora: 'Not available', precioNoDisponible: 'Price not available yet',
     irAlPago: 'Go to payment', iniciarSesion: 'Sign in to book',
     msgInactivo: 'This vehicle is not currently available.', msgFechas: 'Select the dates on the calendar',
+    msgMinNoches: `The minimum rental is ${MIN_NOCHES_RESERVA} nights.`,
     msgRecogida: 'Complete the pickup place and time.', msgEntrega: 'Complete the drop-off place and time.',
     dia1: (n: number) => `${n} day${n !== 1 ? 's' : ''}`,
     errorVehiculo: 'We could not load this vehicle. Check your connection.', reintentar: 'Retry',
@@ -93,6 +96,7 @@ export default function VehiculoDetalle() {
   const reservar = () => {
     if (carInactivo) { setMsg(c.msgInactivo); return; }
     if (!fechaInicio || !fechaFin || dias <= 0) { setMsg(c.msgFechas); return; }
+    if (dias < MIN_NOCHES_RESERVA) { setMsg(c.msgMinNoches); return; }
     if (!lugarValido(recogida)) { setMsg(c.msgRecogida); return; }
     if (!lugarValido(entrega))  { setMsg(c.msgEntrega); return; }
     guardarLugares(recogida, entrega);

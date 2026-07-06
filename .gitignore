@@ -32,3 +32,9 @@ Thumbs.db
 
 # Documentos internos de trabajo (agentes y bitácora) — solo locales
 _agentes/
+
+# Documentos de negocio (pitch decks, modelos financieros, propuestas) —
+# sensibles, nunca deben ir a un repo de código.
+*.pptx
+*.xlsx
+*.docx

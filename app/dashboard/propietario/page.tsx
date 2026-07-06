@@ -7,6 +7,7 @@ import DocUploadDoble from '@/components/DocUploadDoble';
 import TelefonoInput from '@/components/TelefonoInput';
 import { validarCelular, validarDocumentoIdentidad, PAIS_TEL_DEFAULT } from '@/lib/validacion';
 import CalendarioDisponibilidad from '@/components/CalendarioDisponibilidad';
+import DisponibilidadReglas from '@/components/DisponibilidadReglas';
 import ReferidosCard from '@/components/ReferidosCard';
 import CalendarioReservas, { type ReservaCalendario } from '@/components/CalendarioReservas';
 import { IconCar, IconCalendar, IconChat, IconCheck, IconArrowL } from '@/components/Icons';
@@ -124,6 +125,7 @@ export default function DashboardPropietario() {
   // Inline quick-edits in vehicle cards
   const [calTab, setCalTab] = useState<number | null>(null);
   const [placaMsg, setPlacaMsg] = useState<Record<number, string>>({});
+  const [dispMsg, setDispMsg] = useState<Record<number, string>>({});
 
   // Perfil
   const [perfil, setPerfil] = useState({
@@ -238,11 +240,22 @@ export default function DashboardPropietario() {
   };
 
   const guardarDias = async (vid: number, dias: string[]) => {
-    await fetch(`/api/vehiculos/${vid}`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dias_disponibles: JSON.stringify(dias) }),
-    });
-    setVehiculos(vs => vs.map(v => v.id === vid ? { ...v, dias_disponibles: JSON.stringify(dias) } : v));
+    setDispMsg(m => ({ ...m, [vid]: '' }));
+    try {
+      const res = await fetch(`/api/vehiculos/${vid}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dias_disponibles: JSON.stringify(dias) }),
+      });
+      if (res.ok) {
+        setVehiculos(vs => vs.map(v => v.id === vid ? { ...v, dias_disponibles: JSON.stringify(dias) } : v));
+      } else {
+        const d = await res.json().catch(() => ({}));
+        const detalle = (d as { problemas?: { detalle: string }[] }).problemas?.[0]?.detalle;
+        setDispMsg(m => ({ ...m, [vid]: detalle || (d as { error?: string }).error || 'No se pudo guardar ese calendario.' }));
+      }
+    } catch {
+      setDispMsg(m => ({ ...m, [vid]: 'Sin conexión — intenta de nuevo.' }));
+    }
   };
 
   // ── Open vehicle editor ────────────────────────────────────────────────────
@@ -261,16 +274,18 @@ export default function DashboardPropietario() {
   };
 
   // ── Section savers in edit mode ────────────────────────────────────────────
-  const guardarSeccion = async (seccion: string, body: Record<string, unknown>) => {
-    if (!vehiculoEditandoId || !user) return;
+  const guardarSeccion = async (seccion: string, body: Record<string, unknown>): Promise<boolean> => {
+    if (!vehiculoEditandoId || !user) return false;
     setGuardandoSeccion(g => ({ ...g, [seccion]: true }));
     setSeccionMsg(m => ({ ...m, [seccion]: '' }));
+    let exito = false;
     try {
       const res = await fetch(`/api/vehiculos/${vehiculoEditandoId}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
       if (res.ok) {
+        exito = true;
         setSeccionMsg(m => ({ ...m, [seccion]: '✓ Guardado' }));
         const vs = await cargarVehiculos(user.id);
         const vAct = vs.find(v => v.id === vehiculoEditandoId);
@@ -286,6 +301,7 @@ export default function DashboardPropietario() {
       setSeccionMsg(m => ({ ...m, [seccion]: 'Error de red' }));
     }
     setGuardandoSeccion(g => ({ ...g, [seccion]: false }));
+    return exito;
   };
 
   // ── Publish new vehicle ────────────────────────────────────────────────────
@@ -544,10 +560,14 @@ export default function DashboardPropietario() {
 
                 {/* Inline calendar */}
                 {editando && (
-                  <div className="mt-4 pt-4 border-t border-border">
-                    <p className="text-sm font-medium text-ink/70 mb-3">
+                  <div className="mt-4 pt-4 border-t border-border space-y-3">
+                    <p className="text-sm font-medium text-ink/70">
                       Marca los días en que tu vehículo estará disponible:
                     </p>
+                    <DisponibilidadReglas dias={dias} />
+                    {dispMsg[v.id] && (
+                      <p className="text-xs text-danger bg-danger/10 border border-danger/25 rounded-xl px-3 py-2">{dispMsg[v.id]}</p>
+                    )}
                     <CalendarioDisponibilidad
                       value={dias}
                       onChange={nuevos => guardarDias(v.id, nuevos)}
@@ -863,11 +883,17 @@ export default function DashboardPropietario() {
                   <span className="text-xs text-success font-normal">({editDias.length} días)</span>
                 )}
               </h3>
+              <div className="mb-3">
+                <DisponibilidadReglas dias={editDias} />
+              </div>
               <CalendarioDisponibilidad
                 value={editDias}
                 onChange={async (dias) => {
+                  const anterior = editDias;
                   setEditDias(dias);
-                  await guardarSeccion('dias', { dias_disponibles: JSON.stringify(dias) });
+                  const ok = await guardarSeccion('dias', { dias_disponibles: JSON.stringify(dias) });
+                  // Si el servidor rechazó el cambio, no dejamos el checkbox mostrando algo que no se guardó.
+                  if (!ok) setEditDias(anterior);
                 }}
                 placa={editForm.placa}
                 reservedDates={reservasDatesVehiculo(vehiculoEditandoId!)}

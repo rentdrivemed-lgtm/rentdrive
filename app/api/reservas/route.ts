@@ -5,6 +5,7 @@ import { calcularRecargo, lugarValido, type Lugar } from '@/lib/lugares';
 import { enviarCorreo } from '@/lib/email';
 import { generarCotizacion } from '@/lib/contabilidad';
 import { consumirCreditos } from '@/lib/referidos';
+import { MIN_NOCHES_RESERVA } from '@/lib/disponibilidad-reglas';
 
 export const dynamic = 'force-dynamic';
 
@@ -94,6 +95,10 @@ export async function POST(req: NextRequest) {
   } = await req.json();
   if (!vehiculo_id || !fecha_inicio || !fecha_fin) {
     return NextResponse.json({ error: 'Faltan datos' }, { status: 400 });
+  }
+  const nochesSolicitadas = Math.ceil((new Date(fecha_fin).getTime() - new Date(fecha_inicio).getTime()) / 86400000);
+  if (nochesSolicitadas < MIN_NOCHES_RESERVA) {
+    return NextResponse.json({ error: `El alquiler mínimo es de ${MIN_NOCHES_RESERVA} noches.` }, { status: 400 });
   }
   if (!documento_id_url) return NextResponse.json({ error: 'Debes subir tu documento de identidad.' }, { status: 400 });
   if (!documento_es_pasaporte && !documento_id_url_dorso) return NextResponse.json({ error: 'Falta el dorso de tu documento de identidad.' }, { status: 400 });

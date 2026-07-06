@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
 import { enviarCorreo } from '@/lib/email';
+import { tieneAltaDisponibilidadEsteMes } from '@/lib/disponibilidad-reglas';
 
 function datesInRange(start: string, end: string): string[] {
   const dates: string[] = [];
@@ -64,7 +65,19 @@ export async function GET(req: NextRequest) {
     });
   }
 
+  // Boost de orden: vehículos con >80% de disponibilidad este mes aparecen primero
+  // (mismo criterio de "alta disponibilidad" que ve el propietario en su calendario).
+  vehiculos.sort((a, b) => {
+    const altaA = tieneAltaDisponibilidadEsteMes(parseDias(a.dias_disponibles as string)) ? 1 : 0;
+    const altaB = tieneAltaDisponibilidadEsteMes(parseDias(b.dias_disponibles as string)) ? 1 : 0;
+    return altaB - altaA;
+  });
+
   return NextResponse.json({ vehiculos });
+}
+
+function parseDias(json: string | undefined): string[] {
+  try { return JSON.parse(json || '[]'); } catch { return []; }
 }
 
 export async function POST(req: NextRequest) {
