@@ -254,6 +254,25 @@ function initDb(db: Database.Database) {
       acreditado_en TEXT DEFAULT '',
       created_at TEXT DEFAULT (datetime('now', 'localtime'))
     );
+
+    CREATE TABLE IF NOT EXISTS conversaciones_soporte (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      solicitante_id INTEGER NOT NULL UNIQUE REFERENCES usuarios(id),
+      solicitante_rol TEXT NOT NULL CHECK(solicitante_rol IN ('propietario','usuario')),
+      estado TEXT DEFAULT 'ia' CHECK(estado IN ('ia','escalada','resuelta')),
+      motivo_escalada TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now', 'localtime')),
+      actualizado_en TEXT DEFAULT (datetime('now', 'localtime'))
+    );
+
+    CREATE TABLE IF NOT EXISTS mensajes_soporte (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      conversacion_id INTEGER NOT NULL REFERENCES conversaciones_soporte(id),
+      remitente_tipo TEXT NOT NULL CHECK(remitente_tipo IN ('solicitante','admin','ia')),
+      remitente_admin_id INTEGER REFERENCES usuarios(id),
+      contenido TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now', 'localtime'))
+    );
   `);
 
   try { db.exec("ALTER TABLE vehiculos ADD COLUMN dias_disponibles TEXT DEFAULT '[]'"); } catch { /* ya existe */ }

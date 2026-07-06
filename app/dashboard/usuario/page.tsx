@@ -84,10 +84,16 @@ export default function DashboardUsuario() {
           <h1 className="text-2xl font-bold text-ink">Hola, {user.nombre}</h1>
           <p className="text-ink/50 text-sm mt-0.5">{user.correo}</p>
         </div>
-        <Link href="/"
-          className="flex items-center gap-2 bg-accent hover:bg-accent-hover text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition shadow-sm shadow-accent/20">
-          <IconSearch size={15} /> Buscar vehículos
-        </Link>
+        <div className="flex gap-2 flex-wrap">
+          <Link href="/soporte"
+            className="flex items-center gap-2 border border-border text-ink/70 hover:text-ink hover:border-accent/40 px-5 py-2.5 rounded-xl text-sm font-semibold transition">
+            💬 Soporte
+          </Link>
+          <Link href="/"
+            className="flex items-center gap-2 bg-accent hover:bg-accent-hover text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition shadow-sm shadow-accent/20">
+            <IconSearch size={15} /> Buscar vehículos
+          </Link>
+        </div>
       </div>
 
       <div className="mb-8">

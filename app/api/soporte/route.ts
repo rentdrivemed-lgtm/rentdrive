@@ -1,0 +1,103 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { getDb } from '@/lib/db';
+import { getCurrentUser } from '@/lib/auth';
+import { obtenerOCrearConversacion, cargarHistorialSoporte, responderMensajeSoporte } from '@/lib/soporte-agente';
+import { tieneClaveAnthropic } from '@/lib/anthropic';
+
+export const dynamic = 'force-dynamic';
+
+// GET — propietario/usuario: su propia conversación con historial.
+//       admin: lista de todas las conversaciones de soporte.
+export async function GET() {
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
+
+  const db = getDb();
+
+  if (user.rol === 'admin') {
+    const conversaciones = db.prepare(`
+      SELECT c.*, u.nombre AS solicitante_nombre, u.correo AS solicitante_correo,
+        (SELECT contenido FROM mensajes_soporte WHERE conversacion_id = c.id ORDER BY id DESC LIMIT 1) AS ultimo_mensaje,
+        (SELECT created_at FROM mensajes_soporte WHERE conversacion_id = c.id ORDER BY id DESC LIMIT 1) AS ultimo_at
+      FROM conversaciones_soporte c JOIN usuarios u ON c.solicitante_id = u.id
+      ORDER BY c.actualizado_en DESC
+    `).all();
+    return NextResponse.json({ conversaciones });
+  }
+
+  if (user.rol !== 'propietario' && user.rol !== 'usuario') {
+    return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+  }
+
+  const conv = obtenerOCrearConversacion(user.id, user.rol);
+  const mensajes = db.prepare(
+    'SELECT id, remitente_tipo, remitente_admin_id, contenido, created_at FROM mensajes_soporte WHERE conversacion_id = ? ORDER BY id ASC'
+  ).all(conv.id);
+
+  return NextResponse.json({ conversacion: conv, mensajes, ia_disponible: tieneClaveAnthropic() });
+}
+
+function notificarAdmins(db: ReturnType<typeof getDb>, convId: number, nombre: string, rol: string, motivo: string) {
+  const admins = db.prepare("SELECT id FROM usuarios WHERE rol = 'admin'").all() as { id: number }[];
+  const titulo = '🆘 Chat de soporte necesita intervención';
+  const mensaje = `${nombre} (${rol}) tiene una duda que el asistente no pudo resolver: ${motivo || 'sin detalle'}`;
+  const insN = db.prepare('INSERT INTO notificaciones (destinatario_id, tipo, titulo, mensaje, referencia_id, referencia_tipo) VALUES (?, ?, ?, ?, ?, ?)');
+  for (const a of admins) insN.run(a.id, 'soporte_escalado', titulo, mensaje, convId, 'soporte');
+}
+
+// POST — el propio solicitante envía un mensaje; corre el asistente y guarda ambos lados.
+export async function POST(req: NextRequest) {
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
+  if (user.rol !== 'propietario' && user.rol !== 'usuario') {
+    return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+  }
+
+  const body = await req.json().catch(() => ({}));
+  const texto = String(body.mensaje || '').trim().slice(0, 2000);
+  if (!texto) return NextResponse.json({ error: 'Escribe un mensaje.' }, { status: 400 });
+
+  const db = getDb();
+  const conv = obtenerOCrearConversacion(user.id, user.rol);
+
+  db.prepare('INSERT INTO mensajes_soporte (conversacion_id, remitente_tipo, contenido) VALUES (?, ?, ?)')
+    .run(conv.id, 'solicitante', texto);
+
+  // Si ya está escalada, un humano la está atendiendo — no dejamos que la IA responda encima.
+  if (conv.estado === 'escalada') {
+    db.prepare("UPDATE conversaciones_soporte SET actualizado_en = datetime('now','localtime') WHERE id = ?").run(conv.id);
+    return NextResponse.json({ ok: true, escalada: true, respuesta: null });
+  }
+
+  if (!tieneClaveAnthropic()) {
+    const respuesta = 'Gracias por tu mensaje. El asistente automático todavía no está activado — un administrador lo va a revisar pronto.';
+    const motivo = 'El asistente de IA no está configurado (falta ANTHROPIC_API_KEY).';
+    db.prepare('INSERT INTO mensajes_soporte (conversacion_id, remitente_tipo, contenido) VALUES (?, ?, ?)').run(conv.id, 'ia', respuesta);
+    db.prepare("UPDATE conversaciones_soporte SET estado = 'escalada', motivo_escalada = ?, actualizado_en = datetime('now','localtime') WHERE id = ?")
+      .run(motivo, conv.id);
+    notificarAdmins(db, conv.id, user.nombre, user.rol, motivo);
+    return NextResponse.json({ ok: true, escalada: true, respuesta });
+  }
+
+  const historial = cargarHistorialSoporte(conv.id);
+  let resultado;
+  try {
+    resultado = await responderMensajeSoporte({ id: user.id, nombre: user.nombre, correo: user.correo, rol: user.rol }, texto, historial);
+  } catch (e) {
+    console.error('[soporte] Error del asistente:', e instanceof Error ? e.message : e);
+    resultado = { respuesta: 'Tuve un problema respondiendo — un administrador va a revisar tu mensaje pronto.', escalar: true, motivo: 'Error técnico del asistente.' };
+  }
+
+  db.prepare('INSERT INTO mensajes_soporte (conversacion_id, remitente_tipo, contenido) VALUES (?, ?, ?)')
+    .run(conv.id, 'ia', resultado.respuesta);
+
+  if (resultado.escalar) {
+    db.prepare("UPDATE conversaciones_soporte SET estado = 'escalada', motivo_escalada = ?, actualizado_en = datetime('now','localtime') WHERE id = ?")
+      .run(resultado.motivo || '', conv.id);
+    notificarAdmins(db, conv.id, user.nombre, user.rol, resultado.motivo || '');
+  } else {
+    db.prepare("UPDATE conversaciones_soporte SET actualizado_en = datetime('now','localtime') WHERE id = ?").run(conv.id);
+  }
+
+  return NextResponse.json({ ok: true, escalada: resultado.escalar, respuesta: resultado.respuesta });
+}

@@ -5,6 +5,7 @@ import CalendarioReservas, { type ReservaCalendario } from '@/components/Calenda
 import OperacionesPanel from '@/components/OperacionesPanel';
 import PicoPlacaConfig from '@/components/PicoPlacaConfig';
 import ContabilidadPanel from '@/components/ContabilidadPanel';
+import SoportePanel from '@/components/SoportePanel';
 import LeadsPropietariosPanel from '@/components/LeadsPropietariosPanel';
 import { parsePicoPlaca, picoPlacaVacio, placaRestringida, type PicoPlaca } from '@/lib/pico-placa';
 import { fechaHoraRecogida, esNoShowAplicable } from '@/lib/cancelacion';
@@ -180,7 +181,7 @@ function ResultadoIA({ res, auto }: { res: VerificacionResultado; auto?: string[
 }
 
 export default function DashboardAdmin() {
-  const [tab, setTab] = useState<'usuarios' | 'vehiculos' | 'reservas' | 'operaciones' | 'contabilidad' | 'mercado' | 'leads' | 'config'>('usuarios');
+  const [tab, setTab] = useState<'usuarios' | 'vehiculos' | 'reservas' | 'operaciones' | 'contabilidad' | 'mercado' | 'leads' | 'soporte' | 'config'>('usuarios');
   const [picoPlaca, setPicoPlaca] = useState<PicoPlaca>(picoPlacaVacio());
   const [usuarios, setUsuarios]   = useState<Usuario[]>([]);
   const [vehiculos, setVehiculos] = useState<Vehiculo[]>([]);
@@ -583,6 +584,7 @@ export default function DashboardAdmin() {
           { key: 'contabilidad', label: '💰 Contabilidad' },
           { key: 'mercado', label: '📊 Mercado' },
           { key: 'leads', label: '🎯 Leads' },
+          { key: 'soporte', label: '💬 Soporte' },
           { key: 'config', label: 'Configuración' },
         ] as const).map(t => (
           <button key={t.key} onClick={() => setTab(t.key)}
@@ -1192,6 +1194,8 @@ export default function DashboardAdmin() {
 
       {/* ── CONFIGURACIÓN (pico y placa) ── */}
       {tab === 'leads' && <LeadsPropietariosPanel />}
+
+      {tab === 'soporte' && <SoportePanel />}
 
       {tab === 'config' && <PicoPlacaConfig />}
 

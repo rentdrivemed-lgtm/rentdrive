@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import FotoUpload from '@/components/FotoUpload';
 import DocUpload from '@/components/DocUpload';
 import DocUploadDoble from '@/components/DocUploadDoble';
@@ -436,9 +437,15 @@ export default function DashboardPropietario() {
       )}
 
       {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-ink">Panel Propietario</h1>
-        <p className="text-ink/50 text-sm">{user.nombre} · {user.correo}</p>
+      <div className="mb-6 flex items-start justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-ink">Panel Propietario</h1>
+          <p className="text-ink/50 text-sm">{user.nombre} · {user.correo}</p>
+        </div>
+        <Link href="/soporte"
+          className="flex items-center gap-2 border border-border text-ink/70 hover:text-ink hover:border-accent/40 px-4 py-2 rounded-xl text-sm font-semibold transition">
+          💬 Soporte
+        </Link>
       </div>
 
       {tab !== 'editar' && (
