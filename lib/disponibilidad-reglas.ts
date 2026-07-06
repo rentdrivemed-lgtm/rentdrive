@@ -158,3 +158,4 @@ export function tieneAltaDisponibilidadEsteMes(diasDisponibles: string[], hoy: D
   const evalua = evaluarDisponibilidad(diasDisponibles, hoy);
   return evalua.meses[0]?.altaDisponibilidad ?? false;
 }
+

@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
-import { evaluarDisponibilidad } from '@/lib/disponibilidad-reglas';
 
 const DOC_KEYS = ['soat', 'tecno', 'tarjeta', 'todo_riesgo'] as const;
 const DOC_LABELS: Record<string, string> = {
@@ -109,20 +108,13 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     return NextResponse.json({ ok: true, documentos_estado: newEstado, documentos_nota: newNota, documentos_revisiones: JSON.stringify(revs) });
   }
 
-  // Reglas de disponibilidad — el propietario sigue controlando su calendario, pero
-  // dentro de los márgenes que hacen posible el escenario realista del negocio (ver
-  // lib/disponibilidad-reglas.ts). Los admins pueden saltárselas si hace falta.
-  if (!isAdmin && body.dias_disponibles !== undefined) {
-    let diasNuevos: string[] = [];
-    try { diasNuevos = JSON.parse(body.dias_disponibles || '[]'); } catch { diasNuevos = []; }
-    const evaluacion = evaluarDisponibilidad(diasNuevos);
-    if (!evaluacion.cumple) {
-      return NextResponse.json({
-        error: 'Ese calendario no cumple las reglas mínimas de disponibilidad.',
-        problemas: evaluacion.problemas,
-      }, { status: 400 });
-    }
-  }
+  // Reglas de disponibilidad (ver lib/disponibilidad-reglas.ts): el propietario
+  // las ve siempre en el panel de su calendario, pero NO se bloquean acá.
+  // El calendario se guarda clic por clic — un propietario que recién empieza a
+  // abrir un mes nuevo (ej. un solo día en septiembre) fallaría la regla semanal
+  // de ESE mes hasta terminar de marcarlo, así que bloquear cada guardado
+  // intermedio le impediría completar su propio calendario. Quedan como guía
+  // visible, no como bloqueo duro.
 
   // ── Standard field update ──
   const ownFields = ['marca', 'modelo', 'anio', 'tipo', 'ubicacion', 'precio_dia', 'descripcion',
