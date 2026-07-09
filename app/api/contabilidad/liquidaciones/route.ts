@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDb } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth';
+import { guardArea } from '@/lib/guard';
+import { registrarAuditoria } from '@/lib/permisos';
 import { marcarLiquidacionesPagadas, generarRemision } from '@/lib/contabilidad';
 
 export const dynamic = 'force-dynamic';
@@ -15,13 +15,12 @@ type LiquidacionRow = {
 };
 
 export async function GET(req: NextRequest) {
-  const user = await getCurrentUser();
-  if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+  const g = await guardArea('contabilidad');
+  if ('error' in g) return g.error;
+  const { db } = g;
 
   const { searchParams } = new URL(req.url);
   const soloEstado = searchParams.get('estado') || 'pendiente';
-
-  const db = getDb();
 
   // Backfill: asegura que cada liquidación tenga su remisión guardada como soporte del propietario.
   const sinRemision = db.prepare(`
@@ -72,14 +71,13 @@ export async function GET(req: NextRequest) {
 
 // Marca una o varias liquidaciones como pagadas (transferencia manual, ya realizada) y avisa al propietario.
 export async function PUT(req: NextRequest) {
-  const user = await getCurrentUser();
-  if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+  const g = await guardArea('contabilidad');
+  if ('error' in g) return g.error;
+  const { db, user, nivel } = g;
 
   const body = await req.json() as { reserva_ids?: number[]; reserva_id?: number; comprobante?: string; comprobante_url?: string };
   const ids: number[] = body.reserva_ids || (body.reserva_id ? [body.reserva_id] : []);
   if (ids.length === 0) return NextResponse.json({ error: 'Se requiere al menos un reserva_id' }, { status: 400 });
-
-  const db = getDb();
 
   type Fila = { reserva_id: number; propietario_id: number; neto: number; marca: string; modelo: string; fecha_inicio: string; fecha_fin: string };
   const rows = db.prepare(`
@@ -93,6 +91,12 @@ export async function PUT(req: NextRequest) {
   const comprobante = body.comprobante || '';
   const comprobanteUrl = body.comprobante_url || '';
   marcarLiquidacionesPagadas(db, rows.map(r => r.reserva_id), comprobante, comprobanteUrl);
+
+  const totalPagadoGlobal = rows.reduce((s, r) => s + r.neto, 0);
+  registrarAuditoria(db, { ...user, nivel }, {
+    area: 'contabilidad', accion: 'pagar_liquidacion', entidad: 'liquidacion',
+    detalle: `Pagó ${rows.length} liquidación(es) a propietarios · neto $${totalPagadoGlobal.toLocaleString('es-CO')}${comprobante ? ` · ref: ${comprobante}` : ''}`,
+  });
 
   const propGrupos: Record<number, Fila[]> = {};
   for (const r of rows) {

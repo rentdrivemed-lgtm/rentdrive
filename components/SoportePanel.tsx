@@ -28,6 +28,16 @@ export default function SoportePanel() {
   const [marcando, setMarcando] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  // Nueva conversación (admin inicia con un propietario/cliente)
+  type Contacto = { id: number; nombre: string; correo: string; rol: string };
+  const [nuevoOpen, setNuevoOpen] = useState(false);
+  const [buscar, setBuscar] = useState('');
+  const [contactos, setContactos] = useState<Contacto[]>([]);
+  const [contactoSel, setContactoSel] = useState<Contacto | null>(null);
+  const [msgNuevo, setMsgNuevo] = useState('');
+  const [enviandoNuevo, setEnviandoNuevo] = useState(false);
+  const [errorNuevo, setErrorNuevo] = useState('');
+
   const cargarLista = async () => {
     setError('');
     try {
@@ -81,6 +91,40 @@ export default function SoportePanel() {
     finally { setMarcando(false); }
   };
 
+  const buscarContactos = async (q: string) => {
+    try {
+      const res = await fetch(`/api/soporte/contactos?q=${encodeURIComponent(q)}`, { cache: 'no-store' });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) setContactos(d.contactos || []);
+    } catch { /* reintentar al escribir */ }
+  };
+
+  useEffect(() => {
+    if (!nuevoOpen) return;
+    const t = setTimeout(() => buscarContactos(buscar), 250);
+    return () => clearTimeout(t);
+  }, [buscar, nuevoOpen]);
+
+  const iniciarConversacion = async () => {
+    if (!contactoSel || !msgNuevo.trim() || enviandoNuevo) return;
+    setEnviandoNuevo(true); setErrorNuevo('');
+    try {
+      const res = await fetch('/api/soporte', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ solicitante_id: contactoSel.id, mensaje: msgNuevo }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { setErrorNuevo(d.error || 'No se pudo iniciar la conversación.'); return; }
+      setNuevoOpen(false); setContactoSel(null); setMsgNuevo(''); setBuscar('');
+      await cargarLista();
+      if (d.conversacion_id) abrir(d.conversacion_id);
+    } catch {
+      setErrorNuevo('Sin conexión — intenta de nuevo.');
+    } finally {
+      setEnviandoNuevo(false);
+    }
+  };
+
   const conv = conversaciones.find(c => c.id === seleccionada);
   const formatHora = (ts: string) => {
     const d = new Date(ts.replace(' ', 'T'));
@@ -89,10 +133,55 @@ export default function SoportePanel() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="font-bold text-ink text-lg flex items-center gap-2">💬 Soporte</h2>
-        <p className="text-sm text-ink/50">Conversaciones de propietarios y clientes con el asistente automático.</p>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h2 className="font-bold text-ink text-lg flex items-center gap-2">💬 Soporte</h2>
+          <p className="text-sm text-ink/50">Conversaciones de propietarios y clientes con el asistente automático.</p>
+        </div>
+        <button onClick={() => { setNuevoOpen(true); setContactoSel(null); setMsgNuevo(''); setBuscar(''); setErrorNuevo(''); buscarContactos(''); }}
+          className="text-sm font-semibold bg-accent hover:bg-accent-hover text-white px-4 py-2 rounded-xl transition flex-shrink-0">
+          ＋ Nueva conversación
+        </button>
       </div>
+
+      {/* Modal: iniciar conversación con un propietario/cliente */}
+      {nuevoOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setNuevoOpen(false)}>
+          <div className="bg-surface rounded-2xl border border-border max-w-md w-full p-5 space-y-3" onClick={e => e.stopPropagation()}>
+            <p className="text-base font-bold text-ink">Nueva conversación de soporte</p>
+            <div>
+              <label className="text-[11px] text-ink/50 block mb-1">Buscar propietario o cliente</label>
+              <input value={buscar} onChange={e => setBuscar(e.target.value)} autoFocus
+                placeholder="Nombre o correo…" className="w-full bg-surface-2 border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+            </div>
+            <div className="max-h-48 overflow-y-auto space-y-1">
+              {contactos.length === 0 ? (
+                <p className="text-xs text-ink/40 py-2 text-center">Sin resultados.</p>
+              ) : contactos.map(c => (
+                <button key={c.id} onClick={() => setContactoSel(c)}
+                  className={`w-full text-left px-3 py-2 rounded-xl border transition ${contactoSel?.id === c.id ? 'border-accent bg-accent-light' : 'border-border hover:bg-surface-2'}`}>
+                  <p className="text-sm font-medium text-ink">{c.nombre} <span className="text-[10px] text-ink/50 capitalize">· {c.rol}</span></p>
+                  <p className="text-[11px] text-ink/50">{c.correo}</p>
+                </button>
+              ))}
+            </div>
+            <div>
+              <label className="text-[11px] text-ink/50 block mb-1">Mensaje</label>
+              <textarea value={msgNuevo} onChange={e => setMsgNuevo(e.target.value)} rows={3}
+                placeholder="Escribe el mensaje para el cliente/propietario…"
+                className="w-full bg-surface-2 border border-border rounded-xl px-3 py-2 text-sm text-ink resize-none" />
+            </div>
+            {errorNuevo && <p className="text-xs text-danger">{errorNuevo}</p>}
+            <div className="flex items-center gap-2 justify-end">
+              <button onClick={() => setNuevoOpen(false)} className="text-sm text-ink/60 hover:text-ink px-3 py-2">Cancelar</button>
+              <button onClick={iniciarConversacion} disabled={!contactoSel || !msgNuevo.trim() || enviandoNuevo}
+                className="text-sm font-semibold bg-accent hover:bg-accent-hover text-white px-4 py-2 rounded-xl transition disabled:opacity-50">
+                {enviandoNuevo ? 'Enviando…' : contactoSel ? `Escribir a ${contactoSel.nombre.split(' ')[0]}` : 'Selecciona un contacto'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {error ? (
         <div className="text-center py-14 bg-danger/5 rounded-2xl border border-danger/25">

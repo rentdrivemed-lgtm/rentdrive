@@ -1,16 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDb } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth';
+import { guardArea } from '@/lib/guard';
 import { comisionPlataforma } from '@/lib/contabilidad';
 import { dataicoHabilitado } from '@/lib/dataico';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
-  const user = await getCurrentUser();
-  if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
-
-  const db = getDb();
+  const g = await guardArea('contabilidad');
+  if ('error' in g) return g.error;
+  const { db } = g;
   const { searchParams } = new URL(req.url);
   const desde = searchParams.get('desde') || '0000-01-01';
   const hasta = searchParams.get('hasta') || '9999-12-31';

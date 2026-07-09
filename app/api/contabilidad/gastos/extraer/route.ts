@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getCurrentUser } from '@/lib/auth';
+import { guardArea } from '@/lib/guard';
 import { tieneClaveAnthropic } from '@/lib/anthropic';
 import { extraerGasto } from '@/lib/gastos-ocr';
 
@@ -7,8 +7,8 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
-  const user = await getCurrentUser();
-  if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+  const g = await guardArea('contabilidad');
+  if ('error' in g) return g.error;
 
   if (!tieneClaveAnthropic()) {
     return NextResponse.json(

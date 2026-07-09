@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDb } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth';
+import { guardArea } from '@/lib/guard';
+import { registrarAuditoria } from '@/lib/permisos';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,11 +26,22 @@ const CAMPOS = `id, categoria, proveedor, nit_proveedor, descripcion, numero_fac
   subtotal, iva, total, metodo_pago, pagos, abonado, recurrente, comprobante_url, comprobante_pago_url,
   extraido_ia, notas, estado, anulado_en, motivo_anulacion, created_at`;
 
-export async function GET(req: NextRequest) {
-  const user = await getCurrentUser();
-  if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+function sanitizarPagos(body: Record<string, unknown>) {
+  const num = (v: unknown) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : 0; };
+  const pagosRaw: Array<{ metodo?: unknown; valor?: unknown }> = Array.isArray(body.pagos) ? body.pagos : [];
+  const pagos = pagosRaw
+    .map((p) => ({ metodo: typeof p?.metodo === 'string' ? p.metodo.slice(0, 30) : '', valor: num(p?.valor) }))
+    .filter((p) => p.valor > 0)
+    .slice(0, 20);
+  const abonado = pagos.reduce((s, p) => s + p.valor, 0);
+  return { pagos, abonado };
+}
 
-  const db = getDb();
+export async function GET(req: NextRequest) {
+  const g = await guardArea('contabilidad');
+  if ('error' in g) return g.error;
+  const { db } = g;
+
   const { searchParams } = new URL(req.url);
   const desde = searchParams.get('desde') || '0000-01-01';
   const hasta = searchParams.get('hasta') || '9999-12-31';
@@ -48,7 +59,7 @@ export async function GET(req: NextRequest) {
   const rows = db.prepare(
     `SELECT ${CAMPOS} FROM gastos ${where} ORDER BY fecha DESC, id DESC`
   ).all(...params) as GastoRow[];
-  const gastos = rows.map((g) => ({ ...g, pagos: parsePagos(g.pagos) }));
+  const gastos = rows.map((row) => ({ ...row, pagos: parsePagos(row.pagos) }));
 
   const porCategoria = db.prepare(
     `SELECT categoria, COUNT(*) AS n, COALESCE(SUM(total), 0) AS total
@@ -59,7 +70,6 @@ export async function GET(req: NextRequest) {
     `SELECT COALESCE(SUM(total), 0) AS total, COALESCE(SUM(abonado), 0) AS abonado FROM gastos ${where}`
   ).get(...params) as { total: number; abonado: number };
 
-  // Conteo de anulados (para mostrar el acceso "Anulados" solo si hay)
   const anuladosCount = (db.prepare(
     "SELECT COUNT(*) AS n FROM gastos WHERE estado = 'anulado'"
   ).get() as { n: number }).n;
@@ -74,20 +84,10 @@ export async function GET(req: NextRequest) {
   });
 }
 
-function sanitizarPagos(body: Record<string, unknown>) {
-  const num = (v: unknown) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : 0; };
-  const pagosRaw: Array<{ metodo?: unknown; valor?: unknown }> = Array.isArray(body.pagos) ? body.pagos : [];
-  const pagos = pagosRaw
-    .map((p) => ({ metodo: typeof p?.metodo === 'string' ? p.metodo.slice(0, 30) : '', valor: num(p?.valor) }))
-    .filter((p) => p.valor > 0)
-    .slice(0, 20);
-  const abonado = pagos.reduce((s, p) => s + p.valor, 0);
-  return { pagos, abonado };
-}
-
 export async function POST(req: NextRequest) {
-  const user = await getCurrentUser();
-  if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+  const g = await guardArea('contabilidad');
+  if ('error' in g) return g.error;
+  const { db, user, nivel } = g;
 
   const body = await req.json().catch(() => ({}));
   const categoria: Categoria = (CATEGORIAS as readonly string[]).includes(body.categoria) ? body.categoria : 'variable';
@@ -106,7 +106,6 @@ export async function POST(req: NextRequest) {
   }
   const metodoPago = pagos.map((p) => p.metodo).filter(Boolean).join(', ') || str(body.metodo_pago);
 
-  const db = getDb();
   const info = db.prepare(
     `INSERT INTO gastos
       (categoria, proveedor, nit_proveedor, descripcion, numero_factura, fecha,
@@ -119,20 +118,25 @@ export async function POST(req: NextRequest) {
     body.recurrente ? 1 : 0, str(body.comprobante_url), str(body.comprobante_pago_url),
     body.extraido_ia ? 1 : 0, str(body.notas), user.id,
   );
+  const id = Number(info.lastInsertRowid);
+  registrarAuditoria(db, { ...user, nivel }, {
+    area: 'contabilidad', accion: 'crear_gasto', entidad: 'gasto', entidad_id: id,
+    detalle: `${str(body.proveedor) || 'Gasto'} · ${categoria} · total $${total.toLocaleString('es-CO')}`,
+  });
 
-  const row = db.prepare(`SELECT ${CAMPOS} FROM gastos WHERE id = ?`).get(info.lastInsertRowid) as GastoRow;
+  const row = db.prepare(`SELECT ${CAMPOS} FROM gastos WHERE id = ?`).get(id) as GastoRow;
   return NextResponse.json({ gasto: { ...row, pagos: parsePagos(row.pagos) } }, { status: 201 });
 }
 
 export async function PUT(req: NextRequest) {
-  const user = await getCurrentUser();
-  if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+  const g = await guardArea('contabilidad');
+  if ('error' in g) return g.error;
+  const { db, user, nivel } = g;
 
   const body = await req.json().catch(() => ({}));
   const id = Number(body.id);
   if (!Number.isInteger(id) || id <= 0) return NextResponse.json({ error: 'ID inválido' }, { status: 400 });
 
-  const db = getDb();
   const existe = db.prepare('SELECT id FROM gastos WHERE id = ?').get(id);
   if (!existe) return NextResponse.json({ error: 'Gasto no encontrado' }, { status: 404 });
 
@@ -162,6 +166,10 @@ export async function PUT(req: NextRequest) {
     num(body.subtotal), num(body.iva), total, metodoPago, JSON.stringify(pagos), abonado,
     body.recurrente ? 1 : 0, str(body.comprobante_url), str(body.comprobante_pago_url), str(body.notas), id,
   );
+  registrarAuditoria(db, { ...user, nivel }, {
+    area: 'contabilidad', accion: 'editar_gasto', entidad: 'gasto', entidad_id: id,
+    detalle: `${str(body.proveedor) || 'Gasto'} · total $${total.toLocaleString('es-CO')}`,
+  });
 
   const row = db.prepare(`SELECT ${CAMPOS} FROM gastos WHERE id = ?`).get(id) as GastoRow;
   return NextResponse.json({ gasto: { ...row, pagos: parsePagos(row.pagos) } });
@@ -169,8 +177,9 @@ export async function PUT(req: NextRequest) {
 
 // Anular (mover a "anulados") o restaurar un gasto — no lo borra.
 export async function PATCH(req: NextRequest) {
-  const user = await getCurrentUser();
-  if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+  const g = await guardArea('contabilidad');
+  if ('error' in g) return g.error;
+  const { db, user, nivel } = g;
 
   const body = await req.json().catch(() => ({}));
   const id = Number(body.id);
@@ -178,8 +187,7 @@ export async function PATCH(req: NextRequest) {
   const accion = body.accion === 'restaurar' ? 'restaurar' : 'anular';
   const motivo = typeof body.motivo === 'string' ? body.motivo.trim().slice(0, 300) : '';
 
-  const db = getDb();
-  const existe = db.prepare('SELECT id FROM gastos WHERE id = ?').get(id);
+  const existe = db.prepare('SELECT proveedor, total FROM gastos WHERE id = ?').get(id) as { proveedor: string; total: number } | undefined;
   if (!existe) return NextResponse.json({ error: 'Gasto no encontrado' }, { status: 404 });
 
   if (accion === 'anular') {
@@ -188,19 +196,28 @@ export async function PATCH(req: NextRequest) {
   } else {
     db.prepare("UPDATE gastos SET estado = 'activo', anulado_en = '', motivo_anulacion = '' WHERE id = ?").run(id);
   }
+  registrarAuditoria(db, { ...user, nivel }, {
+    area: 'contabilidad', accion: accion === 'anular' ? 'anular_gasto' : 'restaurar_gasto', entidad: 'gasto', entidad_id: id,
+    detalle: `${existe.proveedor || 'Gasto'} · $${(existe.total || 0).toLocaleString('es-CO')}${motivo ? ` · motivo: ${motivo}` : ''}`,
+  });
   return NextResponse.json({ ok: true });
 }
 
 export async function DELETE(req: NextRequest) {
-  const user = await getCurrentUser();
-  if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+  const g = await guardArea('contabilidad');
+  if ('error' in g) return g.error;
+  const { db, user, nivel } = g;
 
   const { searchParams } = new URL(req.url);
   const id = Number(searchParams.get('id'));
   if (!Number.isInteger(id) || id <= 0) return NextResponse.json({ error: 'ID inválido' }, { status: 400 });
 
-  const db = getDb();
+  const existe = db.prepare('SELECT proveedor, total FROM gastos WHERE id = ?').get(id) as { proveedor: string; total: number } | undefined;
   const info = db.prepare('DELETE FROM gastos WHERE id = ?').run(id);
   if (info.changes === 0) return NextResponse.json({ error: 'Gasto no encontrado' }, { status: 404 });
+  registrarAuditoria(db, { ...user, nivel }, {
+    area: 'contabilidad', accion: 'eliminar_gasto', entidad: 'gasto', entidad_id: id,
+    detalle: `${existe?.proveedor || 'Gasto'} · $${(existe?.total || 0).toLocaleString('es-CO')} (eliminado definitivamente)`,
+  });
   return NextResponse.json({ ok: true });
 }

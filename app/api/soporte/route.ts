@@ -46,18 +46,39 @@ function notificarAdmins(db: ReturnType<typeof getDb>, convId: number, nombre: s
 }
 
 // POST — el propio solicitante envía un mensaje; corre el asistente y guarda ambos lados.
+//        Si es admin y manda { solicitante_id }, INICIA una conversación con ese
+//        propietario/usuario (queda escalada = atención humana) y lo notifica.
 export async function POST(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
-  if (user.rol !== 'propietario' && user.rol !== 'usuario') {
-    return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
-  }
 
   const body = await req.json().catch(() => ({}));
   const texto = String(body.mensaje || '').trim().slice(0, 2000);
   if (!texto) return NextResponse.json({ error: 'Escribe un mensaje.' }, { status: 400 });
 
   const db = getDb();
+
+  // Admin inicia (o retoma) una conversación con un propietario/usuario.
+  if (user.rol === 'admin') {
+    const solicitanteId = Number(body.solicitante_id);
+    if (!solicitanteId) return NextResponse.json({ error: 'Falta el destinatario.' }, { status: 400 });
+    const destino = db.prepare("SELECT id, nombre, rol FROM usuarios WHERE id = ?").get(solicitanteId) as { id: number; nombre: string; rol: string } | undefined;
+    if (!destino || (destino.rol !== 'propietario' && destino.rol !== 'usuario')) {
+      return NextResponse.json({ error: 'Solo puedes escribirle a un propietario o cliente.' }, { status: 400 });
+    }
+    const conv = obtenerOCrearConversacion(destino.id, destino.rol as 'propietario' | 'usuario');
+    db.prepare('INSERT INTO mensajes_soporte (conversacion_id, remitente_tipo, remitente_admin_id, contenido) VALUES (?, ?, ?, ?)')
+      .run(conv.id, 'admin', user.id, texto);
+    db.prepare("UPDATE conversaciones_soporte SET estado = 'escalada', actualizado_en = datetime('now','localtime') WHERE id = ?").run(conv.id);
+    db.prepare('INSERT INTO notificaciones (destinatario_id, tipo, titulo, mensaje, referencia_id, referencia_tipo) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(destino.id, 'soporte_respuesta', '💬 Mensaje de soporte de DrivePass', 'Un administrador de DrivePass te escribió por el chat de soporte.', conv.id, 'soporte');
+    return NextResponse.json({ ok: true, conversacion_id: conv.id });
+  }
+
+  if (user.rol !== 'propietario' && user.rol !== 'usuario') {
+    return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+  }
+
   const conv = obtenerOCrearConversacion(user.id, user.rol);
 
   db.prepare('INSERT INTO mensajes_soporte (conversacion_id, remitente_tipo, contenido) VALUES (?, ?, ?)')

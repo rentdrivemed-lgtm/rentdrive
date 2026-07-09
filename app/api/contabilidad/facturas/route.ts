@@ -1,15 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDb } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth';
+import { guardArea } from '@/lib/guard';
 import { emitirFactura } from '@/lib/contabilidad';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
-  const user = await getCurrentUser();
-  if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
-
-  const db = getDb();
+  const g = await guardArea('contabilidad');
+  if ('error' in g) return g.error;
+  const { db } = g;
   const facturas = db.prepare(`
     SELECT f.*, r.fecha_inicio, r.fecha_fin, v.marca, v.modelo, v.anio
     FROM facturas f
@@ -37,14 +35,14 @@ export async function GET() {
 // enganche automático falló (ej. DataICO estaba caído) o para reservas de antes
 // de este módulo.
 export async function POST(req: NextRequest) {
-  const user = await getCurrentUser();
-  if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+  const g = await guardArea('contabilidad');
+  if ('error' in g) return g.error;
+  const { db } = g;
 
   const body = await req.json().catch(() => ({}));
   const reservaId = Number(body.reserva_id);
   if (!reservaId) return NextResponse.json({ error: 'Falta reserva_id' }, { status: 400 });
 
-  const db = getDb();
   const reserva = db.prepare('SELECT id, pago_estado FROM reservas WHERE id = ?').get(reservaId) as { id: number; pago_estado: string } | undefined;
   if (!reserva) return NextResponse.json({ error: 'Esa reserva no existe' }, { status: 404 });
   if (reserva.pago_estado !== 'pagado') {

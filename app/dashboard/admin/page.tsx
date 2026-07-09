@@ -7,6 +7,8 @@ import PicoPlacaConfig from '@/components/PicoPlacaConfig';
 import ContabilidadPanel from '@/components/ContabilidadPanel';
 import SoportePanel from '@/components/SoportePanel';
 import LeadsPropietariosPanel from '@/components/LeadsPropietariosPanel';
+import AuditoriaPanel from '@/components/AuditoriaPanel';
+import { puede, normalizarNivel, NIVEL_LABEL, NIVELES, type AdminNivel } from '@/lib/permisos';
 import { parsePicoPlaca, picoPlacaVacio, placaRestringida, type PicoPlaca } from '@/lib/pico-placa';
 import { fechaHoraRecogida, esNoShowAplicable } from '@/lib/cancelacion';
 import { IconUser, IconCar, IconX, IconCheck, IconCalendar, IconShield } from '@/components/Icons';
@@ -14,7 +16,7 @@ import type { VerificacionResultado } from '@/lib/verificacion-docs';
 
 type Usuario = {
   id: number; nombre: string; correo: string;
-  rol: string; estado_cuenta: string; created_at: string;
+  rol: string; admin_nivel?: string; estado_cuenta: string; created_at: string;
   tipo_documento?: string; documento_identidad?: string;
   fecha_nacimiento?: string; celular?: string; celular_indicativo?: string;
   direccion?: string; ciudad?: string;
@@ -181,7 +183,9 @@ function ResultadoIA({ res, auto }: { res: VerificacionResultado; auto?: string[
 }
 
 export default function DashboardAdmin() {
-  const [tab, setTab] = useState<'usuarios' | 'vehiculos' | 'reservas' | 'operaciones' | 'contabilidad' | 'mercado' | 'leads' | 'soporte' | 'config'>('usuarios');
+  const [tab, setTab] = useState<'usuarios' | 'vehiculos' | 'reservas' | 'operaciones' | 'contabilidad' | 'mercado' | 'leads' | 'soporte' | 'config' | 'auditoria'>('usuarios');
+  const [miNivel, setMiNivel] = useState<AdminNivel>('principal');
+  const [miId, setMiId] = useState<number | null>(null);
   const [picoPlaca, setPicoPlaca] = useState<PicoPlaca>(picoPlacaVacio());
   const [usuarios, setUsuarios]   = useState<Usuario[]>([]);
   const [vehiculos, setVehiculos] = useState<Vehiculo[]>([]);
@@ -225,6 +229,8 @@ export default function DashboardAdmin() {
   useEffect(() => {
     fetch('/api/auth/me').then(r => r.json()).then(d => {
       if (!d.user || d.user.rol !== 'admin') { router.push('/login'); return; }
+      setMiNivel(normalizarNivel(d.user.admin_nivel));
+      setMiId(d.user.id ?? null);
     }).catch(() => router.push('/login'));
     cargarUsuarios();
     cargarVehiculos();
@@ -235,6 +241,15 @@ export default function DashboardAdmin() {
   useEffect(() => {
     if (tab === 'mercado') cargarMercado();
   }, [tab]);
+
+  // Si el nivel actual no puede ver la pestaña seleccionada, lo mandamos a la primera permitida.
+  useEffect(() => {
+    if (!puede(miNivel, tab)) {
+      const orden = ['reservas', 'operaciones', 'leads', 'soporte', 'usuarios', 'vehiculos', 'contabilidad', 'mercado', 'config', 'auditoria'] as const;
+      const primera = orden.find(k => puede(miNivel, k));
+      if (primera) setTab(primera);
+    }
+  }, [miNivel, tab]);
 
   const cargarMercado = () => {
     setMercadoLoading(true);
@@ -303,12 +318,47 @@ export default function DashboardAdmin() {
 
   const toggleEstado = async (u: Usuario) => {
     const nuevo = u.estado_cuenta === 'activa' ? 'inactiva' : 'activa';
-    await fetch('/api/admin/usuarios', {
+    const res = await fetch('/api/admin/usuarios', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: u.id, estado_cuenta: nuevo }),
     });
-    setUsuarios(prev => prev.map(x => x.id === u.id ? { ...x, estado_cuenta: nuevo } : x));
+    if (res.ok) setUsuarios(prev => prev.map(x => x.id === u.id ? { ...x, estado_cuenta: nuevo } : x));
+  };
+
+  // ── Equipo y roles (solo nivel principal) ──────────────────────────────────
+  const [nuevoEquipo, setNuevoEquipo] = useState<{ nombre: string; correo: string; password: string; admin_nivel: AdminNivel }>({ nombre: '', correo: '', password: '', admin_nivel: 'secretaria' });
+  const [creandoEquipo, setCreandoEquipo] = useState(false);
+  const [equipoMsg, setEquipoMsg] = useState('');
+
+  const crearEquipo = async () => {
+    setCreandoEquipo(true); setEquipoMsg('');
+    try {
+      const res = await fetch('/api/admin/usuarios', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(nuevoEquipo),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setEquipoMsg('✓ Cuenta creada.');
+        setNuevoEquipo({ nombre: '', correo: '', password: '', admin_nivel: 'secretaria' });
+        cargarUsuarios();
+        setTimeout(() => setEquipoMsg(''), 4000);
+      } else {
+        setEquipoMsg(d.error || 'No se pudo crear la cuenta.');
+      }
+    } catch {
+      setEquipoMsg('Sin conexión — intenta de nuevo.');
+    } finally {
+      setCreandoEquipo(false);
+    }
+  };
+
+  const cambiarNivel = async (u: Usuario, nivel: AdminNivel) => {
+    const res = await fetch('/api/admin/usuarios', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: u.id, admin_nivel: nivel }),
+    });
+    if (res.ok) setUsuarios(prev => prev.map(x => x.id === u.id ? { ...x, admin_nivel: nivel } : x));
+    else { const d = await res.json().catch(() => ({})); alert(d.error || 'No se pudo cambiar el nivel.'); }
   };
 
   const guardarNuevaContrasena = async () => {
@@ -586,7 +636,8 @@ export default function DashboardAdmin() {
           { key: 'leads', label: '🎯 Leads' },
           { key: 'soporte', label: '💬 Soporte' },
           { key: 'config', label: 'Configuración' },
-        ] as const).map(t => (
+          { key: 'auditoria', label: '🧾 Bitácora' },
+        ] as const).filter(t => puede(miNivel, t.key)).map(t => (
           <button key={t.key} onClick={() => setTab(t.key)}
             className={`relative px-4 py-2.5 text-sm font-medium capitalize border-b-2 -mb-px transition ${
               tab === t.key ? 'border-accent text-accent' : 'border-transparent text-ink/50 hover:text-ink'
@@ -606,6 +657,33 @@ export default function DashboardAdmin() {
         <div className="bg-danger/10 border border-danger/25 rounded-2xl px-4 py-3 mb-4 flex items-center justify-between">
           <span className="text-sm text-danger">No pudimos cargar los usuarios. Revisa tu conexión.</span>
           <button onClick={cargarUsuarios} className="text-xs font-semibold text-danger underline">Reintentar</button>
+        </div>
+      )}
+      {tab === 'usuarios' && puede(miNivel, 'usuarios_gestion') && (
+        <div className="bg-surface-2 rounded-2xl border border-border p-5 mb-4 space-y-4">
+          <div>
+            <p className="text-sm font-bold text-ink">👥 Equipo y roles</p>
+            <p className="text-[11px] text-ink/50">Crea cuentas con acceso limitado. La <strong>secretaría</strong> solo ve Reservas, Operaciones, Leads y Soporte (sin plata, usuarios ni configuración). Los <strong>socios</strong> ven todo pero no gestionan el equipo ni la configuración.</p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <input value={nuevoEquipo.nombre} onChange={e => setNuevoEquipo(s => ({ ...s, nombre: e.target.value }))}
+              placeholder="Nombre" className="bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+            <input value={nuevoEquipo.correo} onChange={e => setNuevoEquipo(s => ({ ...s, correo: e.target.value }))}
+              placeholder="Correo" className="bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+            <input value={nuevoEquipo.password} onChange={e => setNuevoEquipo(s => ({ ...s, password: e.target.value }))}
+              placeholder="Contraseña (mín. 6)" type="text" className="bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+            <select value={nuevoEquipo.admin_nivel} onChange={e => setNuevoEquipo(s => ({ ...s, admin_nivel: e.target.value as AdminNivel }))}
+              className="bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink">
+              {NIVELES.map(n => <option key={n} value={n}>{NIVEL_LABEL[n]}</option>)}
+            </select>
+          </div>
+          <div className="flex items-center gap-3">
+            <button onClick={crearEquipo} disabled={creandoEquipo}
+              className="bg-accent hover:bg-accent-hover text-white px-4 py-2 rounded-xl font-semibold text-sm transition disabled:opacity-60">
+              {creandoEquipo ? 'Creando…' : 'Crear cuenta de equipo'}
+            </button>
+            {equipoMsg && <span className={`text-xs ${equipoMsg.startsWith('✓') ? 'text-success' : 'text-danger'}`}>{equipoMsg}</span>}
+          </div>
         </div>
       )}
       {tab === 'usuarios' && (
@@ -635,6 +713,7 @@ export default function DashboardAdmin() {
                     <td className="px-4 py-3 text-ink/60 hidden sm:table-cell">{u.correo}</td>
                     <td className="px-4 py-3">
                       <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${rolColor[u.rol] || 'bg-surface'}`}>{u.rol}</span>
+                      {u.rol === 'admin' && <span className="block mt-1 text-[10px] text-ink/50">{NIVEL_LABEL[normalizarNivel(u.admin_nivel)]}</span>}
                     </td>
                     <td className="px-4 py-3">
                       <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${
@@ -644,12 +723,18 @@ export default function DashboardAdmin() {
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex gap-2 flex-wrap">
+                      <div className="flex gap-2 flex-wrap items-center">
                         <button onClick={() => setPerfilModal({ u })}
                           className="flex items-center gap-1 text-xs border border-accent/30 text-accent px-2.5 py-1.5 rounded-xl hover:bg-accent-light transition font-medium">
                           <IconUser size={11} /> Perfil
                         </button>
-                        {u.rol !== 'admin' && (
+                        {u.rol === 'admin' && puede(miNivel, 'usuarios_gestion') && u.id !== miId && (
+                          <select value={normalizarNivel(u.admin_nivel)} onChange={e => cambiarNivel(u, e.target.value as AdminNivel)}
+                            className="text-xs border border-border rounded-xl px-2 py-1.5 bg-surface text-ink" title="Nivel de acceso">
+                            {NIVELES.map(n => <option key={n} value={n}>{NIVEL_LABEL[n]}</option>)}
+                          </select>
+                        )}
+                        {(u.rol !== 'admin' || (puede(miNivel, 'usuarios_gestion') && u.id !== miId)) && (
                           <button onClick={() => toggleEstado(u)}
                             className={`text-xs px-3 py-1.5 rounded-xl border transition font-medium ${
                               u.estado_cuenta === 'activa'
@@ -1198,6 +1283,8 @@ export default function DashboardAdmin() {
       {tab === 'soporte' && <SoportePanel />}
 
       {tab === 'config' && <PicoPlacaConfig />}
+
+      {tab === 'auditoria' && <AuditoriaPanel />}
 
       {/* Modal documentos del cliente (arrendatario) */}
       {clienteDocs && (() => {

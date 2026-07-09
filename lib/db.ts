@@ -318,6 +318,20 @@ function initDb(db: Database.Database) {
       neto REAL DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now', 'localtime'))
     );
+
+    CREATE TABLE IF NOT EXISTS auditoria (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      usuario_id INTEGER REFERENCES usuarios(id),
+      usuario_nombre TEXT DEFAULT '',
+      usuario_correo TEXT DEFAULT '',
+      usuario_nivel TEXT DEFAULT '',
+      area TEXT DEFAULT '',
+      accion TEXT NOT NULL,
+      detalle TEXT DEFAULT '',
+      entidad TEXT DEFAULT '',
+      entidad_id INTEGER,
+      created_at TEXT DEFAULT (datetime('now', 'localtime'))
+    );
   `);
 
   try { db.exec("ALTER TABLE liquidaciones ADD COLUMN comprobante_url TEXT DEFAULT ''"); } catch { /* ya existe */ }
@@ -352,6 +366,7 @@ function initDb(db: Database.Database) {
   try { db.exec("ALTER TABLE usuarios ADD COLUMN reset_token_expira TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE usuarios ADD COLUMN celular_indicativo TEXT DEFAULT '+57'"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE usuarios ADD COLUMN cedula_url_dorso TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE usuarios ADD COLUMN admin_nivel TEXT DEFAULT 'principal'"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE usuarios ADD COLUMN codigo_referido TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE usuarios ADD COLUMN referido_por INTEGER DEFAULT NULL"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE usuarios ADD COLUMN creditos_referido REAL DEFAULT 0"); } catch { /* ya existe */ }

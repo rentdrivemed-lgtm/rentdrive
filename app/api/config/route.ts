@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
 import { getConfig, setConfig } from '@/lib/operaciones';
+import { guardArea } from '@/lib/guard';
+import { registrarAuditoria } from '@/lib/permisos';
 
 export const dynamic = 'force-dynamic';
 
@@ -21,12 +23,18 @@ export async function GET() {
 }
 
 export async function PUT(req: NextRequest) {
-  const user = await getCurrentUser();
-  if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+  const g = await guardArea('config_editar');
+  if ('error' in g) return g.error;
+  const { db, user, nivel } = g;
   const body = await req.json().catch(() => ({}));
-  const db = getDb();
+  const cambiadas: string[] = [];
   for (const c of CLAVES) {
-    if (typeof body[c] === 'string') setConfig(db, c, body[c].trim());
+    if (typeof body[c] === 'string') { setConfig(db, c, body[c].trim()); cambiadas.push(c); }
+  }
+  if (cambiadas.length > 0) {
+    registrarAuditoria(db, { ...user, nivel }, {
+      area: 'config', accion: 'editar_config', detalle: `Actualizó: ${cambiadas.join(', ')}`,
+    });
   }
   const config: Record<string, string> = {};
   for (const c of CLAVES) config[c] = getConfig(db, c);

@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS usuarios (
   correo                TEXT UNIQUE NOT NULL,
   password              TEXT NOT NULL,
   rol                   TEXT NOT NULL CHECK (rol IN ('admin','propietario','usuario')),
+  admin_nivel           TEXT DEFAULT 'principal',
   documento_identidad   TEXT DEFAULT '',
   estado_cuenta         TEXT DEFAULT 'activa' CHECK (estado_cuenta IN ('activa','inactiva')),
   celular               TEXT DEFAULT '',
@@ -77,3 +78,19 @@ CREATE TABLE IF NOT EXISTS remisiones (
 );
 -- Nota: liquidaciones necesita además la columna comprobante_url:
 --   ALTER TABLE liquidaciones ADD COLUMN IF NOT EXISTS comprobante_url TEXT DEFAULT '';
+
+-- ─────────────── auditoría (bitácora: quién hizo qué y a qué hora) ───────────────
+-- El nivel de admin va en usuarios.admin_nivel ('principal' | 'socio' | 'secretaria').
+CREATE TABLE IF NOT EXISTS auditoria (
+  id             SERIAL PRIMARY KEY,
+  usuario_id     INTEGER REFERENCES usuarios(id),
+  usuario_nombre TEXT DEFAULT '',
+  usuario_correo TEXT DEFAULT '',
+  usuario_nivel  TEXT DEFAULT '',
+  area           TEXT DEFAULT '',
+  accion         TEXT NOT NULL,
+  detalle        TEXT DEFAULT '',
+  entidad        TEXT DEFAULT '',
+  entidad_id     INTEGER,
+  created_at     TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+);
