@@ -2,7 +2,6 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import CalendarioReservas, { type ReservaCalendario } from '@/components/CalendarioReservas';
-import OperacionesPanel from '@/components/OperacionesPanel';
 import PicoPlacaConfig from '@/components/PicoPlacaConfig';
 import ContabilidadPanel from '@/components/ContabilidadPanel';
 import SoportePanel from '@/components/SoportePanel';
@@ -183,7 +182,7 @@ function ResultadoIA({ res, auto }: { res: VerificacionResultado; auto?: string[
 }
 
 export default function DashboardAdmin() {
-  const [tab, setTab] = useState<'usuarios' | 'vehiculos' | 'reservas' | 'operaciones' | 'contabilidad' | 'mercado' | 'leads' | 'soporte' | 'config' | 'auditoria'>('usuarios');
+  const [tab, setTab] = useState<'usuarios' | 'vehiculos' | 'reservas' | 'contabilidad' | 'mercado' | 'leads' | 'soporte' | 'config' | 'auditoria'>('usuarios');
   const [miNivel, setMiNivel] = useState<AdminNivel>('principal');
   const [miId, setMiId] = useState<number | null>(null);
   const [picoPlaca, setPicoPlaca] = useState<PicoPlaca>(picoPlacaVacio());
@@ -245,7 +244,7 @@ export default function DashboardAdmin() {
   // Si el nivel actual no puede ver la pestaña seleccionada, lo mandamos a la primera permitida.
   useEffect(() => {
     if (!puede(miNivel, tab)) {
-      const orden = ['reservas', 'operaciones', 'leads', 'soporte', 'usuarios', 'vehiculos', 'contabilidad', 'mercado', 'config', 'auditoria'] as const;
+      const orden = ['reservas', 'leads', 'soporte', 'usuarios', 'vehiculos', 'contabilidad', 'mercado', 'config', 'auditoria'] as const;
       const primera = orden.find(k => puede(miNivel, k));
       if (primera) setTab(primera);
     }
@@ -639,7 +638,6 @@ export default function DashboardAdmin() {
           { key: 'usuarios',  label: `Usuarios (${usuarios.length})` },
           { key: 'vehiculos', label: `Vehículos (${vehiculos.length})` },
           { key: 'reservas',  label: `Reservas (${reservas.length})`, badge: pendientesCount },
-          { key: 'operaciones', label: 'Operaciones' },
           { key: 'contabilidad', label: '💰 Contabilidad' },
           { key: 'mercado', label: '📊 Mercado' },
           { key: 'leads', label: '🎯 Leads' },
@@ -672,7 +670,7 @@ export default function DashboardAdmin() {
         <div className="bg-surface-2 rounded-2xl border border-border p-5 mb-4 space-y-4">
           <div>
             <p className="text-sm font-bold text-ink">👥 Equipo y roles</p>
-            <p className="text-[11px] text-ink/50">Crea cuentas con acceso limitado. La <strong>secretaría</strong> solo ve Reservas, Operaciones, Leads y Soporte (sin plata, usuarios ni configuración). Los <strong>socios</strong> ven todo pero no gestionan el equipo ni la configuración.</p>
+            <p className="text-[11px] text-ink/50">Crea cuentas con acceso limitado. La <strong>secretaría</strong> solo ve Reservas, Leads y Soporte aquí, más el <strong>Panel de control</strong> (Operaciones, Tareas, Calendario, Documentos y Tableros) — sin plata, usuarios ni configuración. Los <strong>socios</strong> ven todo pero no gestionan el equipo ni la configuración.</p>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <input value={nuevoEquipo.nombre} onChange={e => setNuevoEquipo(s => ({ ...s, nombre: e.target.value }))}
@@ -1091,7 +1089,6 @@ export default function DashboardAdmin() {
       )}
 
       {/* ── OPERACIONES / LOGÍSTICA ── */}
-      {tab === 'operaciones' && <OperacionesPanel />}
 
       {/* ── CONTABILIDAD (cotizaciones, facturas, liquidaciones a propietarios) ── */}
       {tab === 'contabilidad' && <ContabilidadPanel />}

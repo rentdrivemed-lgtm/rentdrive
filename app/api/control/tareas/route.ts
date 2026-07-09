@@ -6,7 +6,19 @@ import { notificarEquipo, notificarUsuarios } from '@/lib/panel';
 export const dynamic = 'force-dynamic';
 
 const ESTADOS = ['todo', 'proceso', 'hecho'];
-const ROLES = ['', 'mensajero', 'secretaria', 'socio'];
+
+// La etiqueta de color (rol_destino) se deduce SOLA del responsable asignado,
+// para no pedirla como un campo aparte y evitar confusión.
+function rolTag(adminNivel?: string): string {
+  if (adminNivel === 'secretaria') return 'secretaria';
+  if (adminNivel === 'principal' || adminNivel === 'socio') return 'socio';
+  return '';
+}
+type Asignado = { id: number; nombre: string; admin_nivel: string };
+function buscarAsignado(db: import('better-sqlite3').Database, id: unknown): Asignado | undefined {
+  if (!id) return undefined;
+  return db.prepare("SELECT id, nombre, COALESCE(admin_nivel,'') AS admin_nivel FROM usuarios WHERE id = ? AND rol = 'admin'").get(Number(id)) as Asignado | undefined;
+}
 
 // GET — lista de tareas visibles para el nivel del usuario.
 export async function GET() {
@@ -32,16 +44,13 @@ export async function POST(req: NextRequest) {
   if (!titulo) return NextResponse.json({ error: 'La tarea necesita un título.' }, { status: 400 });
 
   const estado = ESTADOS.includes(body.estado) ? body.estado : 'todo';
-  const rol_destino = ROLES.includes(body.rol_destino) ? body.rol_destino : '';
   // Solo dueño/socios pueden marcar una tarea como "solo socios".
   const solo_socios = esSocio(nivel) && body.solo_socios ? 1 : 0;
 
-  let asignadoId: number | null = null;
-  let asignadoNombre = '';
-  if (body.asignado_id) {
-    const m = db.prepare("SELECT id, nombre FROM usuarios WHERE id = ? AND rol = 'admin'").get(Number(body.asignado_id)) as { id: number; nombre: string } | undefined;
-    if (m) { asignadoId = m.id; asignadoNombre = m.nombre; }
-  }
+  const m = buscarAsignado(db, body.asignado_id);
+  const asignadoId = m ? m.id : null;
+  const asignadoNombre = m ? m.nombre : '';
+  const rol_destino = rolTag(m?.admin_nivel);
 
   const info = db.prepare(
     `INSERT INTO tareas_equipo (titulo, descripcion, estado, rol_destino, asignado_id, asignado_nombre, solo_socios, vence, created_by, created_by_nombre)
@@ -92,20 +101,20 @@ export async function PUT(req: NextRequest) {
   const vals: unknown[] = [];
   if (typeof body.titulo === 'string' && body.titulo.trim()) { sets.push('titulo = ?'); vals.push(body.titulo.trim()); }
   if (typeof body.descripcion === 'string') { sets.push('descripcion = ?'); vals.push(body.descripcion.trim()); }
-  if (ROLES.includes(body.rol_destino)) { sets.push('rol_destino = ?'); vals.push(body.rol_destino); }
   if (typeof body.vence === 'string') { sets.push('vence = ?'); vals.push(body.vence.trim()); }
   if (esSocio(nivel) && body.solo_socios !== undefined) { sets.push('solo_socios = ?'); vals.push(body.solo_socios ? 1 : 0); }
   if (body.asignado_id !== undefined) {
     if (body.asignado_id) {
-      const m = db.prepare("SELECT id, nombre FROM usuarios WHERE id = ? AND rol = 'admin'").get(Number(body.asignado_id)) as { id: number; nombre: string } | undefined;
+      const m = buscarAsignado(db, body.asignado_id);
       if (m) {
-        sets.push('asignado_id = ?', 'asignado_nombre = ?'); vals.push(m.id, m.nombre);
+        // El responsable define también la etiqueta de color (rol_destino).
+        sets.push('asignado_id = ?', 'asignado_nombre = ?', 'rol_destino = ?'); vals.push(m.id, m.nombre, rolTag(m.admin_nivel));
         if (Number(actual.asignado_id) !== m.id) {
           notificarUsuarios(db, [m.id], { tipo: 'tarea_asignada', titulo: 'Te asignaron una tarea', mensaje: String(actual.titulo), referencia_id: id, referencia_tipo: 'tarea' });
         }
       }
     } else {
-      sets.push('asignado_id = NULL', 'asignado_nombre = ?'); vals.push('');
+      sets.push('asignado_id = NULL', 'asignado_nombre = ?', "rol_destino = ''"); vals.push('');
     }
   }
   if (!sets.length) return NextResponse.json({ error: 'Nada para actualizar.' }, { status: 400 });

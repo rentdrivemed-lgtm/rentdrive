@@ -13,8 +13,8 @@ type Props = { nivel: AdminNivel; onEvento: () => void; pushToast: (t: string) =
 const COLS: { key: Tarea['estado']; label: string }[] = [
   { key: 'todo', label: 'Por hacer' }, { key: 'proceso', label: 'En proceso' }, { key: 'hecho', label: 'Hecho' },
 ];
-const ROL_LABEL: Record<string, string> = { mensajero: 'Mensajero', secretaria: 'Secretaria', socio: 'Socio', '': 'General' };
-const vacia = () => ({ titulo: '', descripcion: '', rol_destino: '', asignado_id: '', vence: '', solo_socios: false });
+const ROL_LABEL: Record<string, string> = { mensajero: 'Mensajero', secretaria: 'Secretaría', socio: 'Socios', '': 'General' };
+const vacia = () => ({ titulo: '', descripcion: '', asignado_id: '', vence: '', solo_socios: false });
 
 export default function TareasBoard({ nivel, onEvento, pushToast }: Props) {
   const [tareas, setTareas] = useState<Tarea[]>([]);
@@ -44,7 +44,7 @@ export default function TareasBoard({ nivel, onEvento, pushToast }: Props) {
   const abrirNueva = () => { setEditId(null); setForm(vacia()); setModal(true); };
   const abrirEditar = (t: Tarea) => {
     setEditId(t.id);
-    setForm({ titulo: t.titulo, descripcion: t.descripcion, rol_destino: t.rol_destino, asignado_id: t.asignado_id ? String(t.asignado_id) : '', vence: t.vence, solo_socios: !!t.solo_socios });
+    setForm({ titulo: t.titulo, descripcion: t.descripcion, asignado_id: t.asignado_id ? String(t.asignado_id) : '', vence: t.vence, solo_socios: !!t.solo_socios });
     setModal(true);
   };
 
@@ -140,18 +140,12 @@ export default function TareasBoard({ nivel, onEvento, pushToast }: Props) {
             <div className="dpc-modal-body">
               <div><label className="lbl">Título</label><input className="field" value={form.titulo} onChange={e => setForm(f => ({ ...f, titulo: e.target.value }))} placeholder="¿Qué hay que hacer?" /></div>
               <div><label className="lbl">Descripción (opcional)</label><textarea className="field" rows={2} value={form.descripcion} onChange={e => setForm(f => ({ ...f, descripcion: e.target.value }))} /></div>
-              <div style={{ display: 'flex', gap: 10 }}>
-                <div style={{ flex: 1 }}><label className="lbl">Rol</label>
-                  <select className="field" value={form.rol_destino} onChange={e => setForm(f => ({ ...f, rol_destino: e.target.value }))}>
-                    <option value="">General</option><option value="mensajero">Mensajero</option><option value="secretaria">Secretaria</option><option value="socio">Socio</option>
-                  </select>
-                </div>
-                <div style={{ flex: 1 }}><label className="lbl">Responsable</label>
-                  <select className="field" value={form.asignado_id} onChange={e => setForm(f => ({ ...f, asignado_id: e.target.value }))}>
-                    <option value="">Sin asignar</option>
-                    {equipo.map(m => <option key={m.id} value={m.id}>{m.nombre}</option>)}
-                  </select>
-                </div>
+              <div><label className="lbl">Responsable</label>
+                <select className="field" value={form.asignado_id} onChange={e => setForm(f => ({ ...f, asignado_id: e.target.value }))}>
+                  <option value="">Sin asignar</option>
+                  {equipo.map(m => <option key={m.id} value={m.id}>{m.nombre}</option>)}
+                </select>
+                <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>La etiqueta de color se pone sola según quién quede responsable.</p>
               </div>
               <div><label className="lbl">Vence (opcional)</label><input className="field" value={form.vence} onChange={e => setForm(f => ({ ...f, vence: e.target.value }))} placeholder="Ej. Hoy 2pm, viernes…" /></div>
               {socio && (

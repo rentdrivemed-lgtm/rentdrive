@@ -6,12 +6,14 @@ import TareasBoard from '@/components/control/TareasBoard';
 import CalendarioBoard from '@/components/control/CalendarioBoard';
 import DocumentosBoard from '@/components/control/DocumentosBoard';
 import TablerosBoard from '@/components/control/TablerosBoard';
+import OperacionesPanel from '@/components/OperacionesPanel';
 
 type Notif = { id: number; tipo: string; titulo: string; mensaje: string; leida: number; created_at: string };
-type Seccion = 'tareas' | 'calendario' | 'documentos' | 'panel' | 'tableros';
+type Seccion = 'panel' | 'operaciones' | 'tareas' | 'calendario' | 'documentos' | 'tableros';
 
 const NAV: { key: Seccion; label: string; listo: boolean }[] = [
   { key: 'panel', label: 'Panel de hoy', listo: true },
+  { key: 'operaciones', label: 'Operaciones', listo: true },
   { key: 'tareas', label: 'Tareas', listo: true },
   { key: 'calendario', label: 'Calendario', listo: true },
   { key: 'documentos', label: 'Documentos', listo: true },
@@ -128,6 +130,12 @@ export default function ControlApp() {
           {seccion === 'calendario' && <CalendarioBoard nivel={nivel} onEvento={cargarNotifs} pushToast={pushToast} />}
           {seccion === 'documentos' && <DocumentosBoard nivel={nivel} onEvento={cargarNotifs} pushToast={pushToast} />}
           {seccion === 'panel' && <PanelHoy />}
+          {seccion === 'operaciones' && (
+            <>
+              <div className="section-head"><div><div className="section-title">Operaciones</div><div className="section-sub">Servicios asignados a mensajeros · checklist, fotos e inspección</div></div></div>
+              <div className="op-embed"><OperacionesPanel /></div>
+            </>
+          )}
           {seccion === 'tableros' && <TablerosBoard pushToast={pushToast} onEvento={cargarNotifs} />}
         </main>
       </div>
