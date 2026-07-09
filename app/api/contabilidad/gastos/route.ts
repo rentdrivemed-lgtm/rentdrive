@@ -123,6 +123,54 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ gasto }, { status: 201 });
 }
 
+export async function PUT(req: NextRequest) {
+  const user = await getCurrentUser();
+  if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+
+  const body = await req.json().catch(() => ({}));
+  const id = Number(body.id);
+  if (!Number.isInteger(id) || id <= 0) return NextResponse.json({ error: 'ID inválido' }, { status: 400 });
+
+  const db = getDb();
+  const existe = db.prepare('SELECT id FROM gastos WHERE id = ?').get(id);
+  if (!existe) return NextResponse.json({ error: 'Gasto no encontrado' }, { status: 404 });
+
+  const categoria: Categoria = (CATEGORIAS as readonly string[]).includes(body.categoria) ? body.categoria : 'variable';
+  const fecha = typeof body.fecha === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.fecha)
+    ? body.fecha : new Date().toISOString().slice(0, 10);
+  const total = Number(body.total);
+  if (!Number.isFinite(total) || total <= 0) {
+    return NextResponse.json({ error: 'El total del gasto debe ser un número mayor a 0.' }, { status: 400 });
+  }
+  const num = (v: unknown) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : 0; };
+  const str = (v: unknown) => (typeof v === 'string' ? v.trim().slice(0, 300) : '');
+
+  const pagosRaw: Array<{ metodo?: unknown; valor?: unknown }> = Array.isArray(body.pagos) ? body.pagos : [];
+  const pagos = pagosRaw
+    .map((p) => ({ metodo: typeof p?.metodo === 'string' ? p.metodo.slice(0, 30) : '', valor: num(p?.valor) }))
+    .filter((p) => p.valor > 0)
+    .slice(0, 20);
+  const abonado = pagos.reduce((s, p) => s + p.valor, 0);
+  if (abonado > total + 1) {
+    return NextResponse.json({ error: 'Los abonos por medio de pago no pueden superar el total del gasto.' }, { status: 400 });
+  }
+  const metodoPago = pagos.map((p) => p.metodo).filter(Boolean).join(', ') || str(body.metodo_pago);
+
+  db.prepare(
+    `UPDATE gastos SET categoria = ?, proveedor = ?, nit_proveedor = ?, descripcion = ?, numero_factura = ?, fecha = ?,
+       subtotal = ?, iva = ?, total = ?, metodo_pago = ?, pagos = ?, abonado = ?, recurrente = ?, comprobante_url = ?, notas = ?
+     WHERE id = ?`
+  ).run(
+    categoria, str(body.proveedor), str(body.nit_proveedor), str(body.descripcion), str(body.numero_factura), fecha,
+    num(body.subtotal), num(body.iva), total, metodoPago, JSON.stringify(pagos), abonado,
+    body.recurrente ? 1 : 0, str(body.comprobante_url), str(body.notas), id,
+  );
+
+  const row = db.prepare('SELECT * FROM gastos WHERE id = ?').get(id) as GastoRow;
+  const gasto = { ...row, pagos: parsePagos(row.pagos) };
+  return NextResponse.json({ gasto });
+}
+
 export async function DELETE(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });

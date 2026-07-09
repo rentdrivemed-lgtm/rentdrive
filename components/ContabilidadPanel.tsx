@@ -96,7 +96,6 @@ const METODOS_PAGO: Array<{ v: string; label: string }> = [
 function metodoLabel(v: string) { return METODOS_PAGO.find(m => m.v === v)?.label || v; }
 
 function cop(n: number) { return `$${Math.round(n || 0).toLocaleString('es-CO')}`; }
-function primerDiaMes() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`; }
 function primerDiaAnio() { return `${new Date().getFullYear()}-01-01`; }
 function hoy() { return new Date().toISOString().slice(0, 10); }
 function sumaPagos(pagos: Array<{ valor: string | number }>) {
@@ -114,7 +113,7 @@ export default function ContabilidadPanel() {
 
   // Resumen
   const [resumen, setResumen] = useState<Resumen | null>(null);
-  const [desde, setDesde] = useState(primerDiaMes());
+  const [desde, setDesde] = useState(primerDiaAnio());
   const [hasta, setHasta] = useState(hoy());
   const [cargandoResumen, setCargandoResumen] = useState(true);
   const [errorResumen, setErrorResumen] = useState('');
@@ -168,6 +167,7 @@ export default function ContabilidadPanel() {
   const [errorGastos, setErrorGastos] = useState('');
   const [gForm, setGForm] = useState<GastoForm>(GFORM_INICIAL);
   const [mostrarForm, setMostrarForm] = useState(false);
+  const [editandoId, setEditandoId] = useState<number | null>(null);
   const [subiendo, setSubiendo] = useState(false);
   const [extrayendo, setExtrayendo] = useState(false);
   const [guardandoGasto, setGuardandoGasto] = useState(false);
@@ -422,7 +422,7 @@ export default function ContabilidadPanel() {
 
   const manejarArchivo = async (file: File | null) => {
     if (!file) return;
-    setGastoMsg(''); setSubiendo(true); setMostrarForm(true);
+    setGastoMsg(''); setSubiendo(true); setMostrarForm(true); setEditandoId(null);
     try {
       const fd = new FormData(); fd.append('file', file);
       const res = await fetch('/api/upload/documento', { method: 'POST', body: fd });
@@ -437,6 +437,31 @@ export default function ContabilidadPanel() {
     }
   };
 
+  const abrirEditar = (g: Gasto) => {
+    setEditandoId(g.id);
+    setGForm({
+      categoria: g.categoria,
+      proveedor: g.proveedor || '',
+      nit_proveedor: g.nit_proveedor || '',
+      numero_factura: g.numero_factura || '',
+      fecha: g.fecha || hoy(),
+      subtotal: g.subtotal ? String(g.subtotal) : '',
+      iva: g.iva ? String(g.iva) : '',
+      total: g.total ? String(g.total) : '',
+      pagos: (g.pagos || []).map(p => ({ metodo: p.metodo, valor: String(p.valor) })),
+      recurrente: !!g.recurrente,
+      descripcion: g.descripcion || '',
+      notas: g.notas || '',
+      comprobante_url: g.comprobante_url || '',
+      extraido_ia: !!g.extraido_ia,
+    });
+    setMostrarForm(true);
+    setGastoMsg('');
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const cerrarForm = () => { setMostrarForm(false); setEditandoId(null); setGForm(GFORM_INICIAL); setGastoMsg(''); };
+
   const guardarGasto = async () => {
     const total = Number(gForm.total);
     if (!Number.isFinite(total) || total <= 0) { setGastoMsg('El total del gasto debe ser un número mayor a 0.'); return; }
@@ -448,8 +473,9 @@ export default function ContabilidadPanel() {
     setGuardandoGasto(true); setGastoMsg('');
     try {
       const res = await fetch('/api/contabilidad/gastos', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: editandoId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          ...(editandoId ? { id: editandoId } : {}),
           ...gForm,
           subtotal: Number(gForm.subtotal) || 0,
           iva: Number(gForm.iva) || 0,
@@ -458,9 +484,10 @@ export default function ContabilidadPanel() {
         }),
       });
       if (res.ok) {
-        setGastoMsg('✓ Gasto registrado.');
+        setGastoMsg(editandoId ? '✓ Cambios guardados.' : '✓ Gasto registrado.');
         setGForm(GFORM_INICIAL);
         setMostrarForm(false);
+        setEditandoId(null);
         cargarGastos();
         cargarResumen();
         setTimeout(() => setGastoMsg(''), 4000);
@@ -643,7 +670,7 @@ export default function ContabilidadPanel() {
                 className="flex items-center gap-2 text-sm font-semibold bg-surface border border-accent/30 text-accent hover:bg-accent-light px-4 py-2.5 rounded-xl transition disabled:opacity-60">
                 <IconPhoto size={15} /> Tomar foto
               </button>
-              <button onClick={() => { setGForm(GFORM_INICIAL); setMostrarForm(true); setGastoMsg(''); }}
+              <button onClick={() => { setEditandoId(null); setGForm(GFORM_INICIAL); setMostrarForm(true); setGastoMsg(''); }}
                 className="flex items-center gap-2 text-sm font-medium border border-border text-ink/70 hover:bg-surface px-4 py-2.5 rounded-xl transition">
                 + Registrar manual
               </button>
@@ -664,8 +691,8 @@ export default function ContabilidadPanel() {
           {mostrarForm && (
             <div className="bg-surface-2 rounded-2xl border border-border p-5 space-y-4">
               <div className="flex items-center justify-between">
-                <p className="text-sm font-bold text-ink">Datos del gasto {gForm.extraido_ia && <span className="text-[10px] font-semibold text-accent bg-accent-light border border-accent/20 rounded-full px-2 py-0.5 ml-1">IA</span>}</p>
-                <button onClick={() => { setMostrarForm(false); setGForm(GFORM_INICIAL); setGastoMsg(''); }} className="text-ink/40 hover:text-ink"><IconX size={16} /></button>
+                <p className="text-sm font-bold text-ink">{editandoId ? 'Editar gasto' : 'Datos del gasto'} {gForm.extraido_ia && <span className="text-[10px] font-semibold text-accent bg-accent-light border border-accent/20 rounded-full px-2 py-0.5 ml-1">IA</span>}</p>
+                <button onClick={cerrarForm} className="text-ink/40 hover:text-ink"><IconX size={16} /></button>
               </div>
               {gForm.comprobante_url && (
                 <a href={gForm.comprobante_url} target="_blank" rel="noopener noreferrer"
@@ -785,9 +812,9 @@ export default function ContabilidadPanel() {
               <div className="flex items-center gap-3">
                 <button onClick={guardarGasto} disabled={guardandoGasto || subiendo || extrayendo}
                   className="bg-accent hover:bg-accent-hover text-white px-5 py-2.5 rounded-xl font-semibold text-sm transition disabled:opacity-60">
-                  {guardandoGasto ? 'Guardando…' : 'Guardar gasto'}
+                  {guardandoGasto ? 'Guardando…' : editandoId ? 'Guardar cambios' : 'Guardar gasto'}
                 </button>
-                <button onClick={() => { setMostrarForm(false); setGForm(GFORM_INICIAL); setGastoMsg(''); }}
+                <button onClick={cerrarForm}
                   className="text-sm text-ink/50 hover:text-ink px-3 py-2.5">Cancelar</button>
               </div>
             </div>
@@ -894,6 +921,10 @@ export default function ContabilidadPanel() {
                         return <p className="text-[10px] text-warning">pendiente</p>;
                       })()}
                     </div>
+                    <button onClick={() => abrirEditar(g)}
+                      className="text-xs border border-border text-ink/70 px-2.5 py-1.5 rounded-xl hover:bg-surface transition font-medium">
+                      Ver / editar
+                    </button>
                     <button onClick={() => eliminarGasto(g.id)} disabled={eliminandoId === g.id}
                       className="text-xs border border-danger/30 text-danger px-2 py-1.5 rounded-xl hover:bg-danger/10 transition disabled:opacity-50">
                       {eliminandoId === g.id ? '…' : <IconX size={13} />}
