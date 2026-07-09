@@ -1,15 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
-import { marcarLiquidacionesPagadas } from '@/lib/contabilidad';
+import { marcarLiquidacionesPagadas, generarRemision } from '@/lib/contabilidad';
 
 export const dynamic = 'force-dynamic';
 
 type LiquidacionRow = {
   id: number; reserva_id: number; propietario_id: number;
   bruto: number; comision_pct: number; comision_valor: number; neto: number;
-  estado: string; pagado_en: string; comprobante: string;
-  propietario_nombre: string; propietario_correo: string; banco: string; numero_cuenta: string;
+  estado: string; pagado_en: string; comprobante: string; comprobante_url: string;
+  propietario_nombre: string; propietario_correo: string; propietario_documento: string;
+  banco: string; numero_cuenta: string; placa: string; remision_numero: string;
   marca: string; modelo: string; anio: number; fecha_inicio: string; fecha_fin: string; usuario_nombre: string;
 };
 
@@ -21,15 +22,27 @@ export async function GET(req: NextRequest) {
   const soloEstado = searchParams.get('estado') || 'pendiente';
 
   const db = getDb();
+
+  // Backfill: asegura que cada liquidación tenga su remisión guardada como soporte del propietario.
+  const sinRemision = db.prepare(`
+    SELECT l.reserva_id FROM liquidaciones l
+    LEFT JOIN remisiones rem ON rem.reserva_id = l.reserva_id
+    WHERE l.estado = ? AND rem.id IS NULL
+  `).all(soloEstado) as Array<{ reserva_id: number }>;
+  for (const s of sinRemision) { try { generarRemision(db, s.reserva_id); } catch { /* no bloquea el listado */ } }
+
   const liquidaciones = db.prepare(`
     SELECT l.*, p.nombre AS propietario_nombre, p.correo AS propietario_correo,
+           COALESCE(p.documento_identidad,'') AS propietario_documento,
            COALESCE(p.banco,'') AS banco, COALESCE(p.numero_cuenta,'') AS numero_cuenta,
+           COALESCE(v.placa,'') AS placa, COALESCE(rem.numero,'') AS remision_numero,
            v.marca, v.modelo, v.anio, r.fecha_inicio, r.fecha_fin, u.nombre AS usuario_nombre
     FROM liquidaciones l
     JOIN usuarios p ON l.propietario_id = p.id
     JOIN reservas r ON l.reserva_id = r.id
     JOIN vehiculos v ON r.vehiculo_id = v.id
     JOIN usuarios u ON r.usuario_id = u.id
+    LEFT JOIN remisiones rem ON rem.reserva_id = l.reserva_id
     WHERE l.estado = ?
     ORDER BY r.fecha_fin DESC
   `).all(soloEstado) as LiquidacionRow[];
@@ -62,7 +75,7 @@ export async function PUT(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
 
-  const body = await req.json() as { reserva_ids?: number[]; reserva_id?: number; comprobante?: string };
+  const body = await req.json() as { reserva_ids?: number[]; reserva_id?: number; comprobante?: string; comprobante_url?: string };
   const ids: number[] = body.reserva_ids || (body.reserva_id ? [body.reserva_id] : []);
   if (ids.length === 0) return NextResponse.json({ error: 'Se requiere al menos un reserva_id' }, { status: 400 });
 
@@ -78,7 +91,8 @@ export async function PUT(req: NextRequest) {
   if (rows.length === 0) return NextResponse.json({ error: 'No hay liquidaciones pendientes con esos IDs' }, { status: 400 });
 
   const comprobante = body.comprobante || '';
-  marcarLiquidacionesPagadas(db, rows.map(r => r.reserva_id), comprobante);
+  const comprobanteUrl = body.comprobante_url || '';
+  marcarLiquidacionesPagadas(db, rows.map(r => r.reserva_id), comprobante, comprobanteUrl);
 
   const propGrupos: Record<number, Fila[]> = {};
   for (const r of rows) {

@@ -1,9 +1,9 @@
 'use client';
-import { useEffect, useState } from 'react';
-import { IconCoin, IconCheck, IconExport } from '@/components/Icons';
-import { descargarCotizacionPDF, descargarFacturaPDF } from '@/lib/contabilidad-pdf';
+import { useEffect, useRef, useState } from 'react';
+import { IconCoin, IconCheck, IconExport, IconUpload, IconPhoto, IconX } from '@/components/Icons';
+import { descargarCotizacionPDF, descargarFacturaPDF, descargarRemisionPDF } from '@/lib/contabilidad-pdf';
 
-type SubTab = 'resumen' | 'cotizaciones' | 'facturas' | 'liquidaciones' | 'config';
+type SubTab = 'resumen' | 'gastos' | 'cotizaciones' | 'facturas' | 'liquidaciones' | 'config';
 
 type Resumen = {
   periodo: { desde: string; hasta: string };
@@ -12,9 +12,24 @@ type Resumen = {
   comision_total: number;
   pagado_propietarios: number;
   pendiente_propietarios: number;
+  gastos: Array<{ categoria: string; n: number; total: number }>;
+  gastos_total: number;
+  utilidad_estimada: number;
   facturas: Array<{ estado: string; n: number; total: number }>;
   cotizaciones: Array<{ estado: string; n: number }>;
   dataico_activo: boolean;
+};
+
+type CategoriaGasto = 'fijo' | 'variable' | 'servicio' | 'producto' | 'otro';
+type Gasto = {
+  id: number; categoria: CategoriaGasto; proveedor: string; nit_proveedor: string; descripcion: string;
+  numero_factura: string; fecha: string; subtotal: number; iva: number; total: number;
+  metodo_pago: string; recurrente: number; comprobante_url: string; extraido_ia: number; notas: string; created_at: string;
+};
+type GastoForm = {
+  categoria: CategoriaGasto; proveedor: string; nit_proveedor: string; numero_factura: string;
+  fecha: string; subtotal: string; iva: string; total: string; metodo_pago: string;
+  recurrente: boolean; descripcion: string; notas: string; comprobante_url: string; extraido_ia: boolean;
 };
 
 type Cotizacion = {
@@ -38,6 +53,8 @@ type ReservaPendiente = {
 type LiquidacionFila = {
   reserva_id: number; bruto: number; comision_pct: number; comision_valor: number; neto: number;
   marca: string; modelo: string; anio: number; fecha_inicio: string; fecha_fin: string; usuario_nombre: string;
+  remision_numero: string; propietario_documento: string; placa: string;
+  comprobante: string; comprobante_url: string; pagado_en: string;
 };
 type LiquidacionGrupo = {
   propietario_id: number; propietario_nombre: string; propietario_correo: string;
@@ -55,9 +72,24 @@ const ESTADO_BADGE: Record<string, string> = {
   anulada: 'bg-danger/15 text-danger border-danger/25',
 };
 
+const CAT_GASTO: Record<CategoriaGasto, { label: string; badge: string }> = {
+  fijo:     { label: 'Fijo',      badge: 'bg-brand-muted text-ink border-border' },
+  variable: { label: 'Variable',  badge: 'bg-warning/15 text-warning border-warning/25' },
+  servicio: { label: 'Servicios', badge: 'bg-accent-light text-accent border-accent/20' },
+  producto: { label: 'Productos', badge: 'bg-success/15 text-success border-success/30' },
+  otro:     { label: 'Otro',      badge: 'bg-surface text-ink/60 border-border' },
+};
+const CATS_GASTO = Object.keys(CAT_GASTO) as CategoriaGasto[];
+
 function cop(n: number) { return `$${Math.round(n || 0).toLocaleString('es-CO')}`; }
 function primerDiaMes() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`; }
 function hoy() { return new Date().toISOString().slice(0, 10); }
+
+const GFORM_INICIAL: GastoForm = {
+  categoria: 'variable', proveedor: '', nit_proveedor: '', numero_factura: '',
+  fecha: hoy(), subtotal: '', iva: '', total: '', metodo_pago: '',
+  recurrente: false, descripcion: '', notas: '', comprobante_url: '', extraido_ia: false,
+};
 
 export default function ContabilidadPanel() {
   const [subTab, setSubTab] = useState<SubTab>('resumen');
@@ -91,7 +123,10 @@ export default function ContabilidadPanel() {
   const [errorLiq, setErrorLiq] = useState('');
   const [pagandoIds, setPagandoIds] = useState<Set<number>>(new Set());
   const [comprobante, setComprobante] = useState('');
+  const [comprobanteUrl, setComprobanteUrl] = useState('');
+  const [subiendoComprobante, setSubiendoComprobante] = useState(false);
   const [liqMsg, setLiqMsg] = useState('');
+  const inputComprobanteRef = useRef<HTMLInputElement>(null);
 
   // Config
   const [config, setConfig] = useState({
@@ -101,6 +136,25 @@ export default function ContabilidadPanel() {
   const [cargandoConfig, setCargandoConfig] = useState(false);
   const [guardandoConfig, setGuardandoConfig] = useState(false);
   const [configMsg, setConfigMsg] = useState('');
+
+  // Gastos
+  const [gastos, setGastos] = useState<Gasto[]>([]);
+  const [gastosPorCategoria, setGastosPorCategoria] = useState<Array<{ categoria: string; n: number; total: number }>>([]);
+  const [gastosTotal, setGastosTotal] = useState(0);
+  const [gDesde, setGDesde] = useState(primerDiaMes());
+  const [gHasta, setGHasta] = useState(hoy());
+  const [gCategoria, setGCategoria] = useState('');
+  const [cargandoGastos, setCargandoGastos] = useState(false);
+  const [errorGastos, setErrorGastos] = useState('');
+  const [gForm, setGForm] = useState<GastoForm>(GFORM_INICIAL);
+  const [mostrarForm, setMostrarForm] = useState(false);
+  const [subiendo, setSubiendo] = useState(false);
+  const [extrayendo, setExtrayendo] = useState(false);
+  const [guardandoGasto, setGuardandoGasto] = useState(false);
+  const [eliminandoId, setEliminandoId] = useState<number | null>(null);
+  const [gastoMsg, setGastoMsg] = useState('');
+  const inputArchivoRef = useRef<HTMLInputElement>(null);
+  const inputCamaraRef = useRef<HTMLInputElement>(null);
 
   const cargarResumen = async () => {
     setCargandoResumen(true); setErrorResumen('');
@@ -180,6 +234,24 @@ export default function ContabilidadPanel() {
     finally { setCargandoConfig(false); }
   };
 
+  const cargarGastos = async () => {
+    setCargandoGastos(true); setErrorGastos('');
+    try {
+      const q = new URLSearchParams({ desde: gDesde, hasta: gHasta });
+      if (gCategoria) q.set('categoria', gCategoria);
+      const res = await fetch(`/api/contabilidad/gastos?${q.toString()}`, { cache: 'no-store' });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { setErrorGastos('No pudimos cargar los gastos.'); return; }
+      setGastos(d.gastos || []);
+      setGastosPorCategoria(d.por_categoria || []);
+      setGastosTotal(d.total_general || 0);
+    } catch {
+      setErrorGastos('Sin conexión — intenta de nuevo.');
+    } finally {
+      setCargandoGastos(false);
+    }
+  };
+
   useEffect(() => { cargarResumen(); cargarConfig(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (subTab === 'cotizaciones' && cotizaciones.length === 0) cargarCotizaciones();
@@ -187,6 +259,10 @@ export default function ContabilidadPanel() {
     if (subTab === 'liquidaciones') cargarLiquidaciones();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subTab, estadoLiq]);
+  useEffect(() => {
+    if (subTab === 'gastos') cargarGastos();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subTab, gDesde, gHasta, gCategoria]);
 
   const reenviarCotizacion = async (reservaId: number) => {
     setReenviandoId(reservaId);
@@ -210,15 +286,34 @@ export default function ContabilidadPanel() {
     finally { setEmitiendoId(null); }
   };
 
+  const subirComprobanteLiq = async (file: File | null) => {
+    if (!file) return;
+    setSubiendoComprobante(true); setLiqMsg('');
+    try {
+      const fd = new FormData(); fd.append('file', file);
+      const res = await fetch('/api/upload/documento', { method: 'POST', body: fd });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { setLiqMsg(d.error || 'No se pudo subir el comprobante.'); return; }
+      setComprobanteUrl(d.url);
+      setLiqMsg('✓ Comprobante adjuntado. Ahora marca el pago como realizado.');
+    } catch {
+      setLiqMsg('Sin conexión al subir el comprobante.');
+    } finally {
+      setSubiendoComprobante(false);
+    }
+  };
+
   const marcarLiquidacionPagada = async (reservaIds: number[]) => {
     setPagandoIds(prev => new Set([...prev, ...reservaIds]));
     setLiqMsg('');
     try {
       const res = await fetch('/api/contabilidad/liquidaciones', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reserva_ids: reservaIds, comprobante }),
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reserva_ids: reservaIds, comprobante, comprobante_url: comprobanteUrl }),
       });
       if (res.ok) {
         setLiqMsg('✓ Pago registrado y propietario notificado.');
+        setComprobante(''); setComprobanteUrl('');
         cargarLiquidaciones();
         setTimeout(() => setLiqMsg(''), 4000);
       } else {
@@ -261,6 +356,99 @@ export default function ContabilidadPanel() {
     }
   };
 
+  const extraerDeComprobante = async (url: string) => {
+    setExtrayendo(true); setGastoMsg('');
+    try {
+      const res = await fetch('/api/contabilidad/gastos/extraer', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { setGastoMsg(d.error || 'No se pudo leer el documento — complétalo a mano.'); return; }
+      const x = d.datos as {
+        proveedor: string | null; nit_proveedor: string | null; numero_factura: string | null; fecha: string | null;
+        subtotal: number | null; iva: number | null; total: number | null; categoria_sugerida: CategoriaGasto | null;
+        descripcion: string | null; metodo_pago: string | null; confianza: string; nota_ia: string | null;
+      };
+      setGForm(f => ({
+        ...f,
+        proveedor: x.proveedor ?? f.proveedor,
+        nit_proveedor: x.nit_proveedor ?? f.nit_proveedor,
+        numero_factura: x.numero_factura ?? f.numero_factura,
+        fecha: x.fecha ?? f.fecha,
+        subtotal: x.subtotal != null ? String(x.subtotal) : f.subtotal,
+        iva: x.iva != null ? String(x.iva) : f.iva,
+        total: x.total != null ? String(x.total) : f.total,
+        categoria: x.categoria_sugerida ?? f.categoria,
+        descripcion: x.descripcion ?? f.descripcion,
+        metodo_pago: x.metodo_pago ?? f.metodo_pago,
+        extraido_ia: true,
+      }));
+      setGastoMsg(`✓ Datos leídos por la IA (confianza ${x.confianza}). Revísalos y guarda.${x.nota_ia ? ' Nota: ' + x.nota_ia : ''}`);
+    } catch {
+      setGastoMsg('Sin conexión al leer el documento.');
+    } finally {
+      setExtrayendo(false);
+    }
+  };
+
+  const manejarArchivo = async (file: File | null) => {
+    if (!file) return;
+    setGastoMsg(''); setSubiendo(true); setMostrarForm(true);
+    try {
+      const fd = new FormData(); fd.append('file', file);
+      const res = await fetch('/api/upload/documento', { method: 'POST', body: fd });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { setGastoMsg(d.error || 'No se pudo subir el archivo.'); return; }
+      setGForm(f => ({ ...f, comprobante_url: d.url }));
+      await extraerDeComprobante(d.url);
+    } catch {
+      setGastoMsg('Sin conexión al subir el archivo.');
+    } finally {
+      setSubiendo(false);
+    }
+  };
+
+  const guardarGasto = async () => {
+    const total = Number(gForm.total);
+    if (!Number.isFinite(total) || total <= 0) { setGastoMsg('El total debe ser un número mayor a 0.'); return; }
+    setGuardandoGasto(true); setGastoMsg('');
+    try {
+      const res = await fetch('/api/contabilidad/gastos', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...gForm,
+          subtotal: Number(gForm.subtotal) || 0,
+          iva: Number(gForm.iva) || 0,
+          total,
+        }),
+      });
+      if (res.ok) {
+        setGastoMsg('✓ Gasto registrado.');
+        setGForm(GFORM_INICIAL);
+        setMostrarForm(false);
+        cargarGastos();
+        cargarResumen();
+        setTimeout(() => setGastoMsg(''), 4000);
+      } else {
+        const d = await res.json().catch(() => ({}));
+        setGastoMsg(d.error || 'Error al guardar el gasto.');
+      }
+    } catch {
+      setGastoMsg('Sin conexión al guardar.');
+    } finally {
+      setGuardandoGasto(false);
+    }
+  };
+
+  const eliminarGasto = async (id: number) => {
+    setEliminandoId(id);
+    try {
+      const res = await fetch(`/api/contabilidad/gastos?id=${id}`, { method: 'DELETE' });
+      if (res.ok) { cargarGastos(); cargarResumen(); }
+    } catch { /* el usuario puede reintentar */ }
+    finally { setEliminandoId(null); }
+  };
+
   const empresaParaPdf = { nombre: config.empresa_nombre || 'DrivePass', nit: config.empresa_nit };
 
   return (
@@ -274,6 +462,7 @@ export default function ContabilidadPanel() {
       <div className="flex gap-1 border-b border-border flex-wrap">
         {([
           { key: 'resumen', label: 'Resumen' },
+          { key: 'gastos', label: 'Gastos' },
           { key: 'cotizaciones', label: 'Cotizaciones' },
           { key: 'facturas', label: 'Facturas' },
           { key: 'liquidaciones', label: 'Liquidaciones a propietarios' },
@@ -345,6 +534,23 @@ export default function ContabilidadPanel() {
                 </div>
               </div>
 
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                <div className="bg-accent-light rounded-2xl border border-accent/20 p-4">
+                  <p className="text-[11px] text-accent uppercase tracking-wide">Comisión DrivePass (ingreso empresa)</p>
+                  <p className="text-xl font-black text-accent mt-1">{cop(resumen.comision_total)}</p>
+                </div>
+                <div className="bg-danger/10 rounded-2xl border border-danger/25 p-4">
+                  <p className="text-[11px] text-danger uppercase tracking-wide">Gastos del período</p>
+                  <p className="text-xl font-black text-danger mt-1">{cop(resumen.gastos_total)}</p>
+                  <button onClick={() => setSubTab('gastos')} className="text-[11px] text-accent hover:underline mt-0.5">Ver / agregar →</button>
+                </div>
+                <div className={`rounded-2xl border p-4 ${resumen.utilidad_estimada >= 0 ? 'bg-success/10 border-success/25' : 'bg-danger/10 border-danger/25'}`}>
+                  <p className={`text-[11px] uppercase tracking-wide ${resumen.utilidad_estimada >= 0 ? 'text-success' : 'text-danger'}`}>Utilidad estimada</p>
+                  <p className={`text-xl font-black mt-1 ${resumen.utilidad_estimada >= 0 ? 'text-success' : 'text-danger'}`}>{cop(resumen.utilidad_estimada)}</p>
+                  <p className="text-[11px] text-ink/40 mt-0.5">Comisión − gastos</p>
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="bg-surface-2 rounded-2xl border border-border p-4">
                   <p className="text-xs font-bold text-ink/60 uppercase tracking-wide mb-2">Facturas</p>
@@ -374,6 +580,237 @@ export default function ContabilidadPanel() {
                 </div>
               </div>
             </>
+          )}
+        </div>
+      )}
+
+      {/* ── GASTOS ── */}
+      {subTab === 'gastos' && (
+        <div className="space-y-4">
+          {/* Inputs ocultos: archivo (PDF/foto de galería) y cámara */}
+          <input ref={inputArchivoRef} type="file" accept="image/*,application/pdf" className="hidden"
+            onChange={e => { manejarArchivo(e.target.files?.[0] || null); e.target.value = ''; }} />
+          <input ref={inputCamaraRef} type="file" accept="image/*" capture="environment" className="hidden"
+            onChange={e => { manejarArchivo(e.target.files?.[0] || null); e.target.value = ''; }} />
+
+          {/* Captura */}
+          <div className="bg-accent-light border border-accent/20 rounded-2xl p-4 space-y-3">
+            <div>
+              <p className="text-sm font-bold text-ink">Agregar un gasto</p>
+              <p className="text-[11px] text-ink/50">Sube la factura o recibo (PDF o foto) y la IA extrae proveedor, fecha y montos. O regístralo a mano.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button onClick={() => inputArchivoRef.current?.click()} disabled={subiendo || extrayendo}
+                className="flex items-center gap-2 text-sm font-semibold bg-accent hover:bg-accent-hover text-white px-4 py-2.5 rounded-xl transition disabled:opacity-60">
+                <IconUpload size={15} /> Subir archivo / PDF
+              </button>
+              <button onClick={() => inputCamaraRef.current?.click()} disabled={subiendo || extrayendo}
+                className="flex items-center gap-2 text-sm font-semibold bg-surface border border-accent/30 text-accent hover:bg-accent-light px-4 py-2.5 rounded-xl transition disabled:opacity-60">
+                <IconPhoto size={15} /> Tomar foto
+              </button>
+              <button onClick={() => { setGForm(GFORM_INICIAL); setMostrarForm(true); setGastoMsg(''); }}
+                className="flex items-center gap-2 text-sm font-medium border border-border text-ink/70 hover:bg-surface px-4 py-2.5 rounded-xl transition">
+                + Registrar manual
+              </button>
+            </div>
+            {(subiendo || extrayendo) && (
+              <p className="text-xs text-accent flex items-center gap-2">
+                <span className="inline-block w-3 h-3 border-2 border-accent/40 border-t-accent rounded-full animate-spin" />
+                {subiendo ? 'Subiendo comprobante…' : 'Leyendo el documento con IA…'}
+              </p>
+            )}
+          </div>
+
+          {gastoMsg && (
+            <div className={`text-sm px-4 py-2.5 rounded-xl border ${gastoMsg.startsWith('✓') ? 'bg-success/10 text-success border-success/30' : 'bg-danger/10 text-danger border-danger/25'}`}>{gastoMsg}</div>
+          )}
+
+          {/* Formulario */}
+          {mostrarForm && (
+            <div className="bg-surface-2 rounded-2xl border border-border p-5 space-y-4">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-bold text-ink">Datos del gasto {gForm.extraido_ia && <span className="text-[10px] font-semibold text-accent bg-accent-light border border-accent/20 rounded-full px-2 py-0.5 ml-1">IA</span>}</p>
+                <button onClick={() => { setMostrarForm(false); setGForm(GFORM_INICIAL); setGastoMsg(''); }} className="text-ink/40 hover:text-ink"><IconX size={16} /></button>
+              </div>
+              {gForm.comprobante_url && (
+                <a href={gForm.comprobante_url} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 text-xs text-accent hover:underline">
+                  <IconExport size={12} /> Ver comprobante subido
+                </a>
+              )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[11px] text-ink/50 block mb-1">Categoría</label>
+                  <select value={gForm.categoria} onChange={e => setGForm(f => ({ ...f, categoria: e.target.value as CategoriaGasto }))}
+                    className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink">
+                    {CATS_GASTO.map(c => <option key={c} value={c}>{CAT_GASTO[c].label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[11px] text-ink/50 block mb-1">Fecha</label>
+                  <input type="date" value={gForm.fecha} onChange={e => setGForm(f => ({ ...f, fecha: e.target.value }))}
+                    className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                </div>
+                <div>
+                  <label className="text-[11px] text-ink/50 block mb-1">Proveedor</label>
+                  <input value={gForm.proveedor} onChange={e => setGForm(f => ({ ...f, proveedor: e.target.value }))}
+                    placeholder="Ej. EPM, Terpel, Automax…" className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                </div>
+                <div>
+                  <label className="text-[11px] text-ink/50 block mb-1">NIT / documento del proveedor</label>
+                  <input value={gForm.nit_proveedor} onChange={e => setGForm(f => ({ ...f, nit_proveedor: e.target.value }))}
+                    placeholder="900.000.000-0" className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                </div>
+                <div>
+                  <label className="text-[11px] text-ink/50 block mb-1">N° de factura / recibo</label>
+                  <input value={gForm.numero_factura} onChange={e => setGForm(f => ({ ...f, numero_factura: e.target.value }))}
+                    className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                </div>
+                <div>
+                  <label className="text-[11px] text-ink/50 block mb-1">Método de pago</label>
+                  <select value={gForm.metodo_pago} onChange={e => setGForm(f => ({ ...f, metodo_pago: e.target.value }))}
+                    className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink">
+                    <option value="">—</option>
+                    <option value="efectivo">Efectivo</option>
+                    <option value="tarjeta">Tarjeta</option>
+                    <option value="transferencia">Transferencia</option>
+                    <option value="PSE">PSE</option>
+                    <option value="otro">Otro</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[11px] text-ink/50 block mb-1">Subtotal (base)</label>
+                  <input value={gForm.subtotal} onChange={e => setGForm(f => ({ ...f, subtotal: e.target.value.replace(/[^0-9.]/g, '') }))}
+                    placeholder="0" className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                </div>
+                <div>
+                  <label className="text-[11px] text-ink/50 block mb-1">IVA / impuestos</label>
+                  <input value={gForm.iva} onChange={e => setGForm(f => ({ ...f, iva: e.target.value.replace(/[^0-9.]/g, '') }))}
+                    placeholder="0" className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                </div>
+                <div>
+                  <label className="text-[11px] text-ink/50 block mb-1">Total pagado *</label>
+                  <input value={gForm.total} onChange={e => setGForm(f => ({ ...f, total: e.target.value.replace(/[^0-9.]/g, '') }))}
+                    placeholder="0" className="w-full bg-surface border border-accent/40 rounded-xl px-3 py-2 text-sm text-ink font-semibold" />
+                </div>
+                <div className="flex items-end pb-1">
+                  <label className="flex items-center gap-2 text-sm cursor-pointer text-ink/70">
+                    <input type="checkbox" checked={gForm.recurrente} onChange={e => setGForm(f => ({ ...f, recurrente: e.target.checked }))} />
+                    Gasto recurrente (mensual)
+                  </label>
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="text-[11px] text-ink/50 block mb-1">Descripción</label>
+                  <input value={gForm.descripcion} onChange={e => setGForm(f => ({ ...f, descripcion: e.target.value }))}
+                    placeholder="Qué se compró o pagó" className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="text-[11px] text-ink/50 block mb-1">Notas (opcional)</label>
+                  <textarea value={gForm.notas} onChange={e => setGForm(f => ({ ...f, notas: e.target.value }))} rows={2}
+                    className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink resize-none" />
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <button onClick={guardarGasto} disabled={guardandoGasto || subiendo || extrayendo}
+                  className="bg-accent hover:bg-accent-hover text-white px-5 py-2.5 rounded-xl font-semibold text-sm transition disabled:opacity-60">
+                  {guardandoGasto ? 'Guardando…' : 'Guardar gasto'}
+                </button>
+                <button onClick={() => { setMostrarForm(false); setGForm(GFORM_INICIAL); setGastoMsg(''); }}
+                  className="text-sm text-ink/50 hover:text-ink px-3 py-2.5">Cancelar</button>
+              </div>
+            </div>
+          )}
+
+          {/* Filtros + total */}
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <label className="text-[11px] text-ink/50 block mb-1">Desde</label>
+              <input type="date" value={gDesde} onChange={e => setGDesde(e.target.value)}
+                className="border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface" />
+            </div>
+            <div>
+              <label className="text-[11px] text-ink/50 block mb-1">Hasta</label>
+              <input type="date" value={gHasta} onChange={e => setGHasta(e.target.value)}
+                className="border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface" />
+            </div>
+            <div>
+              <label className="text-[11px] text-ink/50 block mb-1">Categoría</label>
+              <select value={gCategoria} onChange={e => setGCategoria(e.target.value)}
+                className="border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface">
+                <option value="">Todas</option>
+                {CATS_GASTO.map(c => <option key={c} value={c}>{CAT_GASTO[c].label}</option>)}
+              </select>
+            </div>
+            <div className="ml-auto bg-surface-2 border border-border rounded-2xl px-5 py-2.5 text-right">
+              <p className="text-[11px] text-ink/50 font-medium">Total gastos ({gastos.length})</p>
+              <p className="text-xl font-black text-danger">{cop(gastosTotal)}</p>
+            </div>
+          </div>
+
+          {/* Desglose por categoría */}
+          {gastosPorCategoria.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {gastosPorCategoria.map(c => (
+                <span key={c.categoria} className={`text-xs px-3 py-1.5 rounded-full border ${CAT_GASTO[c.categoria as CategoriaGasto]?.badge || 'bg-surface border-border text-ink/60'}`}>
+                  {CAT_GASTO[c.categoria as CategoriaGasto]?.label || c.categoria}: <strong>{cop(c.total)}</strong> ({c.n})
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* Lista */}
+          {errorGastos ? (
+            <div className="text-center py-14 bg-danger/5 rounded-2xl border border-danger/25">
+              <p className="text-danger mb-4">{errorGastos}</p>
+              <button onClick={cargarGastos} className="bg-accent text-white font-semibold px-5 py-2.5 rounded-xl text-sm">Reintentar</button>
+            </div>
+          ) : cargandoGastos ? (
+            <div className="space-y-2">{[1, 2, 3].map(i => <div key={i} className="bg-surface-2 rounded-xl border border-border h-16 animate-pulse" />)}</div>
+          ) : gastos.length === 0 ? (
+            <div className="text-center py-14 bg-surface-2 rounded-2xl border border-border">
+              <p className="text-ink/40">No hay gastos registrados en este período.</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {gastos.map(g => (
+                <div key={g.id} className="bg-surface-2 rounded-xl border border-border p-3.5 flex items-center justify-between gap-3 flex-wrap">
+                  <div className="flex items-center gap-3 min-w-0">
+                    {g.comprobante_url ? (
+                      /\.pdf($|\?)/i.test(g.comprobante_url) ? (
+                        <a href={g.comprobante_url} target="_blank" rel="noopener noreferrer" title="Ver comprobante"
+                          className="flex-shrink-0 w-11 h-11 rounded-lg border border-border bg-surface flex items-center justify-center text-[10px] font-bold text-ink/50">PDF</a>
+                      ) : (
+                        <a href={g.comprobante_url} target="_blank" rel="noopener noreferrer" title="Ver comprobante" className="flex-shrink-0">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={g.comprobante_url} alt="comprobante" className="w-11 h-11 rounded-lg border border-border object-cover" />
+                        </a>
+                      )
+                    ) : (
+                      <div className="flex-shrink-0 w-11 h-11 rounded-lg border border-dashed border-border flex items-center justify-center text-ink/25 text-lg">—</div>
+                    )}
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-ink truncate">
+                        {g.proveedor || g.descripcion || 'Gasto'}
+                        {g.numero_factura ? ` · ${g.numero_factura}` : ''}
+                      </p>
+                      <p className="text-xs text-ink/50">
+                        {g.fecha}{g.descripcion && g.proveedor ? ` · ${g.descripcion}` : ''}{g.metodo_pago ? ` · ${g.metodo_pago}` : ''}
+                        {g.recurrente ? ' · 🔁 recurrente' : ''}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <span className={`text-xs px-2 py-0.5 rounded-full border ${CAT_GASTO[g.categoria]?.badge || ''}`}>{CAT_GASTO[g.categoria]?.label || g.categoria}</span>
+                    {g.extraido_ia ? <span className="text-[10px] font-semibold text-accent bg-accent-light border border-accent/20 rounded-full px-1.5 py-0.5">IA</span> : null}
+                    <span className="text-sm font-bold text-ink">{cop(g.total)}</span>
+                    <button onClick={() => eliminarGasto(g.id)} disabled={eliminandoId === g.id}
+                      className="text-xs border border-danger/30 text-danger px-2 py-1.5 rounded-xl hover:bg-danger/10 transition disabled:opacity-50">
+                      {eliminandoId === g.id ? '…' : <IconX size={13} />}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
         </div>
       )}
@@ -522,13 +959,28 @@ export default function ContabilidadPanel() {
           </div>
 
           {estadoLiq === 'pendiente' && (
-            <div className="bg-surface-2 rounded-2xl border border-border p-4 flex flex-wrap items-center gap-3">
-              <div className="flex-1 min-w-[200px]">
-                <label className="text-xs font-medium text-ink/60 block mb-1">Número de comprobante / referencia (opcional)</label>
-                <input placeholder="Ej. TXN-20260630-001" value={comprobante} onChange={e => setComprobante(e.target.value)}
-                  className="w-full border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40" />
+            <div className="bg-surface-2 rounded-2xl border border-border p-4 space-y-3">
+              <input ref={inputComprobanteRef} type="file" accept="image/*,application/pdf" className="hidden"
+                onChange={e => { subirComprobanteLiq(e.target.files?.[0] || null); e.target.value = ''; }} />
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="flex-1 min-w-[200px]">
+                  <label className="text-xs font-medium text-ink/60 block mb-1">Número de comprobante / referencia (opcional)</label>
+                  <input placeholder="Ej. TXN-20260630-001" value={comprobante} onChange={e => setComprobante(e.target.value)}
+                    className="w-full border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40" />
+                </div>
+                <button onClick={() => inputComprobanteRef.current?.click()} disabled={subiendoComprobante}
+                  className="flex items-center gap-2 text-sm font-medium border border-accent/30 text-accent hover:bg-accent-light px-4 py-2 rounded-xl transition disabled:opacity-60">
+                  <IconUpload size={14} /> {subiendoComprobante ? 'Subiendo…' : comprobanteUrl ? 'Cambiar comprobante' : 'Adjuntar comprobante'}
+                </button>
               </div>
-              <p className="text-xs text-ink/50 flex-shrink-0">Se incluye en la notificación al propietario.</p>
+              {comprobanteUrl ? (
+                <p className="text-xs text-success flex items-center gap-2">
+                  ✓ Comprobante adjuntado — <a href={comprobanteUrl} target="_blank" rel="noopener noreferrer" className="underline">ver</a>
+                  <button onClick={() => setComprobanteUrl('')} className="text-ink/40 hover:text-danger underline">quitar</button>
+                </p>
+              ) : (
+                <p className="text-xs text-ink/50">El número y el comprobante (foto o PDF de la transferencia) se guardan como soporte del pago y se incluyen en la notificación al propietario.</p>
+              )}
             </div>
           )}
 
@@ -585,12 +1037,32 @@ export default function ContabilidadPanel() {
                         return (
                           <div key={l.reserva_id} className="flex items-center justify-between gap-3 bg-surface rounded-xl px-3 py-2.5 border border-border flex-wrap">
                             <div className="min-w-0">
-                              <p className="text-sm font-semibold text-ink truncate">{l.marca} {l.modelo} {l.anio}</p>
+                              <p className="text-sm font-semibold text-ink truncate">{l.marca} {l.modelo} {l.anio}{l.placa ? ` · ${l.placa}` : ''}</p>
                               <p className="text-xs text-ink/50">{l.fecha_inicio} → {l.fecha_fin} · {l.usuario_nombre}</p>
                               <p className="text-[11px] text-ink/40">Bruto {cop(l.bruto)} − comisión {(l.comision_pct * 100).toFixed(0)}% ({cop(l.comision_valor)})</p>
+                              {estadoLiq === 'pagado' && (l.pagado_en || l.comprobante) && (
+                                <p className="text-[11px] text-success/80">✓ Pagado{l.pagado_en ? ` ${l.pagado_en.slice(0, 10)}` : ''}{l.comprobante ? ` · ref: ${l.comprobante}` : ''}</p>
+                              )}
                             </div>
                             <div className="flex items-center gap-2 flex-shrink-0">
                               <span className="text-sm font-bold text-ink">{cop(l.neto)}</span>
+                              <button onClick={() => descargarRemisionPDF(empresaParaPdf, {
+                                numero: l.remision_numero || `REM-${String(l.reserva_id).padStart(6, '0')}`, created_at: hoy(),
+                                propietario_nombre: grupo.propietario_nombre, propietario_documento: l.propietario_documento,
+                                vehiculo_descripcion: `${l.marca} ${l.modelo} ${l.anio}`, placa: l.placa,
+                                fecha_inicio: l.fecha_inicio, fecha_fin: l.fecha_fin,
+                                dias: Math.max(1, Math.ceil((new Date(l.fecha_fin).getTime() - new Date(l.fecha_inicio).getTime()) / 86400000)),
+                                bruto: l.bruto, comision_pct: l.comision_pct, comision_valor: l.comision_valor, neto: l.neto,
+                              })}
+                                className="text-xs border border-border text-ink/70 px-2.5 py-1.5 rounded-xl hover:bg-surface transition font-medium flex items-center gap-1">
+                                <IconExport size={12} /> Remisión
+                              </button>
+                              {estadoLiq === 'pagado' && l.comprobante_url && (
+                                <a href={l.comprobante_url} target="_blank" rel="noopener noreferrer"
+                                  className="text-xs border border-success/40 text-success px-2.5 py-1.5 rounded-xl hover:bg-success/10 transition font-medium flex items-center gap-1">
+                                  <IconExport size={12} /> Comprobante
+                                </a>
+                              )}
                               {estadoLiq === 'pendiente' && (
                                 <button onClick={() => marcarLiquidacionPagada([l.reserva_id])} disabled={enCurso}
                                   className="text-xs border border-success/40 text-success px-2.5 py-1.5 rounded-xl hover:bg-success/10 transition disabled:opacity-50 font-medium">

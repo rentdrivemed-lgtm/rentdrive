@@ -108,6 +108,41 @@ export function generarLiquidacion(db: DB, reservaId: number) {
   return db.prepare('SELECT * FROM liquidaciones WHERE reserva_id = ?').get(reservaId);
 }
 
+// ── Remisiones (documento a nombre del dueño del vehículo) ───────────────────
+// Se genera automáticamente cuando el cliente paga. Deja constancia formal de que
+// DrivePass gestionó el alquiler del vehículo del propietario y del neto a liquidarle.
+export function generarRemision(db: DB, reservaId: number) {
+  const existente = db.prepare('SELECT * FROM remisiones WHERE reserva_id = ?').get(reservaId);
+  if (existente) return existente;
+
+  const ctx = cargarContexto(db, reservaId);
+  if (!ctx) return null;
+
+  const prop = db.prepare("SELECT nombre, COALESCE(documento_identidad,'') AS documento FROM usuarios WHERE id = ?")
+    .get(ctx.propietario_id) as { nombre: string; documento: string } | undefined;
+  const placaRow = db.prepare("SELECT COALESCE(placa,'') AS placa FROM vehiculos WHERE id = ?")
+    .get(ctx.vehiculo_id) as { placa: string } | undefined;
+
+  const pct = comisionPlataforma(db);
+  const bruto = ctx.total;
+  const comisionValor = Math.round(bruto * pct);
+  const neto = bruto - comisionValor;
+  const dias = Math.max(1, Math.ceil((new Date(ctx.fecha_fin).getTime() - new Date(ctx.fecha_inicio).getTime()) / 86400000));
+
+  const result = db.prepare(`
+    INSERT INTO remisiones (reserva_id, propietario_id, numero, propietario_nombre, propietario_documento,
+                            vehiculo_descripcion, placa, fecha_inicio, fecha_fin, dias, bruto, comision_pct, comision_valor, neto)
+    VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    reservaId, ctx.propietario_id, prop?.nombre || '', prop?.documento || '',
+    `${ctx.marca} ${ctx.modelo} ${ctx.anio}`, placaRow?.placa || '',
+    ctx.fecha_inicio, ctx.fecha_fin, dias, bruto, pct, comisionValor, neto,
+  );
+  const id = Number(result.lastInsertRowid);
+  db.prepare('UPDATE remisiones SET numero = ? WHERE id = ?').run(numero('REM', id), id);
+  return db.prepare('SELECT * FROM remisiones WHERE reserva_id = ?').get(reservaId);
+}
+
 // ── Facturas (DataICO o borrador local si no hay credenciales) ──────────────
 export async function emitirFactura(db: DB, reservaId: number) {
   const existente = db.prepare('SELECT * FROM facturas WHERE reserva_id = ?').get(reservaId);
@@ -157,12 +192,13 @@ export async function procesarPagoConfirmado(db: DB, reservaId: number) {
   await generarCotizacion(db, reservaId, false); // por si la reserva es de antes de este módulo
   const factura = await emitirFactura(db, reservaId);
   const liquidacion = generarLiquidacion(db, reservaId);
-  return { factura, liquidacion };
+  const remision = generarRemision(db, reservaId); // remisión a nombre del dueño del vehículo
+  return { factura, liquidacion, remision };
 }
 
-export function marcarLiquidacionesPagadas(db: DB, reservaIds: number[], comprobante: string) {
+export function marcarLiquidacionesPagadas(db: DB, reservaIds: number[], comprobante: string, comprobanteUrl = '') {
   if (reservaIds.length === 0) return;
   const placeholders = reservaIds.map(() => '?').join(',');
-  db.prepare(`UPDATE liquidaciones SET estado = 'pagado', pagado_en = datetime('now','localtime'), comprobante = ? WHERE reserva_id IN (${placeholders})`)
-    .run(comprobante, ...reservaIds);
+  db.prepare(`UPDATE liquidaciones SET estado = 'pagado', pagado_en = datetime('now','localtime'), comprobante = ?, comprobante_url = ? WHERE reserva_id IN (${placeholders})`)
+    .run(comprobante, comprobanteUrl, ...reservaIds);
 }

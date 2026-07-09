@@ -43,6 +43,12 @@ export async function GET(req: NextRequest) {
     WHERE r.fecha_inicio >= ? AND r.fecha_inicio <= ? GROUP BY c.estado
   `).all(desde, hasta) as Array<{ estado: string; n: number }>;
 
+  const gastos = db.prepare(`
+    SELECT categoria, COUNT(*) AS n, COALESCE(SUM(total), 0) AS total
+    FROM gastos WHERE fecha >= ? AND fecha <= ? GROUP BY categoria
+  `).all(desde, hasta) as Array<{ categoria: string; n: number; total: number }>;
+  const gastosTotal = gastos.reduce((s, g) => s + g.total, 0);
+
   return NextResponse.json({
     periodo: { desde, hasta },
     reservas: reservasPeriodo,
@@ -50,6 +56,9 @@ export async function GET(req: NextRequest) {
     comision_total: comisionTotal,
     pagado_propietarios: pagadoPropietarios,
     pendiente_propietarios: pendientePropietarios,
+    gastos,
+    gastos_total: gastosTotal,
+    utilidad_estimada: comisionTotal - gastosTotal,
     facturas,
     cotizaciones,
     dataico_activo: dataicoHabilitado(),

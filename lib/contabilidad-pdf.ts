@@ -78,3 +78,56 @@ export function descargarFacturaPDF(empresa: Empresa, fac: {
     { nombre: fac.cliente_nombre, documento: fac.cliente_documento, correo: fac.cliente_correo }, items, fac.total, nota);
   doc.save(`${fac.numero || 'factura'}.pdf`);
 }
+
+export function descargarRemisionPDF(empresa: Empresa, rem: {
+  numero: string; created_at?: string; propietario_nombre: string; propietario_documento?: string;
+  vehiculo_descripcion: string; placa?: string; fecha_inicio: string; fecha_fin: string; dias: number;
+  bruto: number; comision_pct: number; comision_valor: number; neto: number;
+}) {
+  const doc = new jsPDF();
+
+  doc.setFontSize(18); doc.setFont('helvetica', 'bold');
+  doc.text(empresa.nombre || 'DrivePass', 14, 20);
+  doc.setFontSize(10); doc.setFont('helvetica', 'normal');
+  if (empresa.nit) doc.text(`NIT: ${empresa.nit}`, 14, 26);
+
+  doc.setFontSize(14); doc.setFont('helvetica', 'bold');
+  doc.text('REMISIÓN', 196, 20, { align: 'right' });
+  doc.setFontSize(10); doc.setFont('helvetica', 'normal');
+  doc.text(`No. ${rem.numero}`, 196, 26, { align: 'right' });
+  doc.text(`Fecha: ${(rem.created_at || '').slice(0, 10)}`, 196, 31, { align: 'right' });
+
+  doc.setDrawColor(200); doc.line(14, 36, 196, 36);
+
+  doc.setFontSize(10); doc.setFont('helvetica', 'bold');
+  doc.text('Propietario del vehículo', 14, 44);
+  doc.setFont('helvetica', 'normal');
+  doc.text(rem.propietario_nombre || '—', 14, 50);
+  if (rem.propietario_documento) doc.text(`Documento: ${rem.propietario_documento}`, 14, 55);
+
+  doc.setFont('helvetica', 'bold');
+  doc.text('Vehículo', 120, 44);
+  doc.setFont('helvetica', 'normal');
+  doc.text(rem.vehiculo_descripcion || '—', 120, 50);
+  if (rem.placa) doc.text(`Placa: ${rem.placa}`, 120, 55);
+  doc.text(`Período: ${rem.fecha_inicio} a ${rem.fecha_fin}`, 120, 60);
+
+  autoTable(doc, {
+    startY: 70,
+    head: [['Concepto', 'Valor']],
+    body: [
+      [`Alquiler ${rem.vehiculo_descripcion} (${rem.dias} día${rem.dias !== 1 ? 's' : ''})`, cop(rem.bruto)],
+      [`Comisión ${empresa.nombre || 'DrivePass'} (${(rem.comision_pct * 100).toFixed(0)}%)`, `- ${cop(rem.comision_valor)}`],
+    ],
+    foot: [['Neto a pagar al propietario', cop(rem.neto)]],
+    theme: 'grid',
+    headStyles: { fillColor: [199, 74, 33] },
+    footStyles: { fillColor: [27, 51, 86], textColor: 255, fontStyle: 'bold' },
+  });
+
+  const finalY = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY || 100;
+  doc.setFontSize(9); doc.setTextColor(120);
+  doc.text('Documento de remisión interno — soporte de la liquidación al propietario. No constituye factura.', 14, finalY + 10, { maxWidth: 182 });
+
+  doc.save(`${rem.numero || 'remision'}.pdf`);
+}

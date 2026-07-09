@@ -1,0 +1,99 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { getDb } from '@/lib/db';
+import { getCurrentUser } from '@/lib/auth';
+
+export const dynamic = 'force-dynamic';
+
+const CATEGORIAS = ['fijo', 'variable', 'servicio', 'producto', 'otro'] as const;
+type Categoria = (typeof CATEGORIAS)[number];
+
+export async function GET(req: NextRequest) {
+  const user = await getCurrentUser();
+  if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+
+  const db = getDb();
+  const { searchParams } = new URL(req.url);
+  const desde = searchParams.get('desde') || '0000-01-01';
+  const hasta = searchParams.get('hasta') || '9999-12-31';
+  const categoria = searchParams.get('categoria') || '';
+
+  const filtros: string[] = ['fecha >= ?', 'fecha <= ?'];
+  const params: unknown[] = [desde, hasta];
+  if (categoria && (CATEGORIAS as readonly string[]).includes(categoria)) {
+    filtros.push('categoria = ?');
+    params.push(categoria);
+  }
+  const where = `WHERE ${filtros.join(' AND ')}`;
+
+  const gastos = db.prepare(
+    `SELECT id, categoria, proveedor, nit_proveedor, descripcion, numero_factura, fecha,
+            subtotal, iva, total, metodo_pago, recurrente, comprobante_url, extraido_ia, notas, created_at
+     FROM gastos ${where} ORDER BY fecha DESC, id DESC`
+  ).all(...params);
+
+  const porCategoria = db.prepare(
+    `SELECT categoria, COUNT(*) AS n, COALESCE(SUM(total), 0) AS total
+     FROM gastos ${where} GROUP BY categoria`
+  ).all(...params) as Array<{ categoria: string; n: number; total: number }>;
+
+  const totalGeneral = porCategoria.reduce((s, c) => s + c.total, 0);
+
+  return NextResponse.json({ gastos, por_categoria: porCategoria, total_general: totalGeneral });
+}
+
+export async function POST(req: NextRequest) {
+  const user = await getCurrentUser();
+  if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+
+  const body = await req.json().catch(() => ({}));
+  const categoria: Categoria = (CATEGORIAS as readonly string[]).includes(body.categoria) ? body.categoria : 'variable';
+  const fecha = typeof body.fecha === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.fecha)
+    ? body.fecha : new Date().toISOString().slice(0, 10);
+  const total = Number(body.total);
+  if (!Number.isFinite(total) || total <= 0) {
+    return NextResponse.json({ error: 'El total debe ser un número mayor a 0.' }, { status: 400 });
+  }
+  const num = (v: unknown) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : 0; };
+  const str = (v: unknown) => (typeof v === 'string' ? v.trim().slice(0, 300) : '');
+
+  const db = getDb();
+  const info = db.prepare(
+    `INSERT INTO gastos
+      (categoria, proveedor, nit_proveedor, descripcion, numero_factura, fecha,
+       subtotal, iva, total, metodo_pago, recurrente, comprobante_url, extraido_ia, notas, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    categoria,
+    str(body.proveedor),
+    str(body.nit_proveedor),
+    str(body.descripcion),
+    str(body.numero_factura),
+    fecha,
+    num(body.subtotal),
+    num(body.iva),
+    total,
+    str(body.metodo_pago),
+    body.recurrente ? 1 : 0,
+    str(body.comprobante_url),
+    body.extraido_ia ? 1 : 0,
+    str(body.notas),
+    user.id,
+  );
+
+  const gasto = db.prepare('SELECT * FROM gastos WHERE id = ?').get(info.lastInsertRowid);
+  return NextResponse.json({ gasto }, { status: 201 });
+}
+
+export async function DELETE(req: NextRequest) {
+  const user = await getCurrentUser();
+  if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+
+  const { searchParams } = new URL(req.url);
+  const id = Number(searchParams.get('id'));
+  if (!Number.isInteger(id) || id <= 0) return NextResponse.json({ error: 'ID inválido' }, { status: 400 });
+
+  const db = getDb();
+  const info = db.prepare('DELETE FROM gastos WHERE id = ?').run(id);
+  if (info.changes === 0) return NextResponse.json({ error: 'Gasto no encontrado' }, { status: 404 });
+  return NextResponse.json({ ok: true });
+}
