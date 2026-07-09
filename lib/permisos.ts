@@ -33,6 +33,12 @@ export const AREA_NIVELES: Record<string, AdminNivel[]> = {
   soporte:      ['principal', 'socio', 'secretaria'],
   config:       ['principal', 'socio'],
   auditoria:    ['principal', 'socio'],
+  // Panel de Control interno (página aparte /control) — módulos de trabajo del equipo
+  panel:        ['principal', 'socio', 'secretaria'],
+  tareas:       ['principal', 'socio', 'secretaria'],
+  calendario:   ['principal', 'socio', 'secretaria'],
+  documentos:   ['principal', 'socio', 'secretaria'],
+  tableros:     ['principal', 'socio', 'secretaria'],
   // Acciones sensibles (gating fino, más allá de ver la sección)
   usuarios_gestion: ['principal'], // crear cuentas de equipo, cambiar nivel/estado, resetear clave
   config_editar:    ['principal'], // guardar comisión / config
@@ -41,6 +47,12 @@ export const AREA_NIVELES: Record<string, AdminNivel[]> = {
 export function puede(nivel: AdminNivel, area: string): boolean {
   const permitidos = AREA_NIVELES[area];
   return permitidos ? permitidos.includes(nivel) : false;
+}
+
+// ¿Es dueño o socio? Usado para el contenido marcado "solo socios" (tareas,
+// eventos y documentos restringidos que la secretaría no debe ver).
+export function esSocio(nivel: AdminNivel): boolean {
+  return nivel === 'principal' || nivel === 'socio';
 }
 
 type DB = Database.Database;

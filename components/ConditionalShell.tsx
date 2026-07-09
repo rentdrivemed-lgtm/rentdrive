@@ -5,7 +5,7 @@ import Footer from '@/components/Footer';
 import BottomNav from '@/components/BottomNav';
 import type { ReactNode } from 'react';
 
-const RUTAS_SIN_SHELL = ['/acceso-drivepass'];
+const RUTAS_SIN_SHELL = ['/acceso-drivepass', '/control'];
 
 export default function ConditionalShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();

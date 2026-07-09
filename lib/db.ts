@@ -332,6 +332,53 @@ function initDb(db: Database.Database) {
       entidad_id INTEGER,
       created_at TEXT DEFAULT (datetime('now', 'localtime'))
     );
+
+    -- ─────────── Panel de Control interno del equipo (Tareas / Calendario / Documentos) ───────────
+    -- Kanban de tareas del equipo (Por hacer / En proceso / Hecho).
+    CREATE TABLE IF NOT EXISTS tareas_equipo (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      titulo TEXT NOT NULL,
+      descripcion TEXT DEFAULT '',
+      estado TEXT NOT NULL DEFAULT 'todo' CHECK(estado IN ('todo','proceso','hecho')),
+      rol_destino TEXT DEFAULT '',          -- mensajero | secretaria | socio | '' (etiqueta/color)
+      asignado_id INTEGER REFERENCES usuarios(id),
+      asignado_nombre TEXT DEFAULT '',
+      solo_socios INTEGER DEFAULT 0,        -- 1 = solo la ven dueño/socios (oculto a secretaria)
+      vence TEXT DEFAULT '',
+      orden INTEGER DEFAULT 0,
+      created_by INTEGER REFERENCES usuarios(id),
+      created_by_nombre TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now', 'localtime')),
+      updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+    );
+
+    -- Eventos de calendario manuales (los de reservas/vencimientos se derivan en la consulta).
+    CREATE TABLE IF NOT EXISTS eventos_calendario (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      titulo TEXT NOT NULL,
+      tipo TEXT DEFAULT 'general' CHECK(tipo IN ('entrega','devolucion','vencimiento','reunion','general')),
+      fecha TEXT NOT NULL,                  -- YYYY-MM-DD
+      hora TEXT DEFAULT '',
+      nota TEXT DEFAULT '',
+      solo_socios INTEGER DEFAULT 0,
+      created_by INTEGER REFERENCES usuarios(id),
+      created_by_nombre TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now', 'localtime'))
+    );
+
+    -- Repositorio de documentos del equipo con control de acceso por rol.
+    CREATE TABLE IF NOT EXISTS documentos_equipo (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      nombre TEXT NOT NULL,
+      archivo_url TEXT DEFAULT '',
+      tipo TEXT DEFAULT 'pdf',              -- pdf | xls | img | link | otro
+      visible_para TEXT NOT NULL DEFAULT 'todos' CHECK(visible_para IN ('socios','socios_secretaria','todos')),
+      subido_por INTEGER REFERENCES usuarios(id),
+      subido_por_nombre TEXT DEFAULT '',
+      estado TEXT DEFAULT 'activo',
+      created_at TEXT DEFAULT (datetime('now', 'localtime')),
+      updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+    );
   `);
 
   try { db.exec("ALTER TABLE liquidaciones ADD COLUMN comprobante_url TEXT DEFAULT ''"); } catch { /* ya existe */ }

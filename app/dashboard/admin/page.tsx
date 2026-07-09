@@ -606,8 +606,17 @@ export default function DashboardAdmin() {
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-10">
-      <h1 className="text-2xl font-bold text-ink mb-1">Panel Administrador</h1>
-      <p className="text-ink/50 text-sm mb-6">Gestión total del sistema DrivePass</p>
+      <div className="flex items-start justify-between gap-3 flex-wrap mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-ink mb-1">Panel Administrador</h1>
+          <p className="text-ink/50 text-sm">Gestión total del sistema DrivePass</p>
+        </div>
+        <a href="/control" target="_blank" rel="noopener"
+          className="inline-flex items-center gap-2 bg-ink text-white font-semibold text-sm px-4 py-2.5 rounded-xl hover:opacity-90 transition shadow-sm">
+          🎛️ Panel de control interno
+          <span className="text-[10px] opacity-70">↗ nueva pestaña</span>
+        </a>
+      </div>
 
       {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">

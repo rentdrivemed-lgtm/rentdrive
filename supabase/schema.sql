@@ -94,3 +94,47 @@ CREATE TABLE IF NOT EXISTS auditoria (
   entidad_id     INTEGER,
   created_at     TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
 );
+
+-- ─────────────── Panel de Control interno (Tareas / Calendario / Documentos) ───────────────
+CREATE TABLE IF NOT EXISTS tareas_equipo (
+  id                SERIAL PRIMARY KEY,
+  titulo            TEXT NOT NULL,
+  descripcion       TEXT DEFAULT '',
+  estado            TEXT NOT NULL DEFAULT 'todo' CHECK (estado IN ('todo','proceso','hecho')),
+  rol_destino       TEXT DEFAULT '',
+  asignado_id       INTEGER REFERENCES usuarios(id),
+  asignado_nombre   TEXT DEFAULT '',
+  solo_socios       INTEGER DEFAULT 0,
+  vence             TEXT DEFAULT '',
+  orden             INTEGER DEFAULT 0,
+  created_by        INTEGER REFERENCES usuarios(id),
+  created_by_nombre TEXT DEFAULT '',
+  created_at        TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
+  updated_at        TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+);
+
+CREATE TABLE IF NOT EXISTS eventos_calendario (
+  id                SERIAL PRIMARY KEY,
+  titulo            TEXT NOT NULL,
+  tipo              TEXT DEFAULT 'general' CHECK (tipo IN ('entrega','devolucion','vencimiento','reunion','general')),
+  fecha             TEXT NOT NULL,
+  hora              TEXT DEFAULT '',
+  nota              TEXT DEFAULT '',
+  solo_socios       INTEGER DEFAULT 0,
+  created_by        INTEGER REFERENCES usuarios(id),
+  created_by_nombre TEXT DEFAULT '',
+  created_at        TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+);
+
+CREATE TABLE IF NOT EXISTS documentos_equipo (
+  id                SERIAL PRIMARY KEY,
+  nombre            TEXT NOT NULL,
+  archivo_url       TEXT DEFAULT '',
+  tipo              TEXT DEFAULT 'pdf',
+  visible_para      TEXT NOT NULL DEFAULT 'todos' CHECK (visible_para IN ('socios','socios_secretaria','todos')),
+  subido_por        INTEGER REFERENCES usuarios(id),
+  subido_por_nombre TEXT DEFAULT '',
+  estado            TEXT DEFAULT 'activo',
+  created_at        TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
+  updated_at        TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+);
