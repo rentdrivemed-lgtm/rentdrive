@@ -35,6 +35,15 @@ export function notificarUsuarios(
   }
 }
 
+// ¿El usuario puede ver/editar este tablero? (es el creador o un colaborador invitado)
+export function puedeVerTablero(db: DB, tableroId: number, userId: number): boolean {
+  const t = db.prepare('SELECT created_by FROM tableros WHERE id = ?').get(tableroId) as { created_by: number } | undefined;
+  if (!t) return false;
+  if (Number(t.created_by) === userId) return true;
+  const c = db.prepare('SELECT 1 FROM tablero_colaboradores WHERE tablero_id = ? AND usuario_id = ?').get(tableroId, userId);
+  return !!c;
+}
+
 // Notifica a todo el equipo (opcionalmente excluyendo al autor de la acción).
 // `soloSocios` restringe a dueño/socios (para eventos/tareas reservadas).
 export function notificarEquipo(

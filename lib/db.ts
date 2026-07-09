@@ -379,6 +379,36 @@ function initDb(db: Database.Database) {
       created_at TEXT DEFAULT (datetime('now', 'localtime')),
       updated_at TEXT DEFAULT (datetime('now', 'localtime'))
     );
+
+    -- Tableros infinitos colaborativos (tipo Miro). Cada tablero tiene sus
+    -- colaboradores invitados; no todo el equipo ve todos los tableros.
+    CREATE TABLE IF NOT EXISTS tableros (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      titulo TEXT NOT NULL DEFAULT 'Tablero',
+      created_by INTEGER REFERENCES usuarios(id),
+      created_by_nombre TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now', 'localtime')),
+      updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+    );
+
+    CREATE TABLE IF NOT EXISTS tablero_colaboradores (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tablero_id INTEGER NOT NULL REFERENCES tableros(id),
+      usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+      UNIQUE(tablero_id, usuario_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS tablero_elementos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tablero_id INTEGER NOT NULL REFERENCES tableros(id),
+      tipo TEXT NOT NULL,                   -- sticky | text | rect | circle | link | path
+      x REAL DEFAULT 0, y REAL DEFAULT 0,
+      w REAL DEFAULT 0, h REAL DEFAULT 0,
+      contenido TEXT DEFAULT '',            -- texto, html (link) o JSON de puntos (path)
+      color TEXT DEFAULT '',
+      created_by INTEGER REFERENCES usuarios(id),
+      updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+    );
   `);
 
   try { db.exec("ALTER TABLE liquidaciones ADD COLUMN comprobante_url TEXT DEFAULT ''"); } catch { /* ya existe */ }

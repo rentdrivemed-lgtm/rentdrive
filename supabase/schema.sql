@@ -138,3 +138,34 @@ CREATE TABLE IF NOT EXISTS documentos_equipo (
   created_at        TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
   updated_at        TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
 );
+
+-- Tableros infinitos colaborativos (tipo Miro) — colaboradores por tablero.
+CREATE TABLE IF NOT EXISTS tableros (
+  id                SERIAL PRIMARY KEY,
+  titulo            TEXT NOT NULL DEFAULT 'Tablero',
+  created_by        INTEGER REFERENCES usuarios(id),
+  created_by_nombre TEXT DEFAULT '',
+  created_at        TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
+  updated_at        TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+);
+
+CREATE TABLE IF NOT EXISTS tablero_colaboradores (
+  id         SERIAL PRIMARY KEY,
+  tablero_id INTEGER NOT NULL REFERENCES tableros(id),
+  usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+  UNIQUE (tablero_id, usuario_id)
+);
+
+CREATE TABLE IF NOT EXISTS tablero_elementos (
+  id         SERIAL PRIMARY KEY,
+  tablero_id INTEGER NOT NULL REFERENCES tableros(id),
+  tipo       TEXT NOT NULL,
+  x          REAL DEFAULT 0,
+  y          REAL DEFAULT 0,
+  w          REAL DEFAULT 0,
+  h          REAL DEFAULT 0,
+  contenido  TEXT DEFAULT '',
+  color      TEXT DEFAULT '',
+  created_by INTEGER REFERENCES usuarios(id),
+  updated_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+);

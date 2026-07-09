@@ -1,25 +1,27 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { normalizarNivel, NIVEL_LABEL, type AdminNivel } from '@/lib/permisos';
+import PanelHoy from '@/components/control/PanelHoy';
 import TareasBoard from '@/components/control/TareasBoard';
 import CalendarioBoard from '@/components/control/CalendarioBoard';
 import DocumentosBoard from '@/components/control/DocumentosBoard';
+import TablerosBoard from '@/components/control/TablerosBoard';
 
 type Notif = { id: number; tipo: string; titulo: string; mensaje: string; leida: number; created_at: string };
 type Seccion = 'tareas' | 'calendario' | 'documentos' | 'panel' | 'tableros';
 
 const NAV: { key: Seccion; label: string; listo: boolean }[] = [
-  { key: 'panel', label: 'Panel de hoy', listo: false },
+  { key: 'panel', label: 'Panel de hoy', listo: true },
   { key: 'tareas', label: 'Tareas', listo: true },
   { key: 'calendario', label: 'Calendario', listo: true },
   { key: 'documentos', label: 'Documentos', listo: true },
-  { key: 'tableros', label: 'Tableros', listo: false },
+  { key: 'tableros', label: 'Tableros', listo: true },
 ];
 
 export default function ControlApp() {
   const [nivel, setNivel] = useState<AdminNivel>('secretaria');
   const [nombre, setNombre] = useState('');
-  const [seccion, setSeccion] = useState<Seccion>('tareas');
+  const [seccion, setSeccion] = useState<Seccion>('panel');
   const [notifs, setNotifs] = useState<Notif[]>([]);
   const [bellOpen, setBellOpen] = useState(false);
   const [toasts, setToasts] = useState<{ id: number; text: string }[]>([]);
@@ -125,8 +127,8 @@ export default function ControlApp() {
           {seccion === 'tareas' && <TareasBoard nivel={nivel} onEvento={cargarNotifs} pushToast={pushToast} />}
           {seccion === 'calendario' && <CalendarioBoard nivel={nivel} onEvento={cargarNotifs} pushToast={pushToast} />}
           {seccion === 'documentos' && <DocumentosBoard nivel={nivel} onEvento={cargarNotifs} pushToast={pushToast} />}
-          {seccion === 'panel' && <Placeholder titulo="Panel de hoy" texto="Resumen de flota y pendientes del día. Lo construimos en la siguiente fase." />}
-          {seccion === 'tableros' && <Placeholder titulo="Tableros" texto="Canvas infinito colaborativo tipo Miro. Es el módulo más grande; lo dejamos para el final, como acordamos." />}
+          {seccion === 'panel' && <PanelHoy />}
+          {seccion === 'tableros' && <TablerosBoard pushToast={pushToast} onEvento={cargarNotifs} />}
         </main>
       </div>
 
@@ -134,15 +136,6 @@ export default function ControlApp() {
       <div className="dpc-toast-stack">
         {toasts.map(t => <div key={t.id} className="dpc-toast">{t.text}</div>)}
       </div>
-    </>
-  );
-}
-
-function Placeholder({ titulo, texto }: { titulo: string; texto: string }) {
-  return (
-    <>
-      <div className="section-head"><div><div className="section-title">{titulo}</div></div></div>
-      <div className="empty-state"><p style={{ fontSize: 15, marginBottom: 8 }}>🚧 En construcción</p><p style={{ maxWidth: 380, margin: '0 auto' }}>{texto}</p></div>
     </>
   );
 }
