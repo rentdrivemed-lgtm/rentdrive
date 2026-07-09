@@ -8,10 +8,12 @@ export const maxDuration = 60;
 
 type Mensajero = { id: number; nombre: string };
 
+// Solo resuelve mensajeros ACTIVOS: al desactivar (o dar de baja) a un mensajero
+// su enlace deja de funcionar de inmediato.
 function resolverMensajero(token: string): Mensajero | undefined {
   if (!token || token.length < 8) return undefined;
   const db = getDb();
-  return db.prepare('SELECT id, nombre FROM mensajeros WHERE token = ?').get(token) as Mensajero | undefined;
+  return db.prepare('SELECT id, nombre FROM mensajeros WHERE token = ? AND activo = 1').get(token) as Mensajero | undefined;
 }
 
 function serializarOperacion(opId: number) {

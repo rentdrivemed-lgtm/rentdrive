@@ -167,6 +167,13 @@ export default function OperacionesPanel() {
       cargar();
     } catch { /* el usuario puede reintentar el clic */ }
   };
+  const regenMensajero = async (m: Mensajero) => {
+    if (!window.confirm(`¿Generar un enlace nuevo para ${m.nombre}? El enlace actual dejará de funcionar de inmediato y tendrás que enviarle el nuevo.`)) return;
+    try {
+      await fetch(`/api/mensajeros/${m.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ regenerar_token: true }) });
+      cargar();
+    } catch { /* el usuario puede reintentar el clic */ }
+  };
 
   if (cargando) return <div className="text-center py-16 text-ink/50">Cargando operaciones…</div>;
   if (errorCarga) return (
@@ -238,6 +245,11 @@ export default function OperacionesPanel() {
                       }}
                       className="text-[11px] px-2 py-1 rounded-lg bg-accent/15 text-accent hover:bg-accent/20 transition">
                       {copiado === m.id ? '✓ Copiado' : '🔗 Copiar acceso'}
+                    </button>
+                  )}
+                  {m.token && (
+                    <button onClick={() => regenMensajero(m)} title="Genera un enlace nuevo y anula el anterior" className="text-[11px] px-2 py-1 rounded-lg bg-surface-2 text-ink/60 hover:text-ink transition">
+                      ♻️ Regenerar enlace
                     </button>
                   )}
                   <button onClick={() => toggleMensajero(m)} className="text-[11px] px-2 py-1 rounded-lg bg-surface-2 text-ink/60 hover:text-ink transition">

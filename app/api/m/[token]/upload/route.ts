@@ -9,7 +9,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   if (!token || token.length < 8) return NextResponse.json({ error: 'Enlace inválido' }, { status: 404 });
 
   const db = getDb();
-  const m = db.prepare('SELECT id FROM mensajeros WHERE token = ?').get(token);
+  const m = db.prepare('SELECT id FROM mensajeros WHERE token = ? AND activo = 1').get(token);
   if (!m) return NextResponse.json({ error: 'Enlace inválido' }, { status: 404 });
 
   const formData = await req.formData();

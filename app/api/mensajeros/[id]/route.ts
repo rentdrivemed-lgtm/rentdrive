@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { randomBytes } from 'crypto';
 import { getDb } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
+
+function nuevoToken() { return randomBytes(16).toString('hex'); }
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
@@ -17,10 +20,13 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   if (typeof body.nombre === 'string') { sets.push('nombre = ?'); valores.push(body.nombre.trim()); }
   if (typeof body.celular === 'string') { sets.push('celular = ?'); valores.push(body.celular.trim()); }
   if (body.activo !== undefined) { sets.push('activo = ?'); valores.push(body.activo ? 1 : 0); }
+  // Regenerar el enlace: emite un token nuevo y anula el anterior de inmediato
+  // (útil si el mensajero pierde el celular o el link se filtró).
+  if (body.regenerar_token) { sets.push('token = ?'); valores.push(nuevoToken()); }
   if (sets.length === 0) return NextResponse.json({ error: 'Nada para actualizar.' }, { status: 400 });
 
   db.prepare(`UPDATE mensajeros SET ${sets.join(', ')} WHERE id = ?`).run(...valores, Number(id));
-  const mensajero = db.prepare('SELECT id, nombre, celular, activo FROM mensajeros WHERE id = ?').get(Number(id));
+  const mensajero = db.prepare('SELECT id, nombre, celular, activo, token FROM mensajeros WHERE id = ?').get(Number(id));
   return NextResponse.json({ mensajero });
 }
 
