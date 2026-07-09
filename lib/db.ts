@@ -290,8 +290,12 @@ function initDb(db: Database.Database) {
       abonado REAL DEFAULT 0,
       recurrente INTEGER DEFAULT 0,
       comprobante_url TEXT DEFAULT '',
+      comprobante_pago_url TEXT DEFAULT '',
       extraido_ia INTEGER DEFAULT 0,
       notas TEXT DEFAULT '',
+      estado TEXT DEFAULT 'activo',
+      anulado_en TEXT DEFAULT '',
+      motivo_anulacion TEXT DEFAULT '',
       created_by INTEGER REFERENCES usuarios(id),
       created_at TEXT DEFAULT (datetime('now', 'localtime'))
     );
@@ -319,6 +323,10 @@ function initDb(db: Database.Database) {
   try { db.exec("ALTER TABLE liquidaciones ADD COLUMN comprobante_url TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE gastos ADD COLUMN pagos TEXT DEFAULT '[]'"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE gastos ADD COLUMN abonado REAL DEFAULT 0"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE gastos ADD COLUMN comprobante_pago_url TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE gastos ADD COLUMN estado TEXT DEFAULT 'activo'"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE gastos ADD COLUMN anulado_en TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE gastos ADD COLUMN motivo_anulacion TEXT DEFAULT ''"); } catch { /* ya existe */ }
 
   try { db.exec("ALTER TABLE vehiculos ADD COLUMN dias_disponibles TEXT DEFAULT '[]'"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE vehiculos ADD COLUMN fotos_detalle TEXT DEFAULT '{}'"); } catch { /* ya existe */ }

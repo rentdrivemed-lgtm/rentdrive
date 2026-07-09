@@ -46,8 +46,12 @@ CREATE TABLE IF NOT EXISTS gastos (
   abonado               REAL DEFAULT 0,
   recurrente            INTEGER DEFAULT 0,
   comprobante_url       TEXT DEFAULT '',
+  comprobante_pago_url  TEXT DEFAULT '',
   extraido_ia           INTEGER DEFAULT 0,
   notas                 TEXT DEFAULT '',
+  estado                TEXT DEFAULT 'activo',
+  anulado_en            TEXT DEFAULT '',
+  motivo_anulacion      TEXT DEFAULT '',
   created_by            INTEGER REFERENCES usuarios(id),
   created_at            TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
 );

@@ -79,6 +79,89 @@ export function descargarFacturaPDF(empresa: Empresa, fac: {
   doc.save(`${fac.numero || 'factura'}.pdf`);
 }
 
+export function descargarGastoPDF(empresa: Empresa, g: {
+  id: number; categoria: string; proveedor?: string; nit_proveedor?: string; numero_factura?: string;
+  fecha: string; descripcion?: string; subtotal?: number; iva?: number; total: number;
+  pagos?: Array<{ metodo: string; valor: number }>; abonado?: number; notas?: string; estado?: string;
+}) {
+  const doc = new jsPDF();
+  const numero = `GTO-${String(g.id).padStart(6, '0')}`;
+
+  doc.setFontSize(18); doc.setFont('helvetica', 'bold');
+  doc.text(empresa.nombre || 'DrivePass', 14, 20);
+  doc.setFontSize(10); doc.setFont('helvetica', 'normal');
+  if (empresa.nit) doc.text(`NIT: ${empresa.nit}`, 14, 26);
+
+  doc.setFontSize(14); doc.setFont('helvetica', 'bold');
+  doc.text('COMPROBANTE DE GASTO', 196, 20, { align: 'right' });
+  doc.setFontSize(10); doc.setFont('helvetica', 'normal');
+  doc.text(`No. ${numero}`, 196, 26, { align: 'right' });
+  doc.text(`Fecha: ${(g.fecha || '').slice(0, 10)}`, 196, 31, { align: 'right' });
+  if (g.estado === 'anulado') {
+    doc.setTextColor(199, 74, 33); doc.setFont('helvetica', 'bold');
+    doc.text('ANULADO', 196, 36, { align: 'right' });
+    doc.setTextColor(0); doc.setFont('helvetica', 'normal');
+  }
+
+  doc.setDrawColor(200); doc.line(14, 40, 196, 40);
+
+  doc.setFontSize(10); doc.setFont('helvetica', 'bold');
+  doc.text('Proveedor', 14, 48);
+  doc.setFont('helvetica', 'normal');
+  doc.text(g.proveedor || '—', 14, 54);
+  if (g.nit_proveedor) doc.text(`NIT/Doc: ${g.nit_proveedor}`, 14, 59);
+  if (g.numero_factura) doc.text(`Factura/recibo: ${g.numero_factura}`, 14, 64);
+
+  doc.setFont('helvetica', 'bold');
+  doc.text('Detalle', 120, 48);
+  doc.setFont('helvetica', 'normal');
+  doc.text(`Categoría: ${g.categoria}`, 120, 54);
+  if (g.descripcion) doc.text(doc.splitTextToSize(g.descripcion, 76) as string[], 120, 59);
+
+  const abonado = g.abonado ?? (g.pagos || []).reduce((s, p) => s + p.valor, 0);
+  const saldo = g.total - abonado;
+
+  const body: string[][] = [];
+  if (g.subtotal) body.push(['Subtotal (base)', cop(g.subtotal)]);
+  if (g.iva) body.push(['IVA / impuestos', cop(g.iva)]);
+  body.push(['Total del gasto', cop(g.total)]);
+
+  autoTable(doc, {
+    startY: 74,
+    head: [['Concepto', 'Valor']],
+    body,
+    theme: 'grid',
+    headStyles: { fillColor: [199, 74, 33] },
+  });
+
+  let y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY || 100;
+
+  if (g.pagos && g.pagos.length > 0) {
+    autoTable(doc, {
+      startY: y + 6,
+      head: [['Medio de pago (abono)', 'Valor']],
+      body: g.pagos.map(p => [p.metodo || '—', cop(p.valor)]),
+      foot: [['Abonado', cop(abonado)], ['Saldo pendiente', cop(saldo)]],
+      theme: 'grid',
+      headStyles: { fillColor: [27, 51, 86] },
+      footStyles: { fillColor: [240, 240, 240], textColor: 20, fontStyle: 'bold' },
+    });
+    y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY || y + 30;
+  } else {
+    doc.setFontSize(10); doc.setFont('helvetica', 'bold');
+    doc.text(`Saldo pendiente: ${cop(saldo)}`, 14, y + 10);
+    doc.setFont('helvetica', 'normal');
+    y += 10;
+  }
+
+  if (g.notas) {
+    doc.setFontSize(9); doc.setTextColor(120);
+    doc.text(`Notas: ${g.notas}`, 14, y + 10, { maxWidth: 182 });
+  }
+
+  doc.save(`${numero}.pdf`);
+}
+
 export function descargarRemisionPDF(empresa: Empresa, rem: {
   numero: string; created_at?: string; propietario_nombre: string; propietario_documento?: string;
   vehiculo_descripcion: string; placa?: string; fecha_inicio: string; fecha_fin: string; dias: number;
