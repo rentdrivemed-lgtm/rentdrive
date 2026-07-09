@@ -286,6 +286,8 @@ function initDb(db: Database.Database) {
       iva REAL DEFAULT 0,
       total REAL NOT NULL DEFAULT 0,
       metodo_pago TEXT DEFAULT '',
+      pagos TEXT DEFAULT '[]',
+      abonado REAL DEFAULT 0,
       recurrente INTEGER DEFAULT 0,
       comprobante_url TEXT DEFAULT '',
       extraido_ia INTEGER DEFAULT 0,
@@ -315,6 +317,8 @@ function initDb(db: Database.Database) {
   `);
 
   try { db.exec("ALTER TABLE liquidaciones ADD COLUMN comprobante_url TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE gastos ADD COLUMN pagos TEXT DEFAULT '[]'"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE gastos ADD COLUMN abonado REAL DEFAULT 0"); } catch { /* ya existe */ }
 
   try { db.exec("ALTER TABLE vehiculos ADD COLUMN dias_disponibles TEXT DEFAULT '[]'"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE vehiculos ADD COLUMN fotos_detalle TEXT DEFAULT '{}'"); } catch { /* ya existe */ }

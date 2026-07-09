@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS gastos (
   iva                   REAL DEFAULT 0,
   total                 REAL NOT NULL DEFAULT 0,
   metodo_pago           TEXT DEFAULT '',
+  pagos                 TEXT DEFAULT '[]',
+  abonado               REAL DEFAULT 0,
   recurrente            INTEGER DEFAULT 0,
   comprobante_url       TEXT DEFAULT '',
   extraido_ia           INTEGER DEFAULT 0,

@@ -10,7 +10,8 @@ export type GastoExtraido = {
   fecha: string | null;          // YYYY-MM-DD
   subtotal: number | null;
   iva: number | null;
-  total: number | null;
+  total: number | null;          // valor total del bien/servicio (bruto)
+  abonado: number | null;        // suma ya pagada/abonada a la fecha, si el documento lo indica
   categoria_sugerida: CategoriaGasto | null;
   descripcion: string | null;
   metodo_pago: string | null;
@@ -92,7 +93,8 @@ Extrae la información y devuelve un JSON con EXACTAMENTE esta estructura (sin m
   "fecha": "<fecha del documento en formato YYYY-MM-DD, o null>",
   "subtotal": <valor base antes de impuestos como número, o null>,
   "iva": <valor del IVA/impuesto como número, o null>,
-  "total": <valor total a pagar como número, o null>,
+  "total": <VALOR TOTAL del bien o servicio (bruto, el valor total del proyecto/compra), como número, o null>,
+  "abonado": <suma ya pagada o abonada a la fecha si el documento lo indica (ej. "primer pago recibido", "abono"), como número; 0 o null si no hay abonos>,
   "categoria_sugerida": "<fijo|variable|servicio|producto|otro>",
   "descripcion": "<breve descripción de qué se compró o pagó, máx 100 caracteres, o null>",
   "metodo_pago": "<efectivo|tarjeta|transferencia|PSE|null>",
@@ -100,6 +102,10 @@ Extrae la información y devuelve un JSON con EXACTAMENTE esta estructura (sin m
   "confianza": "<alta|media|baja>",
   "nota_ia": "<observación relevante si algo no es claro, o null>"
 }
+
+IMPORTANTE sobre "total" vs "abonado":
+- "total" es SIEMPRE el valor total del bien o servicio (el valor completo), NO el saldo pendiente ni lo que falta por pagar.
+- Si el documento es una cuenta de cobro que muestra "valor total del proyecto $X", "primer pago recibido $Y" y "saldo pendiente $Z", entonces total = X y abonado = Y (lo ya pagado). El saldo pendiente NO va en total.
 
 Guía para categoria_sugerida:
 - "servicio": facturas de servicios públicos o recurrentes de proveedores (energía/EPM, agua, gas, internet, telefonía, arriendo de local/parqueadero, software/suscripciones, contador, vigilancia).
@@ -146,6 +152,7 @@ Reglas de valores:
     subtotal: aNumero(raw.subtotal),
     iva: aNumero(raw.iva),
     total: aNumero(raw.total),
+    abonado: aNumero(raw.abonado),
     categoria_sugerida: cat,
     descripcion: str(raw.descripcion),
     metodo_pago: str(raw.metodo_pago),

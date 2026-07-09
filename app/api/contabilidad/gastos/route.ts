@@ -7,6 +7,21 @@ export const dynamic = 'force-dynamic';
 const CATEGORIAS = ['fijo', 'variable', 'servicio', 'producto', 'otro'] as const;
 type Categoria = (typeof CATEGORIAS)[number];
 
+type GastoRow = { pagos?: string | null; [k: string]: unknown };
+
+function parsePagos(raw: unknown): Array<{ metodo: string; valor: number }> {
+  if (typeof raw !== 'string' || !raw) return [];
+  try {
+    const a = JSON.parse(raw);
+    if (!Array.isArray(a)) return [];
+    return a
+      .map((p) => ({ metodo: typeof p?.metodo === 'string' ? p.metodo : '', valor: Number(p?.valor) || 0 }))
+      .filter((p) => p.valor > 0);
+  } catch {
+    return [];
+  }
+}
+
 export async function GET(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
@@ -25,20 +40,29 @@ export async function GET(req: NextRequest) {
   }
   const where = `WHERE ${filtros.join(' AND ')}`;
 
-  const gastos = db.prepare(
+  const rows = db.prepare(
     `SELECT id, categoria, proveedor, nit_proveedor, descripcion, numero_factura, fecha,
-            subtotal, iva, total, metodo_pago, recurrente, comprobante_url, extraido_ia, notas, created_at
+            subtotal, iva, total, metodo_pago, pagos, abonado, recurrente, comprobante_url, extraido_ia, notas, created_at
      FROM gastos ${where} ORDER BY fecha DESC, id DESC`
-  ).all(...params);
+  ).all(...params) as GastoRow[];
+  const gastos = rows.map((g) => ({ ...g, pagos: parsePagos(g.pagos) }));
 
   const porCategoria = db.prepare(
     `SELECT categoria, COUNT(*) AS n, COALESCE(SUM(total), 0) AS total
      FROM gastos ${where} GROUP BY categoria`
   ).all(...params) as Array<{ categoria: string; n: number; total: number }>;
 
-  const totalGeneral = porCategoria.reduce((s, c) => s + c.total, 0);
+  const tot = db.prepare(
+    `SELECT COALESCE(SUM(total), 0) AS total, COALESCE(SUM(abonado), 0) AS abonado FROM gastos ${where}`
+  ).get(...params) as { total: number; abonado: number };
 
-  return NextResponse.json({ gastos, por_categoria: porCategoria, total_general: totalGeneral });
+  return NextResponse.json({
+    gastos,
+    por_categoria: porCategoria,
+    total_general: tot.total,
+    abonado_general: tot.abonado,
+    pendiente_general: tot.total - tot.abonado,
+  });
 }
 
 export async function POST(req: NextRequest) {
@@ -51,17 +75,29 @@ export async function POST(req: NextRequest) {
     ? body.fecha : new Date().toISOString().slice(0, 10);
   const total = Number(body.total);
   if (!Number.isFinite(total) || total <= 0) {
-    return NextResponse.json({ error: 'El total debe ser un número mayor a 0.' }, { status: 400 });
+    return NextResponse.json({ error: 'El total del gasto debe ser un número mayor a 0.' }, { status: 400 });
   }
   const num = (v: unknown) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : 0; };
   const str = (v: unknown) => (typeof v === 'string' ? v.trim().slice(0, 300) : '');
+
+  // Pago mixto: cada línea {metodo, valor}. abonado = suma de valores.
+  const pagosRaw: Array<{ metodo?: unknown; valor?: unknown }> = Array.isArray(body.pagos) ? body.pagos : [];
+  const pagos = pagosRaw
+    .map((p) => ({ metodo: typeof p?.metodo === 'string' ? p.metodo.slice(0, 30) : '', valor: num(p?.valor) }))
+    .filter((p) => p.valor > 0)
+    .slice(0, 20);
+  const abonado = pagos.reduce((s, p) => s + p.valor, 0);
+  if (abonado > total + 1) {
+    return NextResponse.json({ error: 'Los abonos por medio de pago no pueden superar el total del gasto.' }, { status: 400 });
+  }
+  const metodoPago = pagos.map((p) => p.metodo).filter(Boolean).join(', ') || str(body.metodo_pago);
 
   const db = getDb();
   const info = db.prepare(
     `INSERT INTO gastos
       (categoria, proveedor, nit_proveedor, descripcion, numero_factura, fecha,
-       subtotal, iva, total, metodo_pago, recurrente, comprobante_url, extraido_ia, notas, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       subtotal, iva, total, metodo_pago, pagos, abonado, recurrente, comprobante_url, extraido_ia, notas, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     categoria,
     str(body.proveedor),
@@ -72,7 +108,9 @@ export async function POST(req: NextRequest) {
     num(body.subtotal),
     num(body.iva),
     total,
-    str(body.metodo_pago),
+    metodoPago,
+    JSON.stringify(pagos),
+    abonado,
     body.recurrente ? 1 : 0,
     str(body.comprobante_url),
     body.extraido_ia ? 1 : 0,
@@ -80,7 +118,8 @@ export async function POST(req: NextRequest) {
     user.id,
   );
 
-  const gasto = db.prepare('SELECT * FROM gastos WHERE id = ?').get(info.lastInsertRowid);
+  const row = db.prepare('SELECT * FROM gastos WHERE id = ?').get(info.lastInsertRowid) as GastoRow;
+  const gasto = { ...row, pagos: parsePagos(row.pagos) };
   return NextResponse.json({ gasto }, { status: 201 });
 }
 

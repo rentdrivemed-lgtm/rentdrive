@@ -21,14 +21,17 @@ type Resumen = {
 };
 
 type CategoriaGasto = 'fijo' | 'variable' | 'servicio' | 'producto' | 'otro';
+type PagoLinea = { metodo: string; valor: number };
 type Gasto = {
   id: number; categoria: CategoriaGasto; proveedor: string; nit_proveedor: string; descripcion: string;
   numero_factura: string; fecha: string; subtotal: number; iva: number; total: number;
-  metodo_pago: string; recurrente: number; comprobante_url: string; extraido_ia: number; notas: string; created_at: string;
+  metodo_pago: string; pagos: PagoLinea[]; abonado: number;
+  recurrente: number; comprobante_url: string; extraido_ia: number; notas: string; created_at: string;
 };
+type PagoLineaForm = { metodo: string; valor: string };
 type GastoForm = {
   categoria: CategoriaGasto; proveedor: string; nit_proveedor: string; numero_factura: string;
-  fecha: string; subtotal: string; iva: string; total: string; metodo_pago: string;
+  fecha: string; subtotal: string; iva: string; total: string; pagos: PagoLineaForm[];
   recurrente: boolean; descripcion: string; notas: string; comprobante_url: string; extraido_ia: boolean;
 };
 
@@ -81,13 +84,28 @@ const CAT_GASTO: Record<CategoriaGasto, { label: string; badge: string }> = {
 };
 const CATS_GASTO = Object.keys(CAT_GASTO) as CategoriaGasto[];
 
+const METODOS_PAGO: Array<{ v: string; label: string }> = [
+  { v: 'efectivo', label: 'Efectivo' },
+  { v: 'tarjeta', label: 'Tarjeta' },
+  { v: 'transferencia', label: 'Transferencia' },
+  { v: 'PSE', label: 'PSE' },
+  { v: 'nequi', label: 'Nequi' },
+  { v: 'daviplata', label: 'Daviplata' },
+  { v: 'otro', label: 'Otro' },
+];
+function metodoLabel(v: string) { return METODOS_PAGO.find(m => m.v === v)?.label || v; }
+
 function cop(n: number) { return `$${Math.round(n || 0).toLocaleString('es-CO')}`; }
 function primerDiaMes() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`; }
+function primerDiaAnio() { return `${new Date().getFullYear()}-01-01`; }
 function hoy() { return new Date().toISOString().slice(0, 10); }
+function sumaPagos(pagos: Array<{ valor: string | number }>) {
+  return pagos.reduce((s, p) => s + (Number(p.valor) || 0), 0);
+}
 
 const GFORM_INICIAL: GastoForm = {
   categoria: 'variable', proveedor: '', nit_proveedor: '', numero_factura: '',
-  fecha: hoy(), subtotal: '', iva: '', total: '', metodo_pago: '',
+  fecha: hoy(), subtotal: '', iva: '', total: '', pagos: [],
   recurrente: false, descripcion: '', notas: '', comprobante_url: '', extraido_ia: false,
 };
 
@@ -141,7 +159,9 @@ export default function ContabilidadPanel() {
   const [gastos, setGastos] = useState<Gasto[]>([]);
   const [gastosPorCategoria, setGastosPorCategoria] = useState<Array<{ categoria: string; n: number; total: number }>>([]);
   const [gastosTotal, setGastosTotal] = useState(0);
-  const [gDesde, setGDesde] = useState(primerDiaMes());
+  const [gastosAbonado, setGastosAbonado] = useState(0);
+  const [gastosPendiente, setGastosPendiente] = useState(0);
+  const [gDesde, setGDesde] = useState(primerDiaAnio());
   const [gHasta, setGHasta] = useState(hoy());
   const [gCategoria, setGCategoria] = useState('');
   const [cargandoGastos, setCargandoGastos] = useState(false);
@@ -245,6 +265,8 @@ export default function ContabilidadPanel() {
       setGastos(d.gastos || []);
       setGastosPorCategoria(d.por_categoria || []);
       setGastosTotal(d.total_general || 0);
+      setGastosAbonado(d.abonado_general || 0);
+      setGastosPendiente(d.pendiente_general || 0);
     } catch {
       setErrorGastos('Sin conexión — intenta de nuevo.');
     } finally {
@@ -366,24 +388,31 @@ export default function ContabilidadPanel() {
       if (!res.ok) { setGastoMsg(d.error || 'No se pudo leer el documento — complétalo a mano.'); return; }
       const x = d.datos as {
         proveedor: string | null; nit_proveedor: string | null; numero_factura: string | null; fecha: string | null;
-        subtotal: number | null; iva: number | null; total: number | null; categoria_sugerida: CategoriaGasto | null;
-        descripcion: string | null; metodo_pago: string | null; confianza: string; nota_ia: string | null;
+        subtotal: number | null; iva: number | null; total: number | null; abonado: number | null;
+        categoria_sugerida: CategoriaGasto | null; descripcion: string | null; metodo_pago: string | null;
+        confianza: string; nota_ia: string | null;
       };
-      setGForm(f => ({
-        ...f,
-        proveedor: x.proveedor ?? f.proveedor,
-        nit_proveedor: x.nit_proveedor ?? f.nit_proveedor,
-        numero_factura: x.numero_factura ?? f.numero_factura,
-        fecha: x.fecha ?? f.fecha,
-        subtotal: x.subtotal != null ? String(x.subtotal) : f.subtotal,
-        iva: x.iva != null ? String(x.iva) : f.iva,
-        total: x.total != null ? String(x.total) : f.total,
-        categoria: x.categoria_sugerida ?? f.categoria,
-        descripcion: x.descripcion ?? f.descripcion,
-        metodo_pago: x.metodo_pago ?? f.metodo_pago,
-        extraido_ia: true,
-      }));
-      setGastoMsg(`✓ Datos leídos por la IA (confianza ${x.confianza}). Revísalos y guarda.${x.nota_ia ? ' Nota: ' + x.nota_ia : ''}`);
+      setGForm(f => {
+        // Si la IA detectó un abono ya realizado, lo pre-carga como un medio de pago (el usuario ajusta).
+        const pagos = x.abonado != null && x.abonado > 0
+          ? [{ metodo: x.metodo_pago ?? '', valor: String(x.abonado) }]
+          : f.pagos;
+        return {
+          ...f,
+          proveedor: x.proveedor ?? f.proveedor,
+          nit_proveedor: x.nit_proveedor ?? f.nit_proveedor,
+          numero_factura: x.numero_factura ?? f.numero_factura,
+          fecha: x.fecha ?? f.fecha,
+          subtotal: x.subtotal != null ? String(x.subtotal) : f.subtotal,
+          iva: x.iva != null ? String(x.iva) : f.iva,
+          total: x.total != null ? String(x.total) : f.total,
+          categoria: x.categoria_sugerida ?? f.categoria,
+          descripcion: x.descripcion ?? f.descripcion,
+          pagos,
+          extraido_ia: true,
+        };
+      });
+      setGastoMsg(`✓ Datos leídos por la IA (confianza ${x.confianza}). Revisa el TOTAL y los abonos, y guarda.${x.nota_ia ? ' Nota: ' + x.nota_ia : ''}`);
     } catch {
       setGastoMsg('Sin conexión al leer el documento.');
     } finally {
@@ -410,7 +439,12 @@ export default function ContabilidadPanel() {
 
   const guardarGasto = async () => {
     const total = Number(gForm.total);
-    if (!Number.isFinite(total) || total <= 0) { setGastoMsg('El total debe ser un número mayor a 0.'); return; }
+    if (!Number.isFinite(total) || total <= 0) { setGastoMsg('El total del gasto debe ser un número mayor a 0.'); return; }
+    const pagos = gForm.pagos
+      .map(p => ({ metodo: p.metodo, valor: Number(p.valor) || 0 }))
+      .filter(p => p.valor > 0);
+    const abonado = pagos.reduce((s, p) => s + p.valor, 0);
+    if (abonado > total + 0.5) { setGastoMsg('Los abonos por medio de pago no pueden superar el total del gasto.'); return; }
     setGuardandoGasto(true); setGastoMsg('');
     try {
       const res = await fetch('/api/contabilidad/gastos', {
@@ -420,6 +454,7 @@ export default function ContabilidadPanel() {
           subtotal: Number(gForm.subtotal) || 0,
           iva: Number(gForm.iva) || 0,
           total,
+          pagos,
         }),
       });
       if (res.ok) {
@@ -667,18 +702,6 @@ export default function ContabilidadPanel() {
                     className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
                 </div>
                 <div>
-                  <label className="text-[11px] text-ink/50 block mb-1">Método de pago</label>
-                  <select value={gForm.metodo_pago} onChange={e => setGForm(f => ({ ...f, metodo_pago: e.target.value }))}
-                    className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink">
-                    <option value="">—</option>
-                    <option value="efectivo">Efectivo</option>
-                    <option value="tarjeta">Tarjeta</option>
-                    <option value="transferencia">Transferencia</option>
-                    <option value="PSE">PSE</option>
-                    <option value="otro">Otro</option>
-                  </select>
-                </div>
-                <div>
                   <label className="text-[11px] text-ink/50 block mb-1">Subtotal (base)</label>
                   <input value={gForm.subtotal} onChange={e => setGForm(f => ({ ...f, subtotal: e.target.value.replace(/[^0-9.]/g, '') }))}
                     placeholder="0" className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
@@ -689,9 +712,10 @@ export default function ContabilidadPanel() {
                     placeholder="0" className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
                 </div>
                 <div>
-                  <label className="text-[11px] text-ink/50 block mb-1">Total pagado *</label>
+                  <label className="text-[11px] text-ink/50 block mb-1">Total del gasto *</label>
                   <input value={gForm.total} onChange={e => setGForm(f => ({ ...f, total: e.target.value.replace(/[^0-9.]/g, '') }))}
                     placeholder="0" className="w-full bg-surface border border-accent/40 rounded-xl px-3 py-2 text-sm text-ink font-semibold" />
+                  <p className="text-[10px] text-ink/40 mt-0.5">Valor total del bien o servicio (no lo que abonaste).</p>
                 </div>
                 <div className="flex items-end pb-1">
                   <label className="flex items-center gap-2 text-sm cursor-pointer text-ink/70">
@@ -710,6 +734,54 @@ export default function ContabilidadPanel() {
                     className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink resize-none" />
                 </div>
               </div>
+
+              {/* Pago mixto: un campo por medio de pago */}
+              <div className="border-t border-border pt-4">
+                <div className="flex items-start justify-between gap-3 mb-2">
+                  <div>
+                    <p className="text-sm font-semibold text-ink">Medios de pago / abonos</p>
+                    <p className="text-[11px] text-ink/50">Pago mixto: agrega cuánto pagaste con cada medio. Déjalo vacío si aún no has pagado nada.</p>
+                  </div>
+                  <button type="button" onClick={() => setGForm(f => ({ ...f, pagos: [...f.pagos, { metodo: '', valor: '' }] }))}
+                    className="text-xs font-semibold border border-accent/30 text-accent px-3 py-1.5 rounded-xl hover:bg-accent-light transition flex-shrink-0">
+                    + Agregar medio
+                  </button>
+                </div>
+                {gForm.pagos.length === 0 ? (
+                  <p className="text-xs text-ink/40 italic">Sin abonos — el gasto queda 100% pendiente por pagar.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {gForm.pagos.map((p, i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <select value={p.metodo} onChange={e => setGForm(f => ({ ...f, pagos: f.pagos.map((pp, j) => j === i ? { ...pp, metodo: e.target.value } : pp) }))}
+                          className="bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink flex-shrink-0 min-w-[130px]">
+                          <option value="">Medio…</option>
+                          {METODOS_PAGO.map(m => <option key={m.v} value={m.v}>{m.label}</option>)}
+                        </select>
+                        <input value={p.valor} onChange={e => setGForm(f => ({ ...f, pagos: f.pagos.map((pp, j) => j === i ? { ...pp, valor: e.target.value.replace(/[^0-9.]/g, '') } : pp) }))}
+                          placeholder="Valor abonado" className="flex-1 min-w-0 bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                        <button type="button" onClick={() => setGForm(f => ({ ...f, pagos: f.pagos.filter((_, j) => j !== i) }))}
+                          className="text-danger/70 hover:text-danger flex-shrink-0"><IconX size={15} /></button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {(() => {
+                  const abonado = sumaPagos(gForm.pagos);
+                  const totalN = Number(gForm.total) || 0;
+                  const saldo = totalN - abonado;
+                  return (
+                    <div className="flex flex-wrap gap-2 mt-3 text-xs">
+                      <span className="bg-surface border border-border rounded-lg px-2.5 py-1 text-ink/70">Total: <strong>{cop(totalN)}</strong></span>
+                      <span className="bg-surface border border-border rounded-lg px-2.5 py-1 text-ink/70">Abonado: <strong>{cop(abonado)}</strong></span>
+                      <span className={`rounded-lg px-2.5 py-1 border ${saldo <= 0 && totalN > 0 ? 'bg-success/15 text-success border-success/30' : 'bg-warning/15 text-warning border-warning/25'}`}>
+                        {saldo <= 0 && totalN > 0 ? '✓ Pagado en su totalidad' : `Saldo pendiente: ${cop(saldo)}`}
+                      </span>
+                    </div>
+                  );
+                })()}
+              </div>
+
               <div className="flex items-center gap-3">
                 <button onClick={guardarGasto} disabled={guardandoGasto || subiendo || extrayendo}
                   className="bg-accent hover:bg-accent-hover text-white px-5 py-2.5 rounded-xl font-semibold text-sm transition disabled:opacity-60">
@@ -741,9 +813,19 @@ export default function ContabilidadPanel() {
                 {CATS_GASTO.map(c => <option key={c} value={c}>{CAT_GASTO[c].label}</option>)}
               </select>
             </div>
-            <div className="ml-auto bg-surface-2 border border-border rounded-2xl px-5 py-2.5 text-right">
-              <p className="text-[11px] text-ink/50 font-medium">Total gastos ({gastos.length})</p>
-              <p className="text-xl font-black text-danger">{cop(gastosTotal)}</p>
+            <div className="ml-auto flex flex-wrap gap-2">
+              <div className="bg-surface-2 border border-border rounded-2xl px-4 py-2.5 text-right">
+                <p className="text-[11px] text-ink/50 font-medium">Total gastos ({gastos.length})</p>
+                <p className="text-xl font-black text-danger">{cop(gastosTotal)}</p>
+              </div>
+              <div className="bg-surface-2 border border-border rounded-2xl px-4 py-2.5 text-right">
+                <p className="text-[11px] text-ink/50 font-medium">Abonado</p>
+                <p className="text-xl font-black text-success">{cop(gastosAbonado)}</p>
+              </div>
+              <div className="bg-surface-2 border border-border rounded-2xl px-4 py-2.5 text-right">
+                <p className="text-[11px] text-ink/50 font-medium">Pendiente</p>
+                <p className="text-xl font-black text-warning">{cop(gastosPendiente)}</p>
+              </div>
             </div>
           </div>
 
@@ -793,8 +875,9 @@ export default function ContabilidadPanel() {
                         {g.proveedor || g.descripcion || 'Gasto'}
                         {g.numero_factura ? ` · ${g.numero_factura}` : ''}
                       </p>
-                      <p className="text-xs text-ink/50">
-                        {g.fecha}{g.descripcion && g.proveedor ? ` · ${g.descripcion}` : ''}{g.metodo_pago ? ` · ${g.metodo_pago}` : ''}
+                      <p className="text-xs text-ink/50 truncate">
+                        {g.fecha}{g.descripcion && g.proveedor ? ` · ${g.descripcion}` : ''}
+                        {g.pagos && g.pagos.length > 0 ? ` · ${g.pagos.map(p => `${metodoLabel(p.metodo)} ${cop(p.valor)}`).join(' + ')}` : ''}
                         {g.recurrente ? ' · 🔁 recurrente' : ''}
                       </p>
                     </div>
@@ -802,7 +885,15 @@ export default function ContabilidadPanel() {
                   <div className="flex items-center gap-2 flex-shrink-0">
                     <span className={`text-xs px-2 py-0.5 rounded-full border ${CAT_GASTO[g.categoria]?.badge || ''}`}>{CAT_GASTO[g.categoria]?.label || g.categoria}</span>
                     {g.extraido_ia ? <span className="text-[10px] font-semibold text-accent bg-accent-light border border-accent/20 rounded-full px-1.5 py-0.5">IA</span> : null}
-                    <span className="text-sm font-bold text-ink">{cop(g.total)}</span>
+                    <div className="text-right">
+                      <p className="text-sm font-bold text-ink">{cop(g.total)}</p>
+                      {(() => {
+                        const saldo = g.total - (g.abonado || 0);
+                        if (saldo <= 0.5) return <p className="text-[10px] font-semibold text-success">✓ pagado</p>;
+                        if ((g.abonado || 0) > 0) return <p className="text-[10px] text-warning">abona {cop(g.abonado)} · falta {cop(saldo)}</p>;
+                        return <p className="text-[10px] text-warning">pendiente</p>;
+                      })()}
+                    </div>
                     <button onClick={() => eliminarGasto(g.id)} disabled={eliminandoId === g.id}
                       className="text-xs border border-danger/30 text-danger px-2 py-1.5 rounded-xl hover:bg-danger/10 transition disabled:opacity-50">
                       {eliminandoId === g.id ? '…' : <IconX size={13} />}
