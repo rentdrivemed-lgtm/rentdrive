@@ -612,9 +612,9 @@ export default function DashboardAdmin() {
           <p className="text-ink/50 text-sm">Gestión total del sistema DrivePass</p>
         </div>
         <a href="/control" target="_blank" rel="noopener"
-          className="inline-flex items-center gap-2 bg-ink text-white font-semibold text-sm px-4 py-2.5 rounded-xl hover:opacity-90 transition shadow-sm">
+          className="inline-flex items-center gap-2 bg-accent hover:bg-accent-hover text-white font-semibold text-sm px-4 py-2.5 rounded-xl transition shadow-sm">
           🎛️ Panel de control interno
-          <span className="text-[10px] opacity-70">↗ nueva pestaña</span>
+          <span className="text-[10px] opacity-80">↗ nueva pestaña</span>
         </a>
       </div>
 
