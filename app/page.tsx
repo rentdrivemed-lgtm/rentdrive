@@ -4,6 +4,9 @@ import HeroSlider from '@/components/HeroSlider';
 import VehiculoCard from '@/components/VehiculoCard';
 import { useLang } from '@/contexts/LanguageContext';
 import { IconFilter, IconKey, IconShield, IconRoute, IconCar, IconCalendar, IconX } from '@/components/Icons';
+import { TIPO_VEHICULO_LABELS, type TipoVehiculo } from '@/lib/rentabilidad';
+
+const CATEGORIAS = Object.entries(TIPO_VEHICULO_LABELS) as [TipoVehiculo, string][];
 
 type Vehiculo = {
   id: number; marca: string; modelo: string; anio: number;
@@ -96,11 +99,17 @@ export default function Home() {
 
   return (
     <div>
-      {/* ── HERO (banner con slider, diseño Claude Design) ── */}
+      {/* ── BARRA DE ANUNCIO (ribbon de marca, template landing) ── */}
+      <div className="text-center py-2.5 px-4 text-sm font-semibold tracking-tight"
+        style={{ background: '#F3E4DA', color: '#1B3356' }}>
+        Tu ciudad. Tu ritmo. Tu DrivePass.
+      </div>
+
+      {/* ── HERO (banner a sangre completa, template DrivePass) ── */}
       <HeroSlider />
 
-      {/* ── FEATURES STRIP ── */}
-      <section className="bg-surface-2 border-b border-border">
+      {/* ── FEATURES STRIP (bloque claro de confianza, template) ── */}
+      <section style={{ background: '#FFFFFF' }}>
         <div className="max-w-7xl mx-auto px-6 py-6 grid grid-cols-1 sm:grid-cols-3 gap-6">
           {[
             { icon: <IconKey size={22} className="text-accent"/>, ...c.features[0] },
@@ -108,8 +117,12 @@ export default function Home() {
             { icon: <IconRoute size={22} className="text-accent"/>, ...c.features[2] },
           ].map(f => (
             <div key={f.title} className="flex items-center gap-4">
-              <div className="w-11 h-11 rounded-xl bg-accent-light flex items-center justify-center flex-shrink-0">{f.icon}</div>
-              <div><p className="font-semibold text-ink text-sm">{f.title}</p><p className="text-ink/50 text-xs">{f.desc}</p></div>
+              <div className="flex items-center justify-center flex-shrink-0"
+                style={{ width: 46, height: 46, borderRadius: 14, background: 'rgba(242,92,43,0.14)' }}>{f.icon}</div>
+              <div>
+                <p className="font-bold text-sm" style={{ color: '#0F1E33' }}>{f.title}</p>
+                <p className="text-xs" style={{ color: '#64748B' }}>{f.desc}</p>
+              </div>
             </div>
           ))}
         </div>
@@ -179,10 +192,9 @@ export default function Home() {
                 className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40"
                 value={filtros.tipo} onChange={e => setFiltros(f => ({ ...f, tipo: e.target.value }))}>
                 <option value="">{c.todos}</option>
-                <option value="sedan">{c.sedan}</option>
-                <option value="suv">{c.suv}</option>
-                <option value="compacto">{c.compacto}</option>
-                <option value="pickup">{c.pickup}</option>
+                {CATEGORIAS.map(([val, label]) => (
+                  <option key={val} value={val}>{label}</option>
+                ))}
               </select>
             </div>
             <div>

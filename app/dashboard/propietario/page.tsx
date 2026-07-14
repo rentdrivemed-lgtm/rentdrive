@@ -12,6 +12,12 @@ import DisponibilidadReglas from '@/components/DisponibilidadReglas';
 import ReferidosCard from '@/components/ReferidosCard';
 import CalendarioReservas, { type ReservaCalendario } from '@/components/CalendarioReservas';
 import { IconCar, IconCalendar, IconChat, IconCheck, IconArrowL } from '@/components/Icons';
+import { TIPO_VEHICULO_LABELS, type TipoVehiculo } from '@/lib/rentabilidad';
+import { precioMercadoSugerido, segmentoValido } from '@/lib/precioMercado';
+
+// Opciones de categoría (mismas 6 que la calculadora de mercado) para el selector.
+const CATEGORIAS = Object.entries(TIPO_VEHICULO_LABELS) as [TipoVehiculo, string][];
+const copCorto = (n: number) => `$${Math.round(n).toLocaleString('es-CO')}`;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type DocItem = { url: string; vence?: string };
@@ -25,6 +31,7 @@ type DocRevision = { estado: string; nota: string };
 type Vehiculo = {
   id: number; marca: string; modelo: string; anio: number;
   tipo: string; precio_dia: number; disponible: number;
+  valor_comercial?: number; precio_manual?: number; precio_ajuste_pct?: number;
   dias_disponibles: string; placa?: string;
   fotos?: string; fotos_detalle?: string;
   ubicacion?: string; descripcion?: string;
@@ -57,7 +64,7 @@ const FOTOS_LABELS: Record<keyof Fotos, string> = {
 };
 const FORM_INICIAL = {
   marca: '', modelo: '', anio: '', tipo: 'sedan',
-  ubicacion: 'Medellín', descripcion: '', placa: '',
+  ubicacion: 'Medellín', descripcion: '', placa: '', valor_comercial: '',
 };
 const DOC_KEYS = ['soat', 'tecno', 'tarjeta', 'todo_riesgo'] as const;
 const DOC_LABELS_MAP: Record<string, string> = {
@@ -265,6 +272,7 @@ export default function DashboardPropietario() {
       marca: v.marca, modelo: v.modelo, anio: String(v.anio),
       tipo: v.tipo, ubicacion: v.ubicacion || 'Medellín',
       descripcion: v.descripcion || '', placa: v.placa || '',
+      valor_comercial: v.valor_comercial ? String(v.valor_comercial) : '',
     });
     setEditFotos({ ...FOTOS_VACIAS, ...parseJ<Partial<Fotos>>(v.fotos_detalle, {}) } as Fotos);
     setEditDias(parseJ<string[]>(v.dias_disponibles, []));
@@ -310,12 +318,13 @@ export default function DashboardPropietario() {
     e.preventDefault();
     setMsg('');
     if (!form.marca || !form.modelo || !form.anio) { setMsg('Marca, modelo y año son obligatorios'); return; }
+    if (!Number(form.valor_comercial)) { setMsg('El valor comercial es obligatorio — con él calculamos el precio de alquiler.'); return; }
     setPublicando(true);
     const res = await fetch('/api/vehiculos', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        ...form, anio: Number(form.anio), precio_dia: 0, placa: form.placa,
+        ...form, anio: Number(form.anio), valor_comercial: Number(form.valor_comercial), placa: form.placa,
         fotos: JSON.stringify(fotos.frente ? [fotos.frente] : []),
         fotos_detalle: JSON.stringify(fotos),
         dias_disponibles: JSON.stringify(diasDisponibles),
@@ -436,17 +445,47 @@ export default function DashboardPropietario() {
         </div>
       )}
 
-      {/* Header */}
-      <div className="mb-6 flex items-start justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-ink">Panel Propietario</h1>
-          <p className="text-ink/50 text-sm">{user.nombre} · {user.correo}</p>
-        </div>
-        <Link href="/soporte"
-          className="flex items-center gap-2 border border-border text-ink/70 hover:text-ink hover:border-accent/40 px-4 py-2 rounded-xl text-sm font-semibold transition">
-          💬 Soporte
-        </Link>
-      </div>
+      {/* Header (template App Dashboard: saludo grande + CTA en gradiente) */}
+      {tab !== 'editar' && (
+        <>
+          <div className="mb-6 pb-6 border-b border-border flex items-end justify-between flex-wrap gap-4">
+            <div>
+              <h1 className="text-3xl sm:text-4xl font-bold text-ink tracking-[-0.02em]">Hola, {user.nombre.split(' ')[0]}</h1>
+              <p className="text-ink-soft mt-1.5">
+                {vehiculos.length > 0
+                  ? `Gestionas ${vehiculos.length} ${vehiculos.length === 1 ? 'vehículo' : 'vehículos'} en DrivePass.`
+                  : 'Publica tu primer vehículo y empieza a generar ingresos.'}
+              </p>
+            </div>
+            <div className="flex gap-2.5 flex-wrap">
+              <Link href="/soporte"
+                className="inline-flex items-center gap-2 border border-border-strong text-ink font-semibold px-5 h-11 rounded-xl text-sm bg-surface-2 hover:bg-surface-3 transition">
+                Soporte
+              </Link>
+              <button onClick={() => setTab('nuevo')}
+                className="glow-accent inline-flex items-center gap-2 text-white font-semibold px-5 h-11 rounded-xl text-sm transition hover:-translate-y-0.5"
+                style={{ background: 'var(--gradient-accent)' }}>
+                <IconCheck size={16} /> Publicar vehículo
+              </button>
+            </div>
+          </div>
+
+          {/* StatCards del Design System */}
+          <div className="grid grid-cols-3 gap-3 sm:gap-4 mb-6">
+            {[
+              { label: 'Vehículos',   value: vehiculos.length,                                    accent: false },
+              { label: 'Disponibles', value: vehiculos.filter(v => v.disponible).length,          accent: true  },
+              { label: 'Con precio',  value: vehiculos.filter(v => v.precio_dia > 0).length,       accent: false },
+            ].map(s => (
+              <div key={s.label} className="rounded-2xl p-4 sm:p-5 border border-border bg-surface-2 shadow-[var(--shadow-card)]">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-ink/50">{s.label}</p>
+                <p className={`text-3xl font-black mt-2 font-mono ${s.accent ? 'text-accent' : 'text-ink'}`}
+                  style={{ fontFeatureSettings: "'tnum' 1" }}>{s.value}</p>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
 
       {tab !== 'editar' && (
         <div className="mb-6">
@@ -694,14 +733,20 @@ export default function DashboardPropietario() {
                     value={form.placa} onChange={e => setForm(f => ({ ...f, placa: e.target.value.toUpperCase() }))} />
                 </div>
                 <div>
-                  <label className="text-xs font-semibold text-ink/60 block mb-1.5">Tipo</label>
+                  <label className="text-xs font-semibold text-ink/60 block mb-1.5">Categoría <span className="text-accent">*</span></label>
                   <select className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40"
                     value={form.tipo} onChange={e => setForm(f => ({ ...f, tipo: e.target.value }))}>
-                    <option value="sedan">Sedán</option>
-                    <option value="suv">SUV</option>
-                    <option value="compacto">Compacto</option>
-                    <option value="pickup">Pickup</option>
+                    {CATEGORIAS.map(([val, label]) => (
+                      <option key={val} value={val}>{label}</option>
+                    ))}
                   </select>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-ink/60 block mb-1.5">Valor comercial (COP) <span className="text-accent">*</span></label>
+                  <input type="text" inputMode="numeric" placeholder="0"
+                    className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40"
+                    value={form.valor_comercial ? Number(form.valor_comercial).toLocaleString('es-CO') : ''}
+                    onChange={e => setForm(f => ({ ...f, valor_comercial: e.target.value.replace(/\D/g, '') }))} />
                 </div>
                 <div className="col-span-2">
                   <label className="text-xs font-semibold text-ink/60 block mb-1.5">Descripción</label>
@@ -710,6 +755,21 @@ export default function DashboardPropietario() {
                     value={form.descripcion} onChange={e => setForm(f => ({ ...f, descripcion: e.target.value }))} />
                 </div>
               </div>
+              {/* Precio automático de mercado — se calcula de la categoría + valor comercial */}
+              {(() => {
+                const precioSug = precioMercadoSugerido(segmentoValido(form.tipo), Number(form.valor_comercial) || 0);
+                return (
+                  <div className="mt-4 flex items-center justify-between gap-3 bg-accent-light border border-accent/30 rounded-xl px-4 py-3">
+                    <div>
+                      <p className="text-[11px] font-semibold text-accent uppercase tracking-wide">Precio de alquiler estimado</p>
+                      <p className="text-[11px] text-ink/60 mt-0.5">Lo calculamos automáticamente con datos de mercado. El equipo puede ajustarlo.</p>
+                    </div>
+                    <span className="text-xl font-black text-accent whitespace-nowrap">
+                      {precioSug > 0 ? `${copCorto(precioSug)}/día` : '—'}
+                    </span>
+                  </div>
+                );
+              })()}
             </div>
             <button type="submit" disabled={publicando}
               className="w-full flex items-center justify-center gap-2 bg-accent hover:bg-accent-hover text-white py-3 rounded-xl font-bold transition shadow-md shadow-accent/20 disabled:opacity-60 text-sm">
@@ -803,14 +863,20 @@ export default function DashboardPropietario() {
                     value={editForm.placa} onChange={e => setEditForm(ef => ({ ...ef, placa: e.target.value.toUpperCase() }))} />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-ink/60 block mb-1">Tipo</label>
+                  <label className="text-xs font-medium text-ink/60 block mb-1">Categoría</label>
                   <select className="w-full border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40"
                     value={editForm.tipo} onChange={e => setEditForm(ef => ({ ...ef, tipo: e.target.value }))}>
-                    <option value="sedan">Sedán</option>
-                    <option value="suv">SUV</option>
-                    <option value="compacto">Compacto</option>
-                    <option value="pickup">Pickup</option>
+                    {CATEGORIAS.map(([val, label]) => (
+                      <option key={val} value={val}>{label}</option>
+                    ))}
                   </select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-ink/60 block mb-1">Valor comercial (COP)</label>
+                  <input type="text" inputMode="numeric" placeholder="0"
+                    className="w-full border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40"
+                    value={editForm.valor_comercial ? Number(editForm.valor_comercial).toLocaleString('es-CO') : ''}
+                    onChange={e => setEditForm(ef => ({ ...ef, valor_comercial: e.target.value.replace(/\D/g, '') }))} />
                 </div>
                 <div className="col-span-2">
                   <label className="text-xs font-medium text-ink/60 block mb-1">Descripción</label>
@@ -819,11 +885,22 @@ export default function DashboardPropietario() {
                     value={editForm.descripcion} onChange={e => setEditForm(ef => ({ ...ef, descripcion: e.target.value }))} />
                 </div>
               </div>
+              {(() => {
+                const precioSug = precioMercadoSugerido(segmentoValido(editForm.tipo), Number(editForm.valor_comercial) || 0);
+                if (precioSug <= 0) return null;
+                return (
+                  <p className="text-[11px] text-ink/60 mt-3">
+                    Precio de alquiler estimado con estos datos: <strong className="text-accent">{copCorto(precioSug)}/día</strong>.
+                    Se recalcula al guardar (salvo que el equipo lo haya fijado a mano).
+                  </p>
+                );
+              })()}
               <div className="flex items-center gap-3 mt-4">
                 <button
                   onClick={() => guardarSeccion('basico', {
                     marca: editForm.marca, modelo: editForm.modelo,
                     anio: Number(editForm.anio), tipo: editForm.tipo,
+                    valor_comercial: Number(editForm.valor_comercial) || 0,
                     descripcion: editForm.descripcion, placa: editForm.placa,
                   })}
                   disabled={guardandoSeccion.basico}

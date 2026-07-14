@@ -16,10 +16,14 @@ type User = { nombre: string; correo: string; rol: string };
 
 const estadoColor: Record<string, string> = {
   pendiente:  'bg-warning/15 text-warning',
-  confirmada: 'bg-brand-muted text-ink',
-  en_curso:   'bg-success/15 text-success',
-  completada: 'bg-surface text-ink/50',
+  confirmada: 'bg-success/15 text-success',
+  en_curso:   'bg-info/15 text-info',
+  completada: 'bg-surface-3 text-ink/60',
   cancelada:  'bg-danger/15 text-danger',
+};
+const estadoLabel: Record<string, string> = {
+  pendiente: 'Pendiente', confirmada: 'Confirmada', en_curso: 'En curso',
+  completada: 'Completada', cancelada: 'Cancelada',
 };
 
 export default function DashboardUsuario() {
@@ -75,23 +79,32 @@ export default function DashboardUsuario() {
 
   if (!user) return <div className="text-center py-20 text-ink/50">Cargando...</div>;
 
+  const proximos = reservas.filter(r => ['confirmada', 'pendiente', 'en_curso'].includes(r.estado)).length;
+
   return (
     <div className="max-w-5xl mx-auto px-4 py-10">
 
-      {/* Header */}
-      <div className="flex items-start justify-between mb-8 flex-wrap gap-4">
+      {/* Header (template App Dashboard: saludo grande + subtítulo contextual + CTA en gradiente) */}
+      <div className="flex items-end justify-between mb-6 pb-6 border-b border-border flex-wrap gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-ink">Hola, {user.nombre}</h1>
-          <p className="text-ink/50 text-sm mt-0.5">{user.correo}</p>
+          <h1 className="text-3xl sm:text-4xl font-bold text-ink tracking-[-0.02em]">
+            Hola, {user.nombre.split(' ')[0]}
+          </h1>
+          <p className="text-ink-soft mt-1.5">
+            {proximos > 0
+              ? `Tienes ${proximos} ${proximos === 1 ? 'viaje próximo' : 'viajes próximos'}. ¡Prepárate para conducir!`
+              : 'Sin viajes próximos — encuentra tu próximo carro.'}
+          </p>
         </div>
-        <div className="flex gap-2 flex-wrap">
+        <div className="flex gap-2.5 flex-wrap">
           <Link href="/soporte"
-            className="flex items-center gap-2 border border-border text-ink/70 hover:text-ink hover:border-accent/40 px-5 py-2.5 rounded-xl text-sm font-semibold transition">
-            💬 Soporte
+            className="inline-flex items-center gap-2 border border-border-strong text-ink font-semibold px-5 h-11 rounded-xl text-sm bg-surface-2 hover:bg-surface-3 transition">
+            Soporte
           </Link>
           <Link href="/"
-            className="flex items-center gap-2 bg-accent hover:bg-accent-hover text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition shadow-sm shadow-accent/20">
-            <IconSearch size={15} /> Buscar vehículos
+            className="glow-accent inline-flex items-center gap-2 text-white font-semibold px-5 h-11 rounded-xl text-sm transition hover:-translate-y-0.5"
+            style={{ background: 'var(--gradient-accent)' }}>
+            <IconSearch size={16} /> Explorar carros
           </Link>
         </div>
       </div>
@@ -100,17 +113,18 @@ export default function DashboardUsuario() {
         <ReferidosCard />
       </div>
 
-      {/* Stats rápidas */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-8">
+      {/* Stats (StatCards del Design System) */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-8">
         {[
-          { label: 'Total reservas',  value: reservas.length,                                             color: 'bg-brand-muted text-ink'  },
-          { label: 'Confirmadas',     value: reservas.filter(r => r.estado === 'confirmada').length,       color: 'bg-brand-muted text-ink'  },
-          { label: 'En curso',        value: reservas.filter(r => r.estado === 'en_curso').length,         color: 'bg-success/10 text-success' },
-          { label: 'Canceladas',      value: reservas.filter(r => r.estado === 'cancelada').length,        color: 'bg-danger/10 text-danger'     },
+          { label: 'Total reservas', value: reservas.length,                                       accent: false },
+          { label: 'Confirmadas',    value: reservas.filter(r => r.estado === 'confirmada').length, accent: true  },
+          { label: 'En curso',       value: reservas.filter(r => r.estado === 'en_curso').length,   accent: false },
+          { label: 'Canceladas',     value: reservas.filter(r => r.estado === 'cancelada').length,  accent: false },
         ].map(s => (
-          <div key={s.label} className={`rounded-xl p-4 border border-border ${s.color}`}>
-            <p className="text-2xl font-bold">{s.value}</p>
-            <p className="text-xs opacity-70 mt-0.5">{s.label}</p>
+          <div key={s.label} className="rounded-2xl p-4 sm:p-5 border border-border bg-surface-2 shadow-[var(--shadow-card)]">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-ink/50">{s.label}</p>
+            <p className={`text-3xl font-black mt-2 font-mono ${s.accent ? 'text-accent' : 'text-ink'}`}
+              style={{ fontFeatureSettings: "'tnum' 1" }}>{s.value}</p>
           </div>
         ))}
       </div>
@@ -137,25 +151,33 @@ export default function DashboardUsuario() {
       ) : (
         <div className="space-y-3">
           {reservas.map(r => (
-            <div key={r.id} className="bg-surface-2 rounded-2xl shadow-sm border border-border p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div>
-                <h3 className="font-bold text-ink">{r.marca} {r.modelo} {r.anio}</h3>
-                <p className="text-sm text-ink/50 mt-0.5">{r.fecha_inicio} → {r.fecha_fin}</p>
-                <p className="text-accent font-bold mt-1">${r.total.toLocaleString('es-CO')}</p>
+            <div key={r.id}
+              className="bg-surface-2 rounded-2xl border border-border p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center gap-4 shadow-[var(--shadow-card)] transition hover:-translate-y-0.5 hover:shadow-[var(--shadow-float)]">
+              {/* Tile del vehículo */}
+              <div className="w-14 h-14 rounded-xl bg-surface-3 border border-border flex items-center justify-center flex-shrink-0">
+                <IconCar size={24} className="text-accent" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="font-bold text-ink text-lg leading-tight">{r.marca} {r.modelo} <span className="text-ink-soft font-semibold">{r.anio}</span></h3>
+                <p className="text-sm text-ink-soft mt-0.5 font-mono" style={{ fontFeatureSettings: "'tnum' 1" }}>{r.fecha_inicio} — {r.fecha_fin}</p>
+                <p className="text-accent font-bold mt-1 font-mono" style={{ fontFeatureSettings: "'tnum' 1" }}>${r.total.toLocaleString('es-CO')}</p>
                 {r.estado === 'cancelada' && typeof r.cancelacion_pct === 'number' && (
                   <p className="text-xs text-danger mt-1">
                     {r.cancelacion_pct > 0 ? `Se cobró el ${r.cancelacion_pct}% ($${(r.total * r.cancelacion_pct / 100).toLocaleString('es-CO')})` : 'Cancelada sin costo'}
                   </p>
                 )}
               </div>
-              <div className="flex items-center gap-3">
-                <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${estadoColor[r.estado] || 'bg-surface'}`}>
-                  {r.estado}
+              <div className="flex items-center gap-2.5 flex-wrap sm:justify-end">
+                <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-semibold ${estadoColor[r.estado] || 'bg-surface-3 text-ink/60'}`}>
+                  <span className="w-1.5 h-1.5 rounded-full bg-current" /> {estadoLabel[r.estado] || r.estado}
                 </span>
+                <Link href={`/vehiculos/${r.vehiculo_id}`}
+                  className="text-xs font-semibold px-3.5 py-2 rounded-xl border border-border-strong text-ink bg-surface hover:bg-surface-3 transition">
+                  Ver detalle
+                </Link>
                 {(r.estado === 'confirmada' || r.estado === 'pendiente') && (
                   <button onClick={() => abrirConfirmacion(r)}
-                    className="text-xs border border-danger/25 text-danger px-3 py-1.5 rounded-xl hover:bg-danger/10 transition font-medium"
-                  >
+                    className="text-xs font-semibold px-3.5 py-2 rounded-xl text-danger hover:bg-danger/10 transition">
                     Cancelar
                   </button>
                 )}

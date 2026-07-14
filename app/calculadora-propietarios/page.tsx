@@ -12,6 +12,7 @@ import {
   calcularRentabilidad, sensibilidadPorOcupacion,
   type TipoVehiculo, type RentabilidadInput,
 } from '@/lib/rentabilidad';
+import { precioMercadoSugerido, bandaPrecioValor } from '@/lib/precioMercado';
 
 const cop = (n: number) => `$${Math.round(n).toLocaleString('es-CO')}`;
 const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
@@ -256,7 +257,8 @@ export default function CalculadoraPropietariosPage() {
     setPctSeguro(d.pctSeguro);
     setMantenimiento(d.mantenimiento);
     setPctDepreciacion(d.pctDepreciacion);
-    setPrecioDia(d.precioDia);
+    // Precio sembrado por interpolación de mercado (no un fijo por categoría) → más preciso.
+    setPrecioDia(precioMercadoSugerido(t, d.valorComercial) || d.precioDia);
   };
 
   const input: RentabilidadInput = useMemo(() => ({
@@ -268,6 +270,11 @@ export default function CalculadoraPropietariosPage() {
   const r = useMemo(() => calcularRentabilidad(input), [input]);
   const sensibilidad = useMemo(() => sensibilidadPorOcupacion(input), [input]);
   const requiereInspeccion = anio > 0 && anio < ANIO_MINIMO_SIN_INSPECCION;
+
+  // Precio de mercado interpolado por valor comercial (mismo motor que la vitrina) + banda de cordura.
+  const precioSugerido = useMemo(() => precioMercadoSugerido(tipo, valorComercial), [tipo, valorComercial]);
+  const banda = useMemo(() => bandaPrecioValor(valorComercial), [valorComercial]);
+  const fueraDeBanda = valorComercial > 0 && precioDia > 0 && (precioDia < banda.min || precioDia > banda.max);
 
   if (revisandoLead) return null;
 
@@ -456,6 +463,26 @@ export default function CalculadoraPropietariosPage() {
                 <input type="text" inputMode="numeric" value={precioDia.toLocaleString('es-CO')}
                   onChange={e => setPrecioDia(numInput(e.target.value))}
                   className="w-full border-2 border-accent/40 rounded-xl px-3 py-2.5 text-sm font-semibold text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40" />
+                {precioSugerido > 0 && (
+                  <div className="flex items-center justify-between gap-2 mt-1.5">
+                    <p className="text-[11px] text-ink/50">
+                      Precio de mercado sugerido para tu carro: <strong className="text-accent">{cop(precioSugerido)}/día</strong>
+                    </p>
+                    {precioDia !== precioSugerido && (
+                      <button type="button" onClick={() => setPrecioDia(precioSugerido)}
+                        className="text-[11px] font-semibold text-accent hover:underline whitespace-nowrap">
+                        Usar sugerido
+                      </button>
+                    )}
+                  </div>
+                )}
+                {fueraDeBanda && (
+                  <p className="text-[11px] text-warning mt-1.5 leading-relaxed">
+                    ⚠️ Ese precio queda fuera del rango de mercado para este valor comercial
+                    ({cop(banda.min)}–{cop(banda.max)}/día). Puedes usarlo, pero fuera de ese rango
+                    baja la ocupación o dejas plata sobre la mesa.
+                  </p>
+                )}
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>

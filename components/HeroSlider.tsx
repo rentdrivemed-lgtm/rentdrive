@@ -1,58 +1,17 @@
 'use client';
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import Image from 'next/image';
-import { IconKey, IconSearch, IconArrowR, IconArrowL, IconShield, IconCar } from '@/components/Icons';
+import { IconKey, IconSearch, IconArrowR } from '@/components/Icons';
 
-type VehiculoVitrina = {
-  id: number; marca: string; modelo: string; anio: number;
-  tipo: string; precio_dia: number; fotos: string;
-};
+// Hero a sangre completa (template "Landing DrivePass" del Design System):
+// la foto del vehículo es el fondo, con un degradado oscuro a la izquierda para
+// que el titular fijo de marca sea legible. Rota entre las fotos de la vitrina.
+type VehiculoVitrina = { id: number; fotos: string };
 
-type Slide = {
-  id: number | null; img: string | null; chip: string; h: string;
-  price: { pre: string; strong: string; post: string };
-  cta: string; href: string;
-};
-
-const HEADLINES = [
-  'Estrena sin comprar',
-  'Muévete a tu ritmo por Medellín',
-  'Reserva en minutos, conduce libre',
-  'Tu próximo viaje empieza aquí',
-];
-
-const FALLBACK_SLIDE: Slide = {
-  id: null, img: null, chip: 'Alquiler entre particulares',
-  h: 'Tu ciudad. Tu ritmo. Tu DrivePass.',
-  price: { pre: 'Verificada y lista para entregar', strong: '', post: '' },
-  cta: 'Buscar vehículo', href: '#vehiculos',
-};
-
-const DELAY = 5000;
-
-function vehiculosASlides(vehiculos: VehiculoVitrina[]): Slide[] {
-  return vehiculos
-    .filter(v => {
-      try { return (JSON.parse(v.fotos) as string[]).length > 0; } catch { return false; }
-    })
-    .map((v, i) => {
-      let fotos: string[] = [];
-      try { fotos = JSON.parse(v.fotos); } catch { fotos = []; }
-      return {
-        id: v.id,
-        img: fotos[0],
-        chip: `${v.tipo} · ${v.marca} ${v.modelo}`,
-        h: HEADLINES[i % HEADLINES.length],
-        price: { pre: 'Desde ', strong: `$${Math.round(v.precio_dia).toLocaleString('es-CO')}`, post: ' / día' },
-        cta: 'Reservar ahora',
-        href: `/vehiculos/${v.id}`,
-      };
-    });
-}
+const DELAY = 6000;
 
 export default function HeroSlider() {
-  const [slides, setSlides] = useState<Slide[]>([FALLBACK_SLIDE]);
+  const [fotos, setFotos] = useState<string[]>([]);
   const [cur, setCur] = useState(0);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -60,50 +19,48 @@ export default function HeroSlider() {
     fetch('/api/vehiculos?vitrina=1')
       .then(r => r.json())
       .then((d: { vehiculos?: VehiculoVitrina[] }) => {
-        const s = vehiculosASlides(d.vehiculos || []);
-        if (s.length > 0) setSlides(s);
+        const imgs = (d.vehiculos || [])
+          .map(v => { try { return (JSON.parse(v.fotos) as string[])[0]; } catch { return null; } })
+          .filter((x): x is string => !!x);
+        if (imgs.length) setFotos(imgs);
       })
-      .catch(() => { /* deja el fallback */ });
+      .catch(() => { /* deja el fondo con gradiente */ });
   }, []);
 
-  const play = useCallback(() => {
-    if (timer.current) clearInterval(timer.current);
-    if (slides.length <= 1) return;
-    timer.current = setInterval(() => setCur(c => (c + 1) % slides.length), DELAY);
-  }, [slides.length]);
-  const stop = useCallback(() => { if (timer.current) clearInterval(timer.current); }, []);
-
-  const go = useCallback((n: number) => { setCur((n + slides.length) % slides.length); play(); }, [play, slides.length]);
-
-  useEffect(() => { play(); return stop; }, [play, stop]);
-
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowRight') go(cur + 1);
-      if (e.key === 'ArrowLeft') go(cur - 1);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [cur, go]);
-
-  const s = slides[Math.min(cur, slides.length - 1)];
+    if (fotos.length <= 1) return;
+    timer.current = setInterval(() => setCur(c => (c + 1) % fotos.length), DELAY);
+    return () => { if (timer.current) clearInterval(timer.current); };
+  }, [fotos.length]);
 
   return (
-    <section className="hs relative overflow-hidden isolate" onMouseEnter={stop} onMouseLeave={play}>
-      {/* Fondo decorativo (ya no es la foto estirada — evita el efecto pixelado) */}
-      <div className="hs-bg" />
+    <section className="relative overflow-hidden isolate flex items-center min-h-[540px] sm:min-h-[600px]">
+      {/* Fondo: fotos rotativas de la vitrina, o gradiente decorativo si no hay */}
+      {fotos.length === 0 && <div className="hs-bg" style={{ zIndex: -20 }} />}
+      {fotos.map((img, i) => (
+        <div key={i}
+          className={`hs-frame-bg${i === cur ? ' is-active' : ''}`}
+          style={{ backgroundImage: `url(${img})`, backgroundPosition: 'right center' }} />
+      ))}
 
-      <div className="relative mx-auto max-w-[1240px] px-4 sm:px-8 py-12 lg:py-20 flex flex-col lg:flex-row items-center gap-10 lg:gap-14">
-        {/* Izquierda — texto fijo */}
-        <div className="max-w-[520px] w-full">
+      {/* Degradado: oscuro a la izquierda → transparente a la derecha + base inferior */}
+      <div className="absolute inset-0" style={{
+        zIndex: -10,
+        background:
+          'linear-gradient(90deg,#0A1422 0%,#0A1422 18%,rgba(10,20,34,0.78) 38%,rgba(10,20,34,0.30) 58%,rgba(10,20,34,0) 72%),' +
+          'linear-gradient(0deg,rgba(8,15,26,0.65) 0%,rgba(8,15,26,0) 42%)',
+      }} />
+
+      <div className="relative w-full mx-auto max-w-[1240px] px-5 sm:px-10 py-14">
+        <div className="max-w-[540px]">
           <span className="inline-flex items-center gap-2 text-accent font-semibold text-sm px-4 py-2 rounded-full border border-accent/40 bg-accent/10 backdrop-blur-sm">
             <IconKey size={15} /> Alquiler entre particulares
           </span>
           <h1 className="font-black text-ink leading-[1.04] tracking-[-0.03em] mt-5 mb-4"
-            style={{ fontSize: 'clamp(38px, 5vw, 60px)' }}>
+            style={{ fontSize: 'clamp(36px, 5.5vw, 60px)' }}>
             Tu ciudad.<br />Tu ritmo.<br /><span className="text-accent">Tu DrivePass.</span>
           </h1>
-          <p className="text-ink-soft text-lg leading-relaxed max-w-[30ch]">
+          <p className="text-ink-soft text-lg leading-relaxed max-w-[32ch]">
             Conectamos propietarios y alquiladores en Medellín de forma simple, segura y transparente.
           </p>
           <div className="flex flex-wrap gap-3.5 mt-8">
@@ -118,84 +75,17 @@ export default function HeroSlider() {
             </Link>
           </div>
         </div>
-
-        {/* Derecha — tarjeta de foto del vehículo en vitrina (tamaño acotado, buena calidad) */}
-        <div className="w-full max-w-[480px] lg:max-w-[520px] flex-shrink-0 mx-auto lg:mx-0">
-          <div className="relative w-full aspect-[4/3] rounded-[28px] overflow-hidden shadow-[0_24px_70px_rgba(0,0,0,0.45)] border border-white/10">
-            {slides.map((sl, i) => (
-              sl.img ? (
-                <Image
-                  key={sl.id ?? i}
-                  src={sl.img}
-                  alt={sl.chip}
-                  fill
-                  quality={90}
-                  sizes="(min-width: 1024px) 520px, 92vw"
-                  priority={i === 0}
-                  className={`hs-frame-img${i === cur ? ' is-active' : ''}`}
-                />
-              ) : (
-                <div key={sl.id ?? i}
-                  className={`hs-frame-img${i === cur ? ' is-active' : ''}`}
-                  style={{ background: 'var(--gradient-accent)' }} />
-              )
-            ))}
-
-            {/* Badges de confianza — sobre el borde inferior de la tarjeta */}
-            <div className="hidden sm:flex absolute left-3 bottom-3 items-center gap-2.5 px-3.5 py-2.5 rounded-xl glass border border-border-strong">
-              <span className="w-8 h-8 rounded-lg grid place-items-center bg-accent/15 text-accent flex-none"><IconShield size={16} /></span>
-              <div><div className="font-bold text-xs text-white leading-tight whitespace-nowrap">Pagos Seguros</div><div className="text-[10px] text-ink-soft whitespace-nowrap">Garantía DrivePass</div></div>
-            </div>
-            <div className="hidden sm:flex absolute right-3 top-3 items-center gap-2 px-3 py-2 rounded-xl glass border border-border-strong">
-              <IconCar size={14} className="text-accent" />
-              <span className="font-bold text-[11px] text-white whitespace-nowrap">100% Verificados</span>
-            </div>
-          </div>
-
-          {/* Caption rotativo — debajo de la tarjeta, siempre legible */}
-          <div key={cur} className="mt-4 flex items-end justify-between gap-3 flex-wrap">
-            <div className="min-w-0">
-              <span className="fade-up inline-flex items-center gap-2 whitespace-nowrap text-xs font-semibold text-ink px-3 py-1.5 rounded-full bg-brand-muted border border-border capitalize">
-                <i className="w-1.5 h-1.5 rounded-full bg-accent inline-block" /> {s.chip}
-              </span>
-              <h2 className="fade-up font-bold text-ink mt-2.5 leading-tight tracking-[-0.01em] text-xl"
-                style={{ animationDelay: '50ms' }}>
-                {s.h}
-              </h2>
-              <div className="fade-up font-mono text-sm text-ink-soft mt-1" style={{ animationDelay: '95ms', fontFeatureSettings: "'tnum' 1" }}>
-                {s.price.pre}{s.price.strong && <b className="text-accent font-semibold">{s.price.strong}</b>}{s.price.post}
-              </div>
-            </div>
-            <Link href={s.href}
-              className="fade-up glow-accent inline-flex flex-shrink-0 items-center gap-2 text-white font-semibold rounded-xl px-4 h-10 text-sm transition hover:-translate-y-0.5"
-              style={{ background: 'var(--gradient-accent)', animationDelay: '140ms' }}>
-              {s.cta} <IconArrowR size={17} />
-            </Link>
-          </div>
-
-          {/* Controles */}
-          {slides.length > 1 && (
-            <div className="mt-4 flex items-center gap-3.5">
-              <button onClick={() => go(cur - 1)} aria-label="Anterior"
-                className="w-9 h-9 rounded-full grid place-items-center text-ink bg-surface-2 border border-border transition hover:bg-surface-3 flex-shrink-0">
-                <IconArrowL size={16} />
-              </button>
-              <div className="flex gap-2">
-                {slides.map((_, i) => (
-                  <button key={i} onClick={() => go(i)} aria-label={`Ir al slide ${i + 1}`}
-                    className="relative w-[26px] h-[5px] rounded-full overflow-hidden p-0 border-0 cursor-pointer bg-border">
-                    {i === cur && <span key={cur} className="hs-dotbar" />}
-                  </button>
-                ))}
-              </div>
-              <button onClick={() => go(cur + 1)} aria-label="Siguiente"
-                className="w-9 h-9 rounded-full grid place-items-center text-ink bg-surface-2 border border-border transition hover:bg-surface-3 flex-shrink-0">
-                <IconArrowR size={16} />
-              </button>
-            </div>
-          )}
-        </div>
       </div>
+
+      {/* Indicadores del slider */}
+      {fotos.length > 1 && (
+        <div className="absolute bottom-5 left-5 sm:left-10 flex gap-2">
+          {fotos.map((_, i) => (
+            <button key={i} onClick={() => setCur(i)} aria-label={`Ver foto ${i + 1}`}
+              className={`h-1.5 rounded-full transition-all ${i === cur ? 'w-7 bg-accent' : 'w-3 bg-white/30 hover:bg-white/50'}`} />
+          ))}
+        </div>
+      )}
     </section>
   );
 }

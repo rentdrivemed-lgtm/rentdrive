@@ -1,6 +1,6 @@
 'use client';
 import Link from 'next/link';
-import { LogoMark } from '@/components/Logo';
+import { LogoMark, LogoWordmark } from '@/components/Logo';
 import { useRouter, usePathname } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { isMuted, setMuted } from '@/lib/sound';
@@ -134,15 +134,10 @@ export default function Navbar() {
       <nav className="bg-brand shadow-lg sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between gap-4">
 
-          {/* Logo */}
-          <Link href="/" className="flex items-center gap-2.5 flex-shrink-0">
-            <LogoMark size={44} />
-            <div className="hidden sm:block">
-              <span className="text-white font-bold text-lg leading-none">
-                Drive<span className="text-accent">Pass</span>
-              </span>
-              <p className="text-white/40 text-[10px] leading-none mt-0.5">Medellín</p>
-            </div>
+          {/* Logo — wordmark completo (mark + DrivePass + "RENT A CAR") en desktop, solo mark en móvil */}
+          <Link href="/" className="flex items-center flex-shrink-0" aria-label="DrivePass — inicio">
+            <LogoWordmark height={42} className="hidden sm:block" />
+            <LogoMark size={42} className="sm:hidden" />
           </Link>
 
           {/* Desktop nav */}

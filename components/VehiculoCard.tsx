@@ -5,6 +5,8 @@ import { IconPin, IconArrowR, IconStar } from '@/components/Icons';
 import { useSession } from '@/contexts/SessionContext';
 import { useLang } from '@/contexts/LanguageContext';
 import { tieneAltaDisponibilidadEsteMes } from '@/lib/disponibilidad-reglas';
+import { TIPO_VEHICULO_LABELS } from '@/lib/rentabilidad';
+import { segmentoValido } from '@/lib/precioMercado';
 
 const T = {
   es: { precioPorAsignar: 'Precio por asignar', dia: '/día', enRevision: 'En revisión', verMas: 'Ver más', altaDisp: 'Alta disponibilidad' },
@@ -59,8 +61,8 @@ export default function VehiculoCard({ v }: { v: Vehiculo }) {
       <div className="relative overflow-hidden">
         <img src={foto} alt={`${v.marca} ${v.modelo}`}
           className="w-full h-48 object-cover group-hover:scale-105 transition-transform duration-500" />
-        <span className="absolute top-3 left-3 bg-brand/80 backdrop-blur-sm text-white text-[11px] font-semibold px-2.5 py-1 rounded-full capitalize">
-          {v.tipo}
+        <span className="absolute top-3 left-3 bg-brand/80 backdrop-blur-sm text-white text-[11px] font-semibold px-2.5 py-1 rounded-full">
+          {TIPO_VEHICULO_LABELS[segmentoValido(v.tipo)]}
         </span>
         <div className="absolute top-3 right-3 flex flex-col items-end gap-1.5">
           {user?.rol === 'admin' && (

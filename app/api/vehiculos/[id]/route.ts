@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
+import { precioMercadoSugerido, segmentoValido } from '@/lib/precioMercado';
 
 const DOC_KEYS = ['soat', 'tecno', 'tarjeta', 'todo_riesgo'] as const;
 const DOC_LABELS: Record<string, string> = {
@@ -117,9 +118,11 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   // visible, no como bloqueo duro.
 
   // ── Standard field update ──
-  const ownFields = ['marca', 'modelo', 'anio', 'tipo', 'ubicacion', 'precio_dia', 'descripcion',
-    'disponible', 'dias_disponibles', 'fotos_detalle', 'fotos', 'placa', 'documentos'];
-  const adminOnlyFields = ['documentos_estado', 'documentos_nota', 'en_vitrina'];
+  // `precio_dia` NO se actualiza por el loop genérico: lo controla la lógica de precio automático
+  // más abajo (recalcula desde categoría + valor comercial) o el override manual del admin.
+  const ownFields = ['marca', 'modelo', 'anio', 'tipo', 'ubicacion', 'valor_comercial', 'precio_ajuste_pct',
+    'descripcion', 'disponible', 'dias_disponibles', 'fotos_detalle', 'fotos', 'placa', 'documentos'];
+  const adminOnlyFields = ['documentos_estado', 'documentos_nota', 'en_vitrina', 'precio_manual'];
   const allowed = isAdmin ? [...ownFields, ...adminOnlyFields] : ownFields;
 
   const pairs: string[] = [];
@@ -152,7 +155,28 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     db.prepare(`UPDATE vehiculos SET ${pairs.join(', ')} WHERE id = ?`).run(...values, Number(id));
   }
 
-  return NextResponse.json({ ok: true });
+  // ── Precio automático de mercado ──
+  // Regla: el precio se deriva de la categoría + valor comercial (lib/precioMercado.ts) y se
+  // recalcula solo cuando cambia algo que lo afecta, salvo que el admin lo haya fijado a mano.
+  let precioFinal: number | null = null;
+  if (isAdmin && body.precio_dia !== undefined) {
+    // Override manual del admin: guarda el precio y bloquea el recálculo automático.
+    precioFinal = Math.max(0, Number(body.precio_dia) || 0);
+    db.prepare('UPDATE vehiculos SET precio_dia = ?, precio_manual = 1 WHERE id = ?').run(precioFinal, Number(id));
+  } else {
+    const afectaPrecio = ['tipo', 'valor_comercial', 'precio_ajuste_pct', 'precio_manual']
+      .some(f => body[f] !== undefined);
+    if (afectaPrecio) {
+      const row = db.prepare('SELECT tipo, valor_comercial, precio_ajuste_pct, precio_manual FROM vehiculos WHERE id = ?')
+        .get(Number(id)) as { tipo: string; valor_comercial: number; precio_ajuste_pct: number; precio_manual: number } | undefined;
+      if (row && !row.precio_manual) {
+        precioFinal = precioMercadoSugerido(segmentoValido(row.tipo), Number(row.valor_comercial) || 0, Number(row.precio_ajuste_pct) || 0);
+        db.prepare('UPDATE vehiculos SET precio_dia = ? WHERE id = ?').run(precioFinal, Number(id));
+      }
+    }
+  }
+
+  return NextResponse.json({ ok: true, ...(precioFinal !== null ? { precio_dia: precioFinal } : {}) });
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {

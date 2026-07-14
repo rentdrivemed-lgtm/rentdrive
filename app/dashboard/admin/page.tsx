@@ -7,6 +7,7 @@ import ContabilidadPanel from '@/components/ContabilidadPanel';
 import SoportePanel from '@/components/SoportePanel';
 import LeadsPropietariosPanel from '@/components/LeadsPropietariosPanel';
 import AuditoriaPanel from '@/components/AuditoriaPanel';
+import CalculadoraPanel from '@/components/CalculadoraPanel';
 import { puede, normalizarNivel, NIVEL_LABEL, NIVELES, type AdminNivel } from '@/lib/permisos';
 import { parsePicoPlaca, picoPlacaVacio, placaRestringida, type PicoPlaca } from '@/lib/pico-placa';
 import { fechaHoraRecogida, esNoShowAplicable } from '@/lib/cancelacion';
@@ -182,7 +183,7 @@ function ResultadoIA({ res, auto }: { res: VerificacionResultado; auto?: string[
 }
 
 export default function DashboardAdmin() {
-  const [tab, setTab] = useState<'usuarios' | 'vehiculos' | 'reservas' | 'contabilidad' | 'mercado' | 'leads' | 'soporte' | 'config' | 'auditoria'>('usuarios');
+  const [tab, setTab] = useState<'usuarios' | 'vehiculos' | 'reservas' | 'contabilidad' | 'mercado' | 'calculadora' | 'leads' | 'soporte' | 'config' | 'auditoria'>('usuarios');
   const [miNivel, setMiNivel] = useState<AdminNivel>('principal');
   const [miId, setMiId] = useState<number | null>(null);
   const [picoPlaca, setPicoPlaca] = useState<PicoPlaca>(picoPlacaVacio());
@@ -244,7 +245,7 @@ export default function DashboardAdmin() {
   // Si el nivel actual no puede ver la pestaña seleccionada, lo mandamos a la primera permitida.
   useEffect(() => {
     if (!puede(miNivel, tab)) {
-      const orden = ['reservas', 'leads', 'soporte', 'usuarios', 'vehiculos', 'contabilidad', 'mercado', 'config', 'auditoria'] as const;
+      const orden = ['reservas', 'leads', 'soporte', 'usuarios', 'vehiculos', 'contabilidad', 'mercado', 'calculadora', 'config', 'auditoria'] as const;
       const primera = orden.find(k => puede(miNivel, k));
       if (primera) setTab(primera);
     }
@@ -605,29 +606,31 @@ export default function DashboardAdmin() {
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-10">
-      <div className="flex items-start justify-between gap-3 flex-wrap mb-6">
+      <div className="flex items-end justify-between gap-4 flex-wrap mb-6 pb-6 border-b border-border">
         <div>
-          <h1 className="text-2xl font-bold text-ink mb-1">Panel Administrador</h1>
-          <p className="text-ink/50 text-sm">Gestión total del sistema DrivePass</p>
+          <h1 className="text-3xl sm:text-4xl font-bold text-ink tracking-[-0.02em]">Panel Administrador</h1>
+          <p className="text-ink-soft mt-1.5">Gestión total del sistema DrivePass</p>
         </div>
         <a href="/control" target="_blank" rel="noopener"
-          className="inline-flex items-center gap-2 bg-accent hover:bg-accent-hover text-white font-semibold text-sm px-4 py-2.5 rounded-xl transition shadow-sm">
+          className="glow-accent inline-flex items-center gap-2 text-white font-semibold text-sm px-5 h-11 rounded-xl transition hover:-translate-y-0.5"
+          style={{ background: 'var(--gradient-accent)' }}>
           🎛️ Panel de control interno
-          <span className="text-[10px] opacity-80">↗ nueva pestaña</span>
+          <span className="text-[10px] opacity-80">↗</span>
         </a>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+      {/* Stats (StatCards del Design System) */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-6">
         {[
-          { label: 'Total usuarios',      value: stats.total,          color: 'bg-brand-muted text-ink'   },
-          { label: 'Propietarios',        value: stats.propietarios,   color: 'bg-accent-light text-accent' },
-          { label: 'Alquiladores',        value: stats.usuariosCount,  color: 'bg-success/10 text-success'  },
-          { label: 'Sin precio asignado', value: sinPrecio,            color: sinPrecio > 0 ? 'bg-danger/10 text-danger' : 'bg-surface text-ink/50' },
+          { label: 'Total usuarios',      value: stats.total,          tone: 'ink'    },
+          { label: 'Propietarios',        value: stats.propietarios,   tone: 'accent' },
+          { label: 'Alquiladores',        value: stats.usuariosCount,  tone: 'ink'    },
+          { label: 'Sin precio asignado', value: sinPrecio,            tone: sinPrecio > 0 ? 'danger' : 'ink' },
         ].map(s => (
-          <div key={s.label} className={`rounded-xl p-4 border border-border ${s.color}`}>
-            <p className="text-2xl font-bold">{s.value}</p>
-            <p className="text-xs opacity-70 mt-0.5">{s.label}</p>
+          <div key={s.label} className="rounded-2xl p-4 sm:p-5 border border-border bg-surface-2 shadow-[var(--shadow-card)]">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-ink/50">{s.label}</p>
+            <p className={`text-3xl font-black mt-2 font-mono ${s.tone === 'accent' ? 'text-accent' : s.tone === 'danger' ? 'text-danger' : 'text-ink'}`}
+              style={{ fontFeatureSettings: "'tnum' 1" }}>{s.value}</p>
           </div>
         ))}
       </div>
@@ -640,6 +643,7 @@ export default function DashboardAdmin() {
           { key: 'reservas',  label: `Reservas (${reservas.length})`, badge: pendientesCount },
           { key: 'contabilidad', label: '💰 Contabilidad' },
           { key: 'mercado', label: '📊 Mercado' },
+          { key: 'calculadora', label: '🧮 Calculadora' },
           { key: 'leads', label: '🎯 Leads' },
           { key: 'soporte', label: '💬 Soporte' },
           { key: 'config', label: 'Configuración' },
@@ -1092,6 +1096,9 @@ export default function DashboardAdmin() {
 
       {/* ── CONTABILIDAD (cotizaciones, facturas, liquidaciones a propietarios) ── */}
       {tab === 'contabilidad' && <ContabilidadPanel />}
+
+      {/* ── CALCULADORA (precio de mercado + rentabilidad, manual) ── */}
+      {tab === 'calculadora' && <CalculadoraPanel />}
 
       {/* ── MERCADO (comparador de precios) ── */}
       {tab === 'mercado' && (

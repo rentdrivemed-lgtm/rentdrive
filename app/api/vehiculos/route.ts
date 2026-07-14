@@ -3,6 +3,7 @@ import { getDb } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
 import { enviarCorreo } from '@/lib/email';
 import { tieneAltaDisponibilidadEsteMes } from '@/lib/disponibilidad-reglas';
+import { precioMercadoSugerido, segmentoValido } from '@/lib/precioMercado';
 
 function datesInRange(start: string, end: string): string[] {
   const dates: string[] = [];
@@ -87,27 +88,36 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json();
-  const { marca, modelo, anio, tipo, ubicacion, precio_dia, descripcion,
+  const { marca, modelo, anio, tipo, ubicacion, valor_comercial, precio_ajuste_pct, descripcion,
           fotos, fotos_detalle, dias_disponibles, placa } = body;
 
   if (!marca || !modelo || !anio) {
     return NextResponse.json({ error: 'Faltan datos requeridos' }, { status: 400 });
   }
 
+  // Precio automático de mercado: se deriva de la categoría + valor comercial (lib/precioMercado.ts).
+  // El propietario no fija el precio a mano; se calcula solo. Si no dan valor comercial, queda 0
+  // ("precio por asignar") y el equipo lo completa después.
+  const segmento = segmentoValido(tipo);
+  const valorComercial = Math.max(0, Number(valor_comercial) || 0);
+  const ajuste = Number(precio_ajuste_pct) || 0;
+  const precioAuto = precioMercadoSugerido(segmento, valorComercial, ajuste);
+
   const db = getDb();
   const result = await db.prepare(`
     INSERT INTO vehiculos
       (propietario_id, marca, modelo, anio, tipo, ubicacion, precio_dia, descripcion,
-       fotos, fotos_detalle, dias_disponibles, placa)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       fotos, fotos_detalle, dias_disponibles, placa, valor_comercial, precio_ajuste_pct, precio_manual)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
   `).run(
     user.id, marca, modelo, anio,
-    tipo || 'sedan', ubicacion || 'Medellín',
-    precio_dia ?? 0, descripcion || '',
+    segmento, ubicacion || 'Medellín',
+    precioAuto, descripcion || '',
     fotos || '[]',
     fotos_detalle || '{}',
     dias_disponibles || '[]',
     (placa || '').toString().toUpperCase().trim(),
+    valorComercial, ajuste,
   );
 
   try {

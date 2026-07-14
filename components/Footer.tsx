@@ -1,6 +1,6 @@
 'use client';
 import Link from 'next/link';
-import { LogoMark } from '@/components/Logo';
+import { LogoWordmark } from '@/components/Logo';
 import { useLang } from '@/contexts/LanguageContext';
 
 export default function Footer() {
@@ -9,12 +9,9 @@ export default function Footer() {
     <footer className="hidden md:block bg-brand text-white/60 mt-auto">
       <div className="max-w-7xl mx-auto px-6 py-10 grid grid-cols-1 sm:grid-cols-3 gap-8">
         {/* Brand */}
-        <div className="flex items-start gap-3">
-          <LogoMark size={44} className="opacity-90 flex-shrink-0" />
-          <div>
-            <p className="text-white font-bold text-base">Drive<span className="text-accent">Pass</span></p>
-            <p className="text-white/40 text-xs mt-0.5">{t.footer.tagline}</p>
-          </div>
+        <div className="flex flex-col items-start gap-2.5">
+          <LogoWordmark height={42} />
+          <p className="text-white/40 text-xs max-w-[30ch]">{t.footer.tagline}</p>
         </div>
 
         {/* Links */}
