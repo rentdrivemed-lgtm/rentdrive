@@ -1,0 +1,26 @@
+/* ============================================================
+   DrivePass Design System — GLOBAL ENTRY POINT
+   Premium / Dark · "Conduce libre."
+
+   Consumers link this single file. It is an import manifest only —
+   every token, font, and utility lives in a file reached from here.
+
+   TOKEN -> UTILITY QUICK MAP
+   ----------------------------------------------------------------
+   COLOR        var(--bg|surface-1/2/3|brand|accent|text|text-soft…)
+                Tailwind: bg-surface-2, text-soft, border-strong …
+   TYPE         var(--font-sans|font-mono), classes .t-display…t-caption, .t-mono
+   SPACE        var(--space-1…24)
+   RADII        var(--radius-sm|md|lg|xl|pill)
+   ELEVATION    var(--shadow-card|float|glow) · class .card .glass .glow-accent
+   GRADIENT     var(--gradient-hero|accent) · class .gradient-hero .gradient-accent
+   MOTION       var(--ease) var(--dur) · class .fade-up .shimmer
+   ============================================================ */
+
+@import url("tokens/colors.css");
+@import url("tokens/typography.css");
+@import url("tokens/spacing.css");
+@import url("tokens/elevation.css");
+@import url("tokens/motion.css");
+@import url("tokens/base.css");
+@import url("components/components.css");

@@ -1,0 +1,73 @@
+<!-- @dsCard group="Components" viewport="700x460" name="Feedback — badges, chips, toast, loaders" subtitle="Badge · Chip · Toast · Tooltip · Spinner · Skeleton" -->
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../../styles.css">
+<style>
+  body { margin: 0; padding: 24px; background: var(--bg); }
+  .grid { display: grid; gap: 22px; max-width: 660px; }
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .lbl { font: var(--fw-semibold) 11px var(--font-mono); color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 10px; }
+  .toastwrap { position: static; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<script type="text/babel">
+  const { Badge, Chip, Toast, Tooltip, Spinner, Skeleton } = window.DrivePassDesignSystem_1a34f0;
+  const Info = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01" strokeLinecap="round"/></svg>;
+
+  function Demo() {
+    const [filters, setFilters] = React.useState({ SUV: true, Sedán: false, Lujo: true });
+    return (
+      <div className="grid">
+        <div>
+          <div className="lbl">Badge — estados</div>
+          <div className="row">
+            <Badge variant="success" dot>Confirmada</Badge>
+            <Badge variant="warning">En revisión</Badge>
+            <Badge variant="danger">Rechazado</Badge>
+            <Badge variant="info" dot>Pendiente</Badge>
+            <Badge variant="accent">Destacado</Badge>
+            <Badge variant="neutral">Borrador</Badge>
+          </div>
+        </div>
+        <div>
+          <div className="lbl">Chip — filtros</div>
+          <div className="row">
+            {Object.keys(filters).map((k) => (
+              <Chip key={k} selected={filters[k]} onClick={() => setFilters({ ...filters, [k]: !filters[k] })}>{k}</Chip>
+            ))}
+            <Chip selected onRemove={() => {}}>Medellín</Chip>
+          </div>
+        </div>
+        <div>
+          <div className="lbl">Toast</div>
+          <div className="row" style={{alignItems:'stretch'}}>
+            <Toast tone="success" title="Reserva confirmada">Te enviamos los detalles al correo.</Toast>
+            <Toast tone="danger" title="Pago rechazado" onClose={() => {}}>Revisa los datos de tu tarjeta.</Toast>
+          </div>
+        </div>
+        <div>
+          <div className="lbl">Tooltip · Spinner · Skeleton</div>
+          <div className="row" style={{gap:'24px'}}>
+            <Tooltip label="Propietario verificado"><span style={{color:'var(--text-soft)',display:'flex'}}><Info/></span></Tooltip>
+            <Spinner size={24} />
+            <div style={{flex:1, minWidth:200, display:'grid', gap:8}}>
+              <Skeleton variant="line" width="80%" />
+              <Skeleton variant="line" width="55%" />
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  ReactDOM.createRoot(document.getElementById("root")).render(<Demo/>);
+</script>
+</body>
+</html>

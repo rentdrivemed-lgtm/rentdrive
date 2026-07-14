@@ -1,0 +1,19 @@
+/* ============================================================
+   DrivePass — MOTION TOKENS
+   Transitions 150–250ms, easing cubic-bezier(0.4,0,0.2,1).
+   No long animations, no exaggerated bounces.
+   ============================================================ */
+
+:root {
+  --ease: cubic-bezier(0.4, 0, 0.2, 1); /* @kind other */
+  --ease-out: cubic-bezier(0, 0, 0.2, 1); /* @kind other */
+
+  --dur-fast: 150ms; /* @kind other */
+  --dur: 200ms; /* @kind other */
+  --dur-slow: 250ms; /* @kind other */
+
+  --transition: all var(--dur) var(--ease); /* @kind other */
+
+  /* staggered list reveal step (multiply by index) */
+  --stagger: 40ms; /* @kind other */
+}

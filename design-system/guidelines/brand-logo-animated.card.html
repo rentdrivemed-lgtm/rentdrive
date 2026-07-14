@@ -1,0 +1,61 @@
+<!-- @dsCard group="Brand" viewport="700x260" name="Logo animado" subtitle="Flechas de intercambio que se cruzan — loaders y transiciones" -->
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body { margin: 0; background: var(--bg); display: grid; place-items: center; min-height: 260px; gap: 22px; padding: 24px; }
+  .stage { display: flex; align-items: center; gap: 36px; }
+  .badge { position: relative; width: 96px; height: 96px; }
+  .badge svg { position: absolute; inset: 0; }
+  .cap { text-align: center; color: var(--text-muted); font: 11px var(--font-mono); }
+
+  /* draw + shuttle animation, gated so print/reduced-motion shows final state */
+  @media (prefers-reduced-motion: no-preference) {
+    .ar { stroke-dasharray: 60; stroke-dashoffset: 60; animation: dp-draw 2.4s var(--ease) infinite; }
+    .ar-w { animation-delay: .18s; }
+    .head { opacity: 0; animation: dp-head 2.4s var(--ease) infinite; }
+    .head-w { animation-delay: .18s; }
+  }
+  @keyframes dp-draw {
+    0% { stroke-dashoffset: 60; }
+    28% { stroke-dashoffset: 0; }
+    72% { stroke-dashoffset: 0; }
+    100% { stroke-dashoffset: 0; }
+  }
+  @keyframes dp-head {
+    0%,18% { opacity: 0; }
+    32% { opacity: 1; }
+    100% { opacity: 1; }
+  }
+  /* subtle loader spin variant */
+  .loader { animation: dp-pulse 1.6s var(--ease) infinite; }
+  @keyframes dp-pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(0.94); } }
+</style>
+</head>
+<body>
+  <div class="stage">
+    <div class="badge">
+      <svg viewBox="0 0 96 96" fill="none">
+        <rect x="4" y="4" width="88" height="88" rx="26" fill="#1B3356"/>
+        <rect x="4.5" y="4.5" width="87" height="87" rx="25.5" fill="none" stroke="#fff" stroke-opacity="0.14"/>
+        <path class="ar" d="M26 38 H63" stroke="#F25C2B" stroke-width="8" stroke-linecap="round"/>
+        <polyline class="head" points="55,29 66,38 55,47" fill="none" stroke="#F25C2B" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+        <path class="ar ar-w" d="M70 58 H33" stroke="#F4F6FA" stroke-width="8" stroke-linecap="round"/>
+        <polyline class="head head-w" points="41,49 30,58 41,67" fill="none" stroke="#F4F6FA" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+
+    <div class="badge loader" style="width:64px;height:64px">
+      <svg viewBox="0 0 96 96" fill="none">
+        <path class="ar" d="M26 38 H63" stroke="#F25C2B" stroke-width="8" stroke-linecap="round"/>
+        <polyline class="head" points="55,29 66,38 55,47" fill="none" stroke="#F25C2B" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+        <path class="ar ar-w" d="M70 58 H33" stroke="#F4F6FA" stroke-width="8" stroke-linecap="round"/>
+        <polyline class="head head-w" points="41,49 30,58 41,67" fill="none" stroke="#F4F6FA" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+  </div>
+  <div class="cap">Insignia · loader — el intercambio se "dibuja" en bucle (150–250ms easing de marca)</div>
+</body>
+</html>

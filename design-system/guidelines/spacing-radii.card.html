@@ -1,0 +1,22 @@
+<!-- @dsCard group="Spacing" viewport="700x180" name="Corner radii" subtitle="sm 10 · md 14 · lg 20 · xl 28 · pill" -->
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body { margin: 0; padding: 22px; background: var(--bg); display: flex; gap: 18px; align-items: flex-end; flex-wrap: wrap; }
+  .item { display: grid; gap: 8px; justify-items: center; }
+  .box { width: 96px; height: 70px; background: var(--surface-2); border: 1px solid var(--border-strong); }
+  .tag { font-family: var(--font-mono); font-size: 11px; color: var(--text-soft); }
+  .role { font-family: var(--font-sans); font-size: 10px; color: var(--text-muted); }
+</style>
+</head>
+<body>
+  <div class="item"><div class="box" style="border-radius:var(--radius-sm)"></div><span class="tag">sm · 10</span><span class="role">chips</span></div>
+  <div class="item"><div class="box" style="border-radius:var(--radius-md)"></div><span class="tag">md · 14</span><span class="role">buttons · inputs</span></div>
+  <div class="item"><div class="box" style="border-radius:var(--radius-lg)"></div><span class="tag">lg · 20</span><span class="role">cards</span></div>
+  <div class="item"><div class="box" style="border-radius:var(--radius-xl)"></div><span class="tag">xl · 28</span><span class="role">hero panels</span></div>
+  <div class="item"><div class="box" style="border-radius:var(--radius-pill);width:70px"></div><span class="tag">pill · 999</span><span class="role">tags · toggles</span></div>
+</body>
+</html>

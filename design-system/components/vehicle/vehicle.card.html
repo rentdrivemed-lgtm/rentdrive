@@ -1,0 +1,37 @@
+<!-- @dsCard group="Components" viewport="700x440" name="VehiculoCard" subtitle="Catalog vehicle card — photo, price, favorite, states" -->
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../../styles.css">
+<style>
+  body { margin: 0; padding: 24px; background: var(--bg); }
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; max-width: 660px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<script type="text/babel">
+  const { VehiculoCard } = window.DrivePassDesignSystem_1a34f0;
+  const cars = [
+    { marca:"Mazda", modelo:"CX-5", anio:2023, tipo:"SUV", ubicacion:"El Poblado", precioDia:180000, descripcion:"SUV full equipo, ideal para viajes en familia por Antioquia.", foto:"https://images.unsplash.com/photo-1605559424843-9e4c228bf1c2?w=800&q=80&auto=format&fit=crop", verificado:true },
+    { marca:"Toyota", modelo:"Corolla", anio:2022, tipo:"Sedán", ubicacion:"Laureles", precioDia:120000, descripcion:"Económico, automático y muy cómodo para la ciudad.", foto:"https://images.unsplash.com/photo-1621007947382-bb3c3994e3fb?w=800&q=80&auto=format&fit=crop", verificado:true },
+  ];
+  function Demo() {
+    const [fav, setFav] = React.useState({ 0: true });
+    return (
+      <div className="grid">
+        {cars.map((c, i) => (
+          <VehiculoCard key={i} vehiculo={c} favorite={!!fav[i]} onFavorite={() => setFav({ ...fav, [i]: !fav[i] })} />
+        ))}
+      </div>
+    );
+  }
+  ReactDOM.createRoot(document.getElementById("root")).render(<Demo/>);
+</script>
+</body>
+</html>

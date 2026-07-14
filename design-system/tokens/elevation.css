@@ -1,0 +1,29 @@
+/* ============================================================
+   DrivePass — ELEVATION: shadows, glows, gradients
+   Shadows on dark are subtle and deep. The accent glow is the
+   signature premium detail, reserved for primary CTAs.
+   ============================================================ */
+
+:root {
+  /* --- Shadows --- */
+  --shadow-card: 0 8px 30px rgba(0, 0, 0, 0.35);      /* resting cards */
+  --shadow-float: 0 16px 50px rgba(0, 0, 0, 0.5);     /* floating panels, modals, drawers */
+  --shadow-glow: 0 8px 24px var(--accent-glow);       /* CTA orange glow */
+  --shadow-glow-lg: 0 12px 40px var(--accent-glow);   /* large / hovered CTA glow */
+
+  /* --- Gradients --- */
+  /* Hero: deep canvas -> card, with a faint orange radial in one corner */
+  --gradient-hero:
+    radial-gradient(900px 600px at 85% -10%, rgba(242, 92, 43, 0.14), transparent 60%),
+    linear-gradient(160deg, #0A1422 0%, #16263F 100%); /* @kind other */
+
+  /* Accent: premium button fill */
+  --gradient-accent: linear-gradient(135deg, #F25C2B 0%, #FF8A5B 100%); /* @kind other */
+
+  /* Subtle top-light sheen for elevated surfaces */
+  --gradient-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 40%); /* @kind other */
+
+  /* Glass background fill (floating bars / overlays) */
+  --glass-bg: rgba(15, 30, 51, 0.7);
+  --glass-blur: 16px; /* @kind other */
+}

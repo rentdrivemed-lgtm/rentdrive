@@ -1,0 +1,44 @@
+/* ============================================================
+   DrivePass — SPACING, RADII & SIZING TOKENS
+   ============================================================ */
+
+:root {
+  /* --- Spacing scale (4px base) --- */
+  --space-0: 0;
+  --space-1: 0.25rem;   /* 4 */
+  --space-2: 0.5rem;    /* 8 */
+  --space-3: 0.75rem;   /* 12 */
+  --space-4: 1rem;      /* 16 */
+  --space-5: 1.25rem;   /* 20 */
+  --space-6: 1.5rem;    /* 24 */
+  --space-8: 2rem;      /* 32 */
+  --space-10: 2.5rem;   /* 40 */
+  --space-12: 3rem;     /* 48 */
+  --space-16: 4rem;     /* 64 */
+  --space-20: 5rem;     /* 80 */
+  --space-24: 6rem;     /* 96 */
+
+  /* --- Radii --- */
+  --radius-sm: 10px;    /* small chips, inner elements */
+  --radius-md: 14px;    /* buttons, inputs */
+  --radius-lg: 20px;    /* cards */
+  --radius-xl: 28px;    /* hero panels, large surfaces */
+  --radius-pill: 999px; /* pills, avatars, toggles */
+
+  /* --- Layout --- */
+  --container: 1200px;     /* max content width */
+  --container-prose: 68ch; /* comfortable reading column (legal/prose) */
+  --bottomnav-h: 64px;     /* mobile bottom navigation height */
+  --navbar-h: 68px;        /* desktop top navbar height */
+  --tap-min: 44px;         /* minimum touch target */
+
+  /* --- Z-index scale --- */
+  --z-base: 0; /* @kind other */
+  --z-sticky: 100; /* @kind other */
+  --z-bottomnav: 200; /* @kind other */
+  --z-navbar: 300; /* @kind other */
+  --z-drawer: 400; /* @kind other */
+  --z-modal: 500; /* @kind other */
+  --z-toast: 600; /* @kind other */
+  --z-tooltip: 700; /* @kind other */
+}

@@ -1,0 +1,25 @@
+<!-- @dsCard group="Colors" viewport="700x170" name="Semantic states" subtitle="Success · warning · danger · info — with tinted surfaces" -->
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body { margin: 0; padding: 20px; background: var(--bg); }
+  .row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .cell { border-radius: var(--radius-md); border: 1px solid var(--border); padding: 14px; background: var(--surface-1); }
+  .dot { width: 18px; height: 18px; border-radius: var(--radius-pill); margin-bottom: 10px; }
+  .name { font: var(--fw-semibold) 13px var(--font-sans); color: var(--text); }
+  .val { font-family: var(--font-mono); font-size: 11px; color: var(--text-soft); margin-top: 3px; }
+  .pill { display:inline-block; margin-top:10px; font: var(--fw-semibold) 11px var(--font-sans); padding: 4px 10px; border-radius: var(--radius-pill); }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="cell"><div class="dot" style="background:var(--success)"></div><div class="name">success</div><div class="val">#34D399</div><span class="pill" style="background:var(--success-bg);color:var(--success)">Confirmada</span></div>
+    <div class="cell"><div class="dot" style="background:var(--warning)"></div><div class="name">warning</div><div class="val">#FBBF24</div><span class="pill" style="background:var(--warning-bg);color:var(--warning)">En revisión</span></div>
+    <div class="cell"><div class="dot" style="background:var(--danger)"></div><div class="name">danger</div><div class="val">#F87171</div><span class="pill" style="background:var(--danger-bg);color:var(--danger)">Rechazado</span></div>
+    <div class="cell"><div class="dot" style="background:var(--info)"></div><div class="name">info</div><div class="val">#60A5FA</div><span class="pill" style="background:var(--info-bg);color:var(--info)">Pendiente</span></div>
+  </div>
+</body>
+</html>

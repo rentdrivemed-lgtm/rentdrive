@@ -1,0 +1,66 @@
+<!-- @dsCard group="Components" viewport="700x460" name="Navigation — navbar, bottom nav, page header" subtitle="Navbar · BottomNav · PageHeader · Breadcrumbs" -->
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../../styles.css">
+<style>
+  body { margin: 0; padding: 0; background: var(--bg); }
+  .wrap { padding: 0 0 20px; }
+  .lbl { font: var(--fw-semibold) 11px var(--font-mono); color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em; margin: 22px 24px 10px; }
+  .stage { position: relative; margin: 0 24px; border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; background: var(--surface-1); }
+  .phone { width: 340px; height: 120px; }
+  .stage.phone .dp-bottomnav { position: absolute; }
+  .inner { padding: 24px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<script type="text/babel">
+  const { Navbar, BottomNav, PageHeader, Breadcrumbs, Button, Avatar } = window.DrivePassDesignSystem_1a34f0;
+  const ic = (d) => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{d}</svg>;
+  const Search = ic(<><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></>);
+  const Cal = ic(<><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></>);
+  const Chat = ic(<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>);
+  const User = ic(<><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 0 1 12 0v1"/></>);
+
+  function Demo() {
+    const [tab, setTab] = React.useState("explorar");
+    return (
+      <div className="wrap">
+        <div className="lbl">Navbar — logged out (transparent)</div>
+        <div className="stage"><Navbar links={[{label:"Explorar",href:"#"},{label:"Para propietarios",href:"#"},{label:"Cómo funciona",href:"#"}]} activeHref="#" right={<><Button variant="ghost" size="sm">Iniciar sesión</Button><Button size="sm">Registrarse</Button></>} /></div>
+
+        <div className="lbl">Navbar — logged in (solid)</div>
+        <div className="stage"><Navbar solid authed notifications={3} links={[{label:"Explorar",href:"#"},{label:"Reservas",href:"#"}]} activeHref="#" user={<Avatar name="Ana Gómez" verified size={36} />} /></div>
+
+        <div className="lbl">PageHeader + Breadcrumbs</div>
+        <div className="stage"><div className="inner">
+          <PageHeader
+            breadcrumbs={<Breadcrumbs items={[{label:"Inicio",href:"#"},{label:"Vehículos",href:"#"},{label:"Mazda CX-5"}]} />}
+            title="Mis reservas"
+            subtitle="128 carros disponibles en Medellín"
+            actions={<><Button variant="secondary" size="sm">Exportar</Button><Button size="sm">Nueva reserva</Button></>}
+          />
+        </div></div>
+
+        <div className="lbl">BottomNav — mobile (usuario)</div>
+        <div className="stage phone">
+          <BottomNav value={tab} onChange={setTab} items={[
+            {id:"explorar",label:"Explorar",icon:Search},
+            {id:"reservas",label:"Reservas",icon:Cal},
+            {id:"chat",label:"Chat",icon:Chat,badge:2},
+            {id:"perfil",label:"Perfil",icon:User},
+          ]} />
+        </div>
+      </div>
+    );
+  }
+  ReactDOM.createRoot(document.getElementById("root")).render(<Demo/>);
+</script>
+</body>
+</html>

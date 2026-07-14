@@ -1,0 +1,32 @@
+<!-- @dsCard group="Colors" viewport="700x200" name="Accent & brand" subtitle="One disciplined orange for CTAs, prices, active states" -->
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body { margin: 0; padding: 20px; background: var(--bg); display: grid; gap: 14px; }
+  .row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .sw { border-radius: var(--radius-md); border: 1px solid var(--border); overflow: hidden; }
+  .chip { height: 64px; }
+  .meta { padding: 9px 12px; background: var(--surface-1); }
+  .name { font: var(--fw-semibold) 13px/1.2 var(--font-sans); color: var(--text); }
+  .val { font-family: var(--font-mono); font-size: 11px; color: var(--text-soft); margin-top: 3px; }
+  .note { display:flex; align-items:center; gap:12px; }
+  .glowbtn { background: var(--gradient-accent); color:#fff; font: var(--fw-semibold) 14px var(--font-sans); padding: 12px 22px; border-radius: var(--radius-pill); box-shadow: var(--shadow-glow); border:0; }
+  .cap { font: 12px var(--font-sans); color: var(--text-muted); }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="sw"><div class="chip" style="background:var(--accent)"></div><div class="meta"><div class="name">accent</div><div class="val">#F25C2B</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--accent-hover)"></div><div class="meta"><div class="name">accent-hover</div><div class="val">#D44E22</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--brand)"></div><div class="meta"><div class="name">brand</div><div class="val">#1B3356</div></div></div>
+    <div class="sw"><div class="chip gradient-accent"></div><div class="meta"><div class="name">gradient-accent</div><div class="val">135° F25C2B→FF8A5B</div></div></div>
+  </div>
+  <div class="note">
+    <button class="glowbtn">Reservar ahora</button>
+    <span class="cap">Accent always carries an orange glow on primary CTAs — never used as a flat full-bleed background.</span>
+  </div>
+</body>
+</html>

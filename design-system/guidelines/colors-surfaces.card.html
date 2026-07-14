@@ -1,0 +1,26 @@
+<!-- @dsCard group="Colors" viewport="700x180" name="Surfaces & elevation" subtitle="Deep blue-black canvas rising to brand blue" -->
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body { margin: 0; padding: 20px; background: var(--bg); }
+  .row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+  .sw { border-radius: var(--radius-md); border: 1px solid var(--border); overflow: hidden; }
+  .chip { height: 72px; }
+  .meta { padding: 10px 12px; background: var(--surface-1); }
+  .name { font: var(--fw-semibold) 13px/1.2 var(--font-sans); color: var(--text); }
+  .val { font-family: var(--font-mono); font-size: 11px; color: var(--text-soft); margin-top: 3px; }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="sw"><div class="chip" style="background:var(--bg)"></div><div class="meta"><div class="name">bg</div><div class="val">#0A1422</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--surface-1)"></div><div class="meta"><div class="name">surface-1</div><div class="val">#0F1E33</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--surface-2)"></div><div class="meta"><div class="name">surface-2</div><div class="val">#16263F</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--surface-3)"></div><div class="meta"><div class="name">surface-3</div><div class="val">#1B3356</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--brand-light)"></div><div class="meta"><div class="name">brand-light</div><div class="val">#2C4F82</div></div></div>
+  </div>
+</body>
+</html>

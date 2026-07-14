@@ -1,0 +1,19 @@
+<!-- @dsCard group="Colors" viewport="700x150" name="Text hierarchy" subtitle="Primary, soft and muted on dark surfaces" -->
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body { margin: 0; padding: 22px; background: var(--surface-1); display: grid; gap: 14px; }
+  .line { display: flex; align-items: baseline; gap: 16px; }
+  .label { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); width: 130px; flex: none; }
+  .sample { font: var(--fw-semibold) 20px var(--font-sans); }
+</style>
+</head>
+<body>
+  <div class="line"><span class="label">text · #F4F6FA</span><span class="sample" style="color:var(--text)">Conduce libre por Medellín</span></div>
+  <div class="line"><span class="label">text-soft · #A9B8CE</span><span class="sample" style="color:var(--text-soft)">Reserva en minutos, sin filas</span></div>
+  <div class="line"><span class="label">text-muted · #64748B</span><span class="sample" style="color:var(--text-muted)">Placeholder y texto terciario</span></div>
+</body>
+</html>

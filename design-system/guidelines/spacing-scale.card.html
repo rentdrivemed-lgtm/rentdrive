@@ -1,0 +1,24 @@
+<!-- @dsCard group="Spacing" viewport="700x170" name="Spacing scale" subtitle="4px base · space-1 → space-24" -->
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body { margin: 0; padding: 22px; background: var(--bg); display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-end; }
+  .item { display: grid; gap: 8px; justify-items: center; }
+  .bar { background: var(--gradient-accent); border-radius: var(--radius-sm); height: 16px; }
+  .tag { font-family: var(--font-mono); font-size: 10px; color: var(--text-soft); }
+</style>
+</head>
+<body>
+  <div class="item"><div class="bar" style="width:var(--space-1)"></div><span class="tag">1 · 4</span></div>
+  <div class="item"><div class="bar" style="width:var(--space-2)"></div><span class="tag">2 · 8</span></div>
+  <div class="item"><div class="bar" style="width:var(--space-3)"></div><span class="tag">3 · 12</span></div>
+  <div class="item"><div class="bar" style="width:var(--space-4)"></div><span class="tag">4 · 16</span></div>
+  <div class="item"><div class="bar" style="width:var(--space-6)"></div><span class="tag">6 · 24</span></div>
+  <div class="item"><div class="bar" style="width:var(--space-8)"></div><span class="tag">8 · 32</span></div>
+  <div class="item"><div class="bar" style="width:var(--space-12)"></div><span class="tag">12 · 48</span></div>
+  <div class="item"><div class="bar" style="width:var(--space-16)"></div><span class="tag">16 · 64</span></div>
+</body>
+</html>

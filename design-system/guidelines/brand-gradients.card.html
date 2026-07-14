@@ -1,0 +1,24 @@
+<!-- @dsCard group="Brand" viewport="700x200" name="Gradients & glass" subtitle="hero · accent · glassmorphism bar" -->
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body { margin: 0; padding: 20px; background: var(--bg); display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .panel { height: 150px; border-radius: var(--radius-lg); border: 1px solid var(--border); position: relative; overflow: hidden; padding: 14px; }
+  .tag { font-family: var(--font-mono); font-size: 11px; color: var(--text); position: absolute; bottom: 12px; left: 14px; }
+  .glassbar { position:absolute; left:14px; right:14px; bottom:42px; height:46px; border-radius: var(--radius-md); display:flex; align-items:center; padding:0 14px; }
+  .glasstxt { font: var(--fw-semibold) 13px var(--font-sans); color: var(--text); }
+</style>
+</head>
+<body>
+  <div class="panel gradient-hero">
+    <span class="tag">gradient-hero</span>
+  </div>
+  <div class="panel gradient-hero">
+    <div class="glassbar glass"><span class="glasstxt">.glass — barra flotante con blur</span></div>
+    <span class="tag">glass over hero</span>
+  </div>
+</body>
+</html>

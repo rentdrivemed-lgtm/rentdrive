@@ -1,0 +1,62 @@
+/* ============================================================
+   DrivePass — TYPOGRAPHY TOKENS
+   Single family: Geist Sans for text, Geist Mono for figures,
+   prices, plates and data.
+
+   NOTE: Fonts are loaded from Google Fonts (CDN) rather than
+   self-hosted binaries. This is a substitution — Geist is the
+   brand family and matches exactly. If you have the licensed
+   Geist .woff2 files, drop them in /assets/fonts and replace
+   this @import with @font-face rules.
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800&family=Geist+Mono:wght@400;500;600;700&display=swap');
+
+:root {
+  /* --- Families --- */
+  --font-sans: 'Geist', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', 'Roboto Mono', monospace;
+
+  /* --- Weights (numeric font-weight tokens) --- */
+  --fw-regular: 400;   /* @kind font */
+  --fw-medium: 500;    /* @kind font */
+  --fw-semibold: 600;  /* @kind font */
+  --fw-bold: 700;      /* @kind font */
+  --fw-black: 800;     /* @kind font */
+
+  /* --- Type scale (desktop). size / line-height --- */
+  --fs-display: 3rem;      /* 48px */  --lh-display: 3.5rem;   /* 56px */
+  --fs-h1: 2.25rem;        /* 36px */  --lh-h1: 2.75rem;       /* 44px */
+  --fs-h2: 1.75rem;        /* 28px */  --lh-h2: 2.25rem;       /* 36px */
+  --fs-h3: 1.375rem;       /* 22px */  --lh-h3: 1.875rem;      /* 30px */
+  --fs-h4: 1.125rem;       /* 18px */  --lh-h4: 1.625rem;      /* 26px */
+  --fs-body: 1rem;         /* 16px */  --lh-body: 1.625rem;    /* 26px */
+  --fs-small: 0.875rem;    /* 14px */  --lh-small: 1.375rem;   /* 22px */
+  --fs-caption: 0.75rem;   /* 12px */  --lh-caption: 1.125rem; /* 18px */
+
+  /* --- Tracking --- */
+  --tracking-tight: -0.02em;   /* @kind other */
+  --tracking-normal: 0;        /* @kind other */
+  --tracking-wide: 0.04em;     /* @kind other */
+}
+
+/* Mobile: step Display / H1 / H2 down one notch */
+@media (max-width: 640px) {
+  :root {
+    --fs-display: 2.25rem;  --lh-display: 2.75rem;  /* 36/44 */
+    --fs-h1: 1.75rem;       --lh-h1: 2.25rem;       /* 28/36 */
+    --fs-h2: 1.375rem;      --lh-h2: 1.875rem;      /* 22/30 */
+  }
+}
+
+/* ---- Type helper classes ---- */
+.t-display { font: var(--fw-black) var(--fs-display)/var(--lh-display) var(--font-sans); letter-spacing: var(--tracking-tight); }
+.t-h1 { font: var(--fw-bold) var(--fs-h1)/var(--lh-h1) var(--font-sans); letter-spacing: var(--tracking-tight); }
+.t-h2 { font: var(--fw-bold) var(--fs-h2)/var(--lh-h2) var(--font-sans); letter-spacing: var(--tracking-tight); }
+.t-h3 { font: var(--fw-semibold) var(--fs-h3)/var(--lh-h3) var(--font-sans); }
+.t-h4 { font: var(--fw-semibold) var(--fs-h4)/var(--lh-h4) var(--font-sans); }
+.t-body { font: var(--fw-regular) var(--fs-body)/var(--lh-body) var(--font-sans); }
+.t-small { font: var(--fw-regular) var(--fs-small)/var(--lh-small) var(--font-sans); }
+.t-caption { font: var(--fw-regular) var(--fs-caption)/var(--lh-caption) var(--font-sans); }
+.t-mono { font-family: var(--font-mono); font-feature-settings: 'tnum' 1; letter-spacing: var(--tracking-normal); }
+.t-overline { font: var(--fw-semibold) var(--fs-caption)/var(--lh-caption) var(--font-sans); letter-spacing: var(--tracking-wide); text-transform: uppercase; }

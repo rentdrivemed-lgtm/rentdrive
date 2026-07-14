@@ -1,0 +1,84 @@
+<!-- @dsCard group="Components" viewport="700x720" name="Surfaces — cards, stats, tabs, accordion, empty" subtitle="Card · StatCard · Avatar · Tabs · Accordion · EmptyState · Modal" -->
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../../styles.css">
+<style>
+  body { margin: 0; padding: 24px; background: var(--bg); }
+  .grid { display: grid; gap: 22px; max-width: 660px; }
+  .lbl { font: var(--fw-semibold) 11px var(--font-mono); color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 10px; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<script type="text/babel">
+  const NS = window.DrivePassDesignSystem_1a34f0;
+  const { Card, CardBody, StatCard, Avatar, AvatarGroup, Tabs, Accordion, EmptyState, Button, Badge, Modal } = NS;
+  const Money = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="2" x2="12" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>;
+  const Car = () => <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M19 17h2v-3.3a2 2 0 0 0-.4-1.2L18 9h-3l-1.5-3.5A2 2 0 0 0 11.7 4H7.3a2 2 0 0 0-1.8 1.1L3.4 9 1.4 12.5a2 2 0 0 0-.4 1.2V17h2"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/></svg>;
+
+  function Demo() {
+    const [tab, setTab] = React.useState("act");
+    const [open, setOpen] = React.useState(false);
+    return (
+      <div className="grid">
+        <div>
+          <div className="lbl">StatCard</div>
+          <div className="cols">
+            <StatCard label="Ingresos del mes" icon={<Money/>} value="$3.480.000" delta="+12%" />
+            <StatCard label="Reservas activas" value="7" delta="-2%" />
+          </div>
+        </div>
+        <div>
+          <div className="lbl">Card · Avatar</div>
+          <Card>
+            <CardBody>
+              <div className="row" style={{justifyContent:'space-between'}}>
+                <div className="row">
+                  <Avatar name="Ana Gómez" verified size={44} />
+                  <div>
+                    <div style={{fontWeight:600,color:'var(--text)'}}>Ana Gómez</div>
+                    <div style={{fontSize:13,color:'var(--text-soft)'}}>Propietaria · 4.9 ★</div>
+                  </div>
+                </div>
+                <AvatarGroup size={32} max={3}>
+                  <Avatar name="J P" size={32}/><Avatar name="M R" size={32}/><Avatar name="L S" size={32}/><Avatar name="K T" size={32}/><Avatar name="N U" size={32}/>
+                </AvatarGroup>
+              </div>
+            </CardBody>
+          </Card>
+        </div>
+        <div>
+          <div className="lbl">Tabs</div>
+          <Tabs value={tab} onChange={setTab} tabs={[{id:"act",label:"Activas",count:3},{id:"comp",label:"Completadas"},{id:"canc",label:"Canceladas"}]} />
+        </div>
+        <div>
+          <div className="lbl">Accordion</div>
+          <Accordion items={[
+            {q:"¿Necesito licencia vigente?", a:"Sí. Subes tu licencia una sola vez y queda verificada para todas tus reservas."},
+            {q:"¿Cómo funciona el depósito?", a:"Se retiene al reservar y se devuelve tras la entrega del vehículo sin novedades."}
+          ]} />
+        </div>
+        <div>
+          <div className="lbl">EmptyState · Modal</div>
+          <Card>
+            <EmptyState icon={<Car/>} title="No encontramos carros" description="Prueba con otros filtros o amplía las fechas." action={<Button onClick={() => setOpen(true)}>Abrir modal</Button>} />
+          </Card>
+        </div>
+        <Modal open={open} onClose={() => setOpen(false)} title="Confirmar reserva" footer={<div className="row" style={{justifyContent:'flex-end'}}><Button variant="ghost" onClick={() => setOpen(false)}>Cancelar</Button><Button onClick={() => setOpen(false)}>Confirmar</Button></div>}>
+          ¿Quieres reservar el Mazda CX-5 del 12 al 16 de junio? Te enviaremos el contrato para firmar.
+        </Modal>
+      </div>
+    );
+  }
+  ReactDOM.createRoot(document.getElementById("root")).render(<Demo/>);
+</script>
+</body>
+</html>

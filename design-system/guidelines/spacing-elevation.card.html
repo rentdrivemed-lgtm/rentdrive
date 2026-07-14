@@ -1,0 +1,20 @@
+<!-- @dsCard group="Spacing" viewport="700x210" name="Elevation & glow" subtitle="card · float · accent glow" -->
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body { margin: 0; padding: 32px 24px; background: var(--bg); display: flex; gap: 28px; align-items: center; flex-wrap: wrap; }
+  .item { display: grid; gap: 12px; justify-items: center; }
+  .box { width: 150px; height: 86px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-lg); }
+  .tag { font-family: var(--font-mono); font-size: 11px; color: var(--text-soft); }
+  .role { font-family: var(--font-sans); font-size: 10px; color: var(--text-muted); margin-top:-6px; }
+</style>
+</head>
+<body>
+  <div class="item"><div class="box" style="box-shadow:var(--shadow-card)"></div><span class="tag">shadow-card</span><span class="role">resting cards</span></div>
+  <div class="item"><div class="box" style="box-shadow:var(--shadow-float)"></div><span class="tag">shadow-float</span><span class="role">modals · drawers</span></div>
+  <div class="item"><div class="box" style="box-shadow:var(--shadow-glow);border-color:var(--accent)"></div><span class="tag">shadow-glow</span><span class="role">primary CTA</span></div>
+</body>
+</html>

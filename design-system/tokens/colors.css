@@ -1,0 +1,69 @@
+/* ============================================================
+   DrivePass — COLOR TOKENS  (Premium / Dark)
+   Single source of truth for every color in the system.
+   The orange accent is used with discipline: CTAs, key data,
+   active states. Never as a massive background, never on white.
+   ============================================================ */
+
+:root {
+  color-scheme: dark;
+
+  /* --- Backgrounds & surfaces (deep blue-black, rising elevation) --- */
+  --bg: #0A1422;            /* base canvas, near black-blue */
+  --surface-1: #0F1E33;     /* panels, sections */
+  --surface-2: #16263F;     /* cards */
+  --surface-3: #1B3356;     /* brand blue — hover / elevation / active */
+
+  /* --- Borders --- */
+  --border: rgba(255, 255, 255, 0.08);          /* subtle, on everything elevated */
+  --border-strong: rgba(255, 255, 255, 0.14);   /* focus / emphasis */
+
+  /* --- Brand & accent --- */
+  --brand: #1B3356;         /* DrivePass blue */
+  --brand-light: #2C4F82;
+  --accent: #F25C2B;        /* orange — CTA, emphasis, prices */
+  --accent-hover: #D44E22;
+  --accent-glow: rgba(242, 92, 43, 0.30);   /* CTA glow */
+
+  /* --- Text --- */
+  --text: #F4F6FA;          /* primary */
+  --text-soft: #A9B8CE;     /* secondary */
+  --text-muted: #64748B;    /* tertiary / placeholders */
+  --text-on-accent: #FFFFFF;
+
+  /* --- Semantic states --- */
+  --success: #34D399;
+  --warning: #FBBF24;
+  --danger: #F87171;
+  --info: #60A5FA;
+
+  /* tinted backgrounds for state surfaces (badges, alerts) */
+  --success-bg: rgba(52, 211, 153, 0.14);
+  --warning-bg: rgba(251, 191, 36, 0.14);
+  --danger-bg: rgba(248, 113, 113, 0.14);
+  --info-bg: rgba(96, 165, 250, 0.14);
+  --accent-bg: rgba(242, 92, 43, 0.14);
+
+  /* ============================================================
+     Tailwind-compatible aliases (so utilities like bg-surface-2,
+     text-soft, border-strong resolve if a consumer uses Tailwind 4
+     with `@theme inline`). Map token -> --color-* equivalent.
+     ============================================================ */
+  --color-bg: var(--bg);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-brand: var(--brand);
+  --color-brand-light: var(--brand-light);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-text: var(--text);
+  --color-text-soft: var(--text-soft);
+  --color-text-muted: var(--text-muted);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+}
