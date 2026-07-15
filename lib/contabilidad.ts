@@ -11,7 +11,7 @@ import { enviarCorreo } from './email';
 
 type DB = Database.Database;
 
-export const COMISION_DEFAULT = 0.33;
+export const COMISION_DEFAULT = 0.35;
 
 export function comisionPlataforma(db: DB): number {
   const raw = getConfig(db, 'comision_plataforma_pct');

@@ -374,7 +374,7 @@ export default function ContabilidadPanel() {
     try {
       const pct = Number(config.comision_plataforma_pct);
       if (config.comision_plataforma_pct && (!Number.isFinite(pct) || pct <= 0 || pct >= 1)) {
-        setConfigMsg('La comisión debe ser un número entre 0 y 1 (ej. 0.33 para 33%).');
+        setConfigMsg('La comisión debe ser un número entre 0 y 1 (ej. 0.35 para 35%).');
         return;
       }
       const rRef = Number(config.referido_recompensa_referrer);
@@ -1418,9 +1418,9 @@ export default function ContabilidadPanel() {
         <div className="max-w-lg space-y-4">
           <div className="bg-surface-2 rounded-2xl border border-border p-5 space-y-4">
             <div>
-              <label className="text-[11px] text-ink/50 block mb-1">Comisión de la plataforma (0 a 1, ej. 0.33 = 33%)</label>
+              <label className="text-[11px] text-ink/50 block mb-1">Comisión de la plataforma (0 a 1, ej. 0.35 = 35%)</label>
               <input value={config.comision_plataforma_pct} onChange={e => setConfig(c => ({ ...c, comision_plataforma_pct: e.target.value.replace(/[^0-9.]/g, '') }))}
-                placeholder="0.33" className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                placeholder="0.35" className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
               <p className="text-[11px] text-ink/40 mt-1">Se aplica a las nuevas reservas que se confirmen a partir de ahora — no cambia liquidaciones ya generadas.</p>
             </div>
             <div>

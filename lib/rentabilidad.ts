@@ -41,7 +41,7 @@ export const DEFAULTS_POR_TIPO: Record<TipoVehiculo, {
   lujo_camioneta: { valorComercial: 303_992_000, soat: 1_250_000, pctSeguro: 0.022, mantenimiento: 9_000_000, precioDia: 950_000 },
 };
 
-export const COMISION_PLATAFORMA_DEFAULT = 0.33;
+export const COMISION_PLATAFORMA_DEFAULT = 0.35;
 export const OCUPACION_DEFAULT = 0.45;
 export const GPS_DISPOSITIVO_DEFAULT = 800_000;
 export const GPS_ANIOS_AMORTIZACION_DEFAULT = 3;
