@@ -13,6 +13,7 @@ import {
   type TipoVehiculo, type RentabilidadInput,
 } from '@/lib/rentabilidad';
 import { precioMercadoSugerido, bandaPrecioValor } from '@/lib/precioMercado';
+import InputPorcentaje from '@/components/InputPorcentaje';
 
 const cop = (n: number) => `$${Math.round(n).toLocaleString('es-CO')}`;
 const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
@@ -408,8 +409,7 @@ export default function CalculadoraPropietariosPage() {
               </div>
               <div>
                 <label className="text-xs font-medium text-ink/60 block mb-1">% Seguro todo riesgo</label>
-                <input type="number" step="0.1" value={(pctSeguro * 100).toFixed(1)}
-                  onChange={e => setPctSeguro(numInput(e.target.value) / 100)}
+                <InputPorcentaje value={pctSeguro} onChange={setPctSeguro} decimals={1}
                   className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40" />
               </div>
               <div>
@@ -485,14 +485,12 @@ export default function CalculadoraPropietariosPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs font-medium text-ink/60 block mb-1">Comisión de la plataforma (%)</label>
-                  <input type="number" step="0.1" value={(comision * 100).toFixed(1)}
-                    onChange={e => setComision(numInput(e.target.value) / 100)}
+                  <InputPorcentaje value={comision} onChange={setComision} decimals={1}
                     className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40" />
                 </div>
                 <div>
                   <label className="text-xs font-medium text-ink/60 block mb-1">Ocupación esperada (%)</label>
-                  <input type="number" step="1" value={(ocupacion * 100).toFixed(0)}
-                    onChange={e => setOcupacion(numInput(e.target.value) / 100)}
+                  <InputPorcentaje value={ocupacion} onChange={setOcupacion} decimals={0}
                     className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40" />
                 </div>
               </div>
