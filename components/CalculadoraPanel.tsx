@@ -3,7 +3,7 @@
 // Sirve para cotizar un vehículo que AÚN no está en el sistema: se elige categoría + valor
 // comercial y muestra el precio de mercado sugerido (mismo motor que la vitrina) junto con la
 // rentabilidad completa. Reutiliza lib/rentabilidad + lib/precioMercado.
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   DEFAULTS_POR_TIPO, TIPO_VEHICULO_LABELS,
   COMISION_PLATAFORMA_DEFAULT, OCUPACION_DEFAULT,
@@ -33,7 +33,6 @@ export default function CalculadoraPanel() {
   const [soat, setSoat] = useState(primero.soat);
   const [pctSeguro, setPctSeguro] = useState(primero.pctSeguro);
   const [mantenimiento, setMantenimiento] = useState(primero.mantenimiento);
-  const [pctDepreciacion, setPctDepreciacion] = useState(primero.pctDepreciacion);
   const [comision, setComision] = useState(COMISION_PLATAFORMA_DEFAULT);
   const [ocupacion, setOcupacion] = useState(OCUPACION_DEFAULT);
 
@@ -44,15 +43,20 @@ export default function CalculadoraPanel() {
     setSoat(d.soat);
     setPctSeguro(d.pctSeguro);
     setMantenimiento(d.mantenimiento);
-    setPctDepreciacion(d.pctDepreciacion);
-    setPrecioDia(precioMercadoSugerido(t, d.valorComercial, ajuste) || d.precioDia);
+    // El precio/día se recalcula solo desde categoría + valor comercial + ajuste (efecto abajo).
   };
 
+  // El precio de alquiler por día SIGUE al valor comercial (interpolación de mercado). Se recalcula
+  // al cambiar categoría, valor comercial o ajuste; se puede editar a mano hasta el próximo cambio.
+  useEffect(() => {
+    setPrecioDia(precioMercadoSugerido(tipo, valorComercial, ajuste) || 0);
+  }, [tipo, valorComercial, ajuste]);
+
   const input: RentabilidadInput = useMemo(() => ({
-    valorComercial, soat, pctSeguro, mantenimiento, pctDepreciacion,
+    valorComercial, soat, pctSeguro, mantenimiento,
     gpsDispositivo: GPS_DISPOSITIVO_DEFAULT, gpsAniosAmortizacion: GPS_ANIOS_AMORTIZACION_DEFAULT,
     gpsPlanAnual: GPS_PLAN_ANUAL_DEFAULT, precioDia, comision, ocupacion,
-  }), [valorComercial, soat, pctSeguro, mantenimiento, pctDepreciacion, precioDia, comision, ocupacion]);
+  }), [valorComercial, soat, pctSeguro, mantenimiento, precioDia, comision, ocupacion]);
 
   const r = useMemo(() => calcularRentabilidad(input), [input]);
   const precioSugerido = useMemo(() => precioMercadoSugerido(tipo, valorComercial, ajuste), [tipo, valorComercial, ajuste]);
@@ -132,12 +136,6 @@ export default function CalculadoraPanel() {
                   onChange={e => setMantenimiento(numInput(e.target.value))}
                   className="w-full border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40" />
               </div>
-              <div>
-                <label className="text-xs font-medium text-ink/60 block mb-1">% Depreciación</label>
-                <input type="number" step="0.1" value={(pctDepreciacion * 100).toFixed(1)}
-                  onChange={e => setPctDepreciacion(numInput(e.target.value) / 100)}
-                  className="w-full border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40" />
-              </div>
             </div>
             <p className="text-[11px] text-ink/50">Impuesto vehicular (Antioquia) automático: {pct(r.pctImpuesto)}.</p>
           </div>
@@ -208,7 +206,6 @@ export default function CalculadoraPanel() {
                 ['Seguro todo riesgo', cop(r.seguro)],
                 ['GPS (amortizado/año)', cop(r.gpsAnualAmortizado)],
                 ['Costo de caja anual', cop(r.costoCajaAnual)],
-                ['Depreciación anual', cop(r.depreciacion)],
                 ['Punto de equilibrio/día', cop(r.puntoEquilibrioDia)],
                 ['Días rentados/año', `${Math.round(r.diasRentados)} días`],
                 ['Ingreso bruto anual', cop(r.ingresoBrutoAnual)],

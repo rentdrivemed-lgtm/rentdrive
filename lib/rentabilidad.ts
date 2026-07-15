@@ -31,14 +31,14 @@ export const TIPO_VEHICULO_LABELS: Record<TipoVehiculo, string> = {
 // referencia por interpolación — afinarlas cuando se tengan cotizaciones reales de cada una.
 export const DEFAULTS_POR_TIPO: Record<TipoVehiculo, {
   valorComercial: number; soat: number; pctSeguro: number; mantenimiento: number;
-  pctDepreciacion: number; precioDia: number;
+  precioDia: number;
 }> = {
-  sedan: { valorComercial: 67_000_000, soat: 316_200, pctSeguro: 0.040, mantenimiento: 3_100_000, pctDepreciacion: 0.11, precioDia: 160_000 },
-  coupe: { valorComercial: 110_000_000, soat: 316_200, pctSeguro: 0.045, mantenimiento: 3_800_000, pctDepreciacion: 0.12, precioDia: 300_000 },
-  suv: { valorComercial: 122_400_000, soat: 946_600, pctSeguro: 0.035, mantenimiento: 4_800_000, pctDepreciacion: 0.10, precioDia: 360_000 },
-  camioneta7: { valorComercial: 180_000_000, soat: 946_600, pctSeguro: 0.033, mantenimiento: 5_800_000, pctDepreciacion: 0.10, precioDia: 500_000 },
-  lujo_auto: { valorComercial: 200_000_000, soat: 316_200, pctSeguro: 0.020, mantenimiento: 6_000_000, pctDepreciacion: 0.12, precioDia: 580_000 },
-  lujo_camioneta: { valorComercial: 303_992_000, soat: 1_250_000, pctSeguro: 0.022, mantenimiento: 9_000_000, pctDepreciacion: 0.09, precioDia: 950_000 },
+  sedan: { valorComercial: 67_000_000, soat: 316_200, pctSeguro: 0.040, mantenimiento: 3_100_000, precioDia: 160_000 },
+  coupe: { valorComercial: 110_000_000, soat: 316_200, pctSeguro: 0.045, mantenimiento: 3_800_000, precioDia: 300_000 },
+  suv: { valorComercial: 122_400_000, soat: 946_600, pctSeguro: 0.035, mantenimiento: 4_800_000, precioDia: 360_000 },
+  camioneta7: { valorComercial: 180_000_000, soat: 946_600, pctSeguro: 0.033, mantenimiento: 5_800_000, precioDia: 500_000 },
+  lujo_auto: { valorComercial: 200_000_000, soat: 316_200, pctSeguro: 0.020, mantenimiento: 6_000_000, precioDia: 580_000 },
+  lujo_camioneta: { valorComercial: 303_992_000, soat: 1_250_000, pctSeguro: 0.022, mantenimiento: 9_000_000, precioDia: 950_000 },
 };
 
 export const COMISION_PLATAFORMA_DEFAULT = 0.33;
@@ -53,7 +53,6 @@ export type RentabilidadInput = {
   soat: number;
   pctSeguro: number;
   mantenimiento: number;
-  pctDepreciacion: number;
   gpsDispositivo: number;
   gpsAniosAmortizacion: number;
   gpsPlanAnual: number;
@@ -68,8 +67,6 @@ export type RentabilidadResultado = {
   seguro: number;
   gpsAnualAmortizado: number;
   costoCajaAnual: number;
-  depreciacion: number;
-  costoEconomicoTotal: number;
   diasRentados: number;
   puntoEquilibrioDia: number;
   ingresoBrutoAnual: number;
@@ -88,9 +85,6 @@ export function calcularRentabilidad(input: RentabilidadInput): RentabilidadResu
   const gpsAnualAmortizado = input.gpsDispositivo / Math.max(input.gpsAniosAmortizacion, 1) + input.gpsPlanAnual;
   const costoCajaAnual = input.soat + impuesto + seguro + input.mantenimiento + gpsAnualAmortizado;
 
-  const depreciacion = input.valorComercial * input.pctDepreciacion;
-  const costoEconomicoTotal = costoCajaAnual + depreciacion;
-
   const diasRentados = 365 * input.ocupacion;
   const puntoEquilibrioDia = diasRentados > 0 ? costoCajaAnual / diasRentados : 0;
   const ingresoBrutoAnual = input.precioDia * diasRentados;
@@ -102,7 +96,7 @@ export function calcularRentabilidad(input: RentabilidadInput): RentabilidadResu
 
   return {
     pctImpuesto, impuesto, seguro, gpsAnualAmortizado, costoCajaAnual,
-    depreciacion, costoEconomicoTotal, diasRentados, puntoEquilibrioDia,
+    diasRentados, puntoEquilibrioDia,
     ingresoBrutoAnual, comisionCop, ingresoNetoAnual, utilidadNetaAnual,
     utilidadNetaMensual, roiAnual, esRentable: utilidadNetaAnual > 0,
   };

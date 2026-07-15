@@ -223,8 +223,7 @@ export default function CalculadoraPropietariosPage() {
   const [soat, setSoat] = useState(primero.soat);
   const [pctSeguro, setPctSeguro] = useState(primero.pctSeguro);
   const [mantenimiento, setMantenimiento] = useState(primero.mantenimiento);
-  const [pctDepreciacion, setPctDepreciacion] = useState(primero.pctDepreciacion);
-  const [precioDia, setPrecioDia] = useState(primero.precioDia);
+  const [precioDia, setPrecioDia] = useState(() => precioMercadoSugerido(primerTipo, primero.valorComercial) || primero.precioDia);
   const [comision, setComision] = useState(COMISION_PLATAFORMA_DEFAULT);
   const [ocupacion, setOcupacion] = useState(OCUPACION_DEFAULT);
   const [gpsAvanzado, setGpsAvanzado] = useState(false);
@@ -256,16 +255,21 @@ export default function CalculadoraPropietariosPage() {
     setSoat(d.soat);
     setPctSeguro(d.pctSeguro);
     setMantenimiento(d.mantenimiento);
-    setPctDepreciacion(d.pctDepreciacion);
-    // Precio sembrado por interpolación de mercado (no un fijo por categoría) → más preciso.
-    setPrecioDia(precioMercadoSugerido(t, d.valorComercial) || d.precioDia);
+    // El precio/día se recalcula solo desde la categoría + valor comercial (efecto abajo).
   };
 
+  // El precio de alquiler por día SIGUE al valor comercial (interpolación de mercado), igual que
+  // en la calculadora del admin y en la vitrina. Se recalcula al cambiar categoría o valor comercial;
+  // el usuario aún puede ajustarlo a mano después (queda hasta el próximo cambio de valor/categoría).
+  useEffect(() => {
+    setPrecioDia(precioMercadoSugerido(tipo, valorComercial) || 0);
+  }, [tipo, valorComercial]);
+
   const input: RentabilidadInput = useMemo(() => ({
-    valorComercial, soat, pctSeguro, mantenimiento, pctDepreciacion,
+    valorComercial, soat, pctSeguro, mantenimiento,
     gpsDispositivo, gpsAniosAmortizacion: gpsAnios, gpsPlanAnual: gpsPlan,
     precioDia, comision, ocupacion,
-  }), [valorComercial, soat, pctSeguro, mantenimiento, pctDepreciacion, gpsDispositivo, gpsAnios, gpsPlan, precioDia, comision, ocupacion]);
+  }), [valorComercial, soat, pctSeguro, mantenimiento, gpsDispositivo, gpsAnios, gpsPlan, precioDia, comision, ocupacion]);
 
   const r = useMemo(() => calcularRentabilidad(input), [input]);
   const sensibilidad = useMemo(() => sensibilidadPorOcupacion(input), [input]);
@@ -296,7 +300,7 @@ export default function CalculadoraPropietariosPage() {
         <h1 className="text-3xl sm:text-4xl font-bold text-ink mb-3">¿Cuánto puedes ganar con tu carro?</h1>
         <p className="text-ink/60 max-w-2xl mx-auto">
           Simula tu propio caso con los mismos costos que usamos internamente: SOAT, impuesto vehicular,
-          seguro todo riesgo, mantenimiento, GPS y depreciación. Ajusta cualquier campo — es tu vehículo, tus números.
+          seguro todo riesgo, mantenimiento y GPS. Ajusta cualquier campo — es tu vehículo, tus números.
         </p>
         <p className="text-ink/50 text-xs mt-2 flex items-center justify-center gap-1.5">
           <IconUser size={12} /> Hola {lead.nombre.split(' ')[0]} — guardamos tus datos para que no tengas que repetirlos.
@@ -319,7 +323,7 @@ export default function CalculadoraPropietariosPage() {
               <tr key={t} className={`border-t border-border/60 ${t === tipo ? 'bg-accent-light' : ''}`}>
                 <td className="py-2 font-medium text-ink">{TIPO_VEHICULO_LABELS[t]}</td>
                 <td className="py-2 text-ink/60">{cop(DEFAULTS_POR_TIPO[t].valorComercial)}</td>
-                <td className="py-2 font-semibold text-accent">{cop(DEFAULTS_POR_TIPO[t].precioDia)}</td>
+                <td className="py-2 font-semibold text-accent">{cop(precioMercadoSugerido(t, DEFAULTS_POR_TIPO[t].valorComercial))}</td>
               </tr>
             ))}
           </tbody>
@@ -337,7 +341,7 @@ export default function CalculadoraPropietariosPage() {
               tipo === t ? 'border-accent bg-accent-light' : 'border-border bg-surface-2 hover:bg-surface-3'
             }`}>
             <p className="text-sm font-bold text-ink leading-tight">{TIPO_VEHICULO_LABELS[t]}</p>
-            <p className="text-xs text-ink/50 mt-0.5">{cop(DEFAULTS_POR_TIPO[t].precioDia)}/día</p>
+            <p className="text-xs text-ink/50 mt-0.5">{cop(precioMercadoSugerido(t, DEFAULTS_POR_TIPO[t].valorComercial))}/día</p>
           </button>
         ))}
       </div>
@@ -414,12 +418,6 @@ export default function CalculadoraPropietariosPage() {
                   onChange={e => setMantenimiento(numInput(e.target.value))}
                   className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40" />
               </div>
-              <div>
-                <label className="text-xs font-medium text-ink/60 block mb-1">% Depreciación anual</label>
-                <input type="number" step="0.1" value={(pctDepreciacion * 100).toFixed(1)}
-                  onChange={e => setPctDepreciacion(numInput(e.target.value) / 100)}
-                  className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40" />
-              </div>
             </div>
             <p className="text-[11px] text-ink/50 mt-2">
               % Impuesto vehicular (Antioquia) se calcula automático según el valor comercial: {pct(r.pctImpuesto)}.
@@ -459,7 +457,7 @@ export default function CalculadoraPropietariosPage() {
             </h2>
             <div className="space-y-3">
               <div>
-                <label className="text-xs font-medium text-ink/60 block mb-1">Precio de alquiler por día (COP)</label>
+                <label className="text-xs font-medium text-ink/60 block mb-1">Precio de alquiler por día (COP) <span className="text-ink/40 font-normal">— calculado de tu valor comercial</span></label>
                 <input type="text" inputMode="numeric" value={precioDia.toLocaleString('es-CO')}
                   onChange={e => setPrecioDia(numInput(e.target.value))}
                   className="w-full border-2 border-accent/40 rounded-xl px-3 py-2.5 text-sm font-semibold text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40" />
@@ -546,12 +544,8 @@ export default function CalculadoraPropietariosPage() {
                   <dd className="font-bold text-ink">{cop(r.costoCajaAnual)}</dd>
                 </div>
                 <p className="text-[11px] text-ink/50 mt-1 leading-relaxed">
-                  Es lo que sale de tu bolsillo cada año (no incluye la depreciación): SOAT {cop(soat)} + impuesto vehicular {cop(r.impuesto)} + seguro todo riesgo {cop(r.seguro)} + mantenimiento {cop(mantenimiento)} + GPS amortizado {cop(r.gpsAnualAmortizado)} = {cop(r.costoCajaAnual)}.
+                  Es lo que sale de tu bolsillo cada año: SOAT {cop(soat)} + impuesto vehicular {cop(r.impuesto)} + seguro todo riesgo {cop(r.seguro)} + mantenimiento {cop(mantenimiento)} + GPS amortizado {cop(r.gpsAnualAmortizado)} = {cop(r.costoCajaAnual)}.
                 </p>
-              </div>
-              <div className="flex items-center justify-between border-b border-border/60 pb-2">
-                <dt className="text-ink/50">Depreciación anual (no es caja)</dt>
-                <dd className="font-medium text-ink">{cop(r.depreciacion)}</dd>
               </div>
               <div className="flex items-center justify-between border-b border-border/60 pb-2">
                 <dt className="text-ink/50">Punto de equilibrio por día rentado</dt>
