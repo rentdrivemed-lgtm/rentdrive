@@ -12,7 +12,10 @@ import {
   calcularRentabilidad,
   type TipoVehiculo, type RentabilidadInput,
 } from '@/lib/rentabilidad';
-import { precioMercadoSugerido, bandaPrecioValor } from '@/lib/precioMercado';
+import {
+  precioMercadoSugerido, bandaPrecioValor,
+  MODELOS_MERCADO, precioModeloSugerido,
+} from '@/lib/precioMercado';
 import InputPorcentaje from '@/components/InputPorcentaje';
 
 const cop = (n: number) => `$${Math.round(n).toLocaleString('es-CO')}`;
@@ -36,22 +39,50 @@ export default function CalculadoraPanel() {
   const [mantenimiento, setMantenimiento] = useState(primero.mantenimiento);
   const [comision, setComision] = useState(COMISION_PLATAFORMA_DEFAULT);
   const [ocupacion, setOcupacion] = useState(OCUPACION_DEFAULT);
+  const [modeloIdx, setModeloIdx] = useState<number | null>(null); // null = "Otro / no está en la lista"
 
   const aplicarTipo = (t: TipoVehiculo) => {
+    setModeloIdx(null);                    // categoría manual → sin modelo específico
     setTipo(t);
     const d = DEFAULTS_POR_TIPO[t];
     setValorComercial(d.valorComercial);
     setSoat(d.soat);
     setPctSeguro(d.pctSeguro);
     setMantenimiento(d.mantenimiento);
-    // El precio/día se recalcula solo desde categoría + valor comercial + ajuste (efecto abajo).
+    // El precio/día se recalcula solo (efecto abajo).
   };
 
-  // El precio de alquiler por día SIGUE al valor comercial (interpolación de mercado). Se recalcula
-  // al cambiar categoría, valor comercial o ajuste; se puede editar a mano hasta el próximo cambio.
+  const aplicarModelo = (idxStr: string) => {
+    if (idxStr === '') { setModeloIdx(null); return; }   // "Otro / no está en la lista"
+    const idx = Number(idxStr);
+    const m = MODELOS_MERCADO[idx];
+    if (!m) { setModeloIdx(null); return; }
+    setModeloIdx(idx);
+    setTipo(m.tipo);
+    const d = DEFAULTS_POR_TIPO[m.tipo];
+    setSoat(d.soat);
+    setPctSeguro(d.pctSeguro);
+    setMantenimiento(d.mantenimiento);
+    setValorComercial(m.valor);
+    // El precio/día se recalcula solo (efecto abajo).
+  };
+
+  const modeloSel = modeloIdx != null ? MODELOS_MERCADO[modeloIdx] : null;
+
+  // Precio sugerido EFECTIVO: si hay modelo elegido manda la tabla marca+modelo (afinada por año);
+  // si no, se interpola por segmento según el valor comercial. En ambos casos aplica el ajuste %.
+  const precioSugerido = useMemo(
+    () => modeloSel
+      ? precioModeloSugerido(modeloSel, anio, ajuste)
+      : precioMercadoSugerido(tipo, valorComercial, ajuste),
+    [modeloSel, tipo, valorComercial, anio, ajuste],
+  );
+
+  // El precio/día efectivo sigue al sugerido cuando cambia cualquiera de sus entradas
+  // (modelo, categoría, valor, año, ajuste); se puede editar a mano hasta el próximo cambio.
   useEffect(() => {
-    setPrecioDia(precioMercadoSugerido(tipo, valorComercial, ajuste) || 0);
-  }, [tipo, valorComercial, ajuste]);
+    setPrecioDia(precioSugerido || 0);
+  }, [precioSugerido]);
 
   const input: RentabilidadInput = useMemo(() => ({
     valorComercial, soat, pctSeguro, mantenimiento,
@@ -60,7 +91,6 @@ export default function CalculadoraPanel() {
   }), [valorComercial, soat, pctSeguro, mantenimiento, precioDia, comision, ocupacion]);
 
   const r = useMemo(() => calcularRentabilidad(input), [input]);
-  const precioSugerido = useMemo(() => precioMercadoSugerido(tipo, valorComercial, ajuste), [tipo, valorComercial, ajuste]);
   const banda = useMemo(() => bandaPrecioValor(valorComercial), [valorComercial]);
   const fueraDeBanda = valorComercial > 0 && precioDia > 0 && (precioDia < banda.min || precioDia > banda.max);
   const requiereInspeccion = anio > 0 && anio < ANIO_MINIMO_SIN_INSPECCION;
@@ -70,8 +100,8 @@ export default function CalculadoraPanel() {
       <div>
         <h2 className="text-lg font-bold text-ink">🧮 Calculadora de precio y rentabilidad</h2>
         <p className="text-sm text-ink/60 mt-1">
-          Cotiza un vehículo que aún no está en el sistema. El precio sale del mismo motor de mercado
-          que usa la vitrina (interpolado por valor comercial). Nada de esto se guarda.
+          Cotiza un vehículo que aún no está en el sistema. Elige la marca+modelo para un precio de
+          mercado afinado, o déjalo en &ldquo;Otro&rdquo; y se interpola por categoría y valor. Nada de esto se guarda.
         </p>
       </div>
 
@@ -80,6 +110,27 @@ export default function CalculadoraPanel() {
         <div className="space-y-4">
           <div className="bg-surface-2 rounded-2xl border border-border p-5 space-y-3">
             <h3 className="font-bold text-ink text-sm">Datos del vehículo</h3>
+            <div>
+              <label className="text-xs font-medium text-ink/60 block mb-1">Marca y modelo</label>
+              <select value={modeloIdx ?? ''} onChange={e => aplicarModelo(e.target.value)}
+                className="w-full border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40">
+                <option value="">Otro / no está en la lista</option>
+                {CATEGORIAS.map(([val, label]) => {
+                  const items = MODELOS_MERCADO
+                    .map((m, i) => ({ m, i }))
+                    .filter(x => x.m.tipo === val);
+                  if (items.length === 0) return null;
+                  return (
+                    <optgroup key={val} label={label}>
+                      {items.map(({ m, i }) => (
+                        <option key={i} value={i}>{m.marca} {m.modelo}</option>
+                      ))}
+                    </optgroup>
+                  );
+                })}
+              </select>
+              <p className="text-[11px] text-ink/50 mt-1">Elige el modelo para un precio afinado al mercado; con &ldquo;Otro&rdquo; se estima por categoría y valor.</p>
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-xs font-medium text-ink/60 block mb-1">Categoría</label>
@@ -149,7 +200,12 @@ export default function CalculadoraPanel() {
                 className="w-full border-2 border-accent/40 rounded-xl px-3 py-2 text-sm font-semibold text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40" />
               {precioSugerido > 0 && (
                 <div className="flex items-center justify-between gap-2 mt-1.5">
-                  <p className="text-[11px] text-ink/50">Sugerido de mercado: <strong className="text-accent">{cop(precioSugerido)}/día</strong></p>
+                  <p className="text-[11px] text-ink/50">
+                    {modeloSel
+                      ? <>Precio de <span className="font-semibold text-ink">{modeloSel.marca} {modeloSel.modelo}</span> (afinado al año): </>
+                      : <>Sugerido de mercado: </>}
+                    <strong className="text-accent">{cop(precioSugerido)}/día</strong>
+                  </p>
                   {precioDia !== precioSugerido && (
                     <button type="button" onClick={() => setPrecioDia(precioSugerido)}
                       className="text-[11px] font-semibold text-accent hover:underline">Usar sugerido</button>
