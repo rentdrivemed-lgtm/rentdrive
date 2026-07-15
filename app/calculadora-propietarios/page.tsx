@@ -12,7 +12,10 @@ import {
   calcularRentabilidad, sensibilidadPorOcupacion,
   type TipoVehiculo, type RentabilidadInput,
 } from '@/lib/rentabilidad';
-import { precioMercadoSugerido, bandaPrecioValor } from '@/lib/precioMercado';
+import {
+  precioMercadoSugerido, bandaPrecioValor,
+  MODELOS_MERCADO, precioModeloSugerido,
+} from '@/lib/precioMercado';
 import InputPorcentaje from '@/components/InputPorcentaje';
 
 const cop = (n: number) => `$${Math.round(n).toLocaleString('es-CO')}`;
@@ -231,6 +234,8 @@ export default function CalculadoraPropietariosPage() {
   const [gpsDispositivo, setGpsDispositivo] = useState(GPS_DISPOSITIVO_DEFAULT);
   const [gpsAnios, setGpsAnios] = useState(GPS_ANIOS_AMORTIZACION_DEFAULT);
   const [gpsPlan, setGpsPlan] = useState(GPS_PLAN_ANUAL_DEFAULT);
+  const [ajustePrecio, setAjustePrecio] = useState(0);            // ajuste por demanda / negociación, %
+  const [modeloIdx, setModeloIdx] = useState<number | null>(null); // null = "Otro / no está en la lista"
 
   const [lead, setLead] = useState<Lead | null>(null);
   const [revisandoLead, setRevisandoLead] = useState(true);
@@ -249,6 +254,7 @@ export default function CalculadoraPropietariosPage() {
   }, []);
 
   const aplicarTipo = (t: TipoVehiculo) => {
+    setModeloIdx(null);                    // categoría manual → sin modelo específico
     setTipo(t);
     setNombreVehiculo(TIPO_VEHICULO_LABELS[t]);
     const d = DEFAULTS_POR_TIPO[t];
@@ -256,15 +262,42 @@ export default function CalculadoraPropietariosPage() {
     setSoat(d.soat);
     setPctSeguro(d.pctSeguro);
     setMantenimiento(d.mantenimiento);
-    // El precio/día se recalcula solo desde la categoría + valor comercial (efecto abajo).
+    // El precio/día se recalcula solo (efecto abajo).
   };
 
-  // El precio de alquiler por día SIGUE al valor comercial (interpolación de mercado), igual que
-  // en la calculadora del admin y en la vitrina. Se recalcula al cambiar categoría o valor comercial;
-  // el usuario aún puede ajustarlo a mano después (queda hasta el próximo cambio de valor/categoría).
+  const aplicarModelo = (idxStr: string) => {
+    if (idxStr === '') { setModeloIdx(null); return; }   // "Otro / no está en la lista"
+    const idx = Number(idxStr);
+    const m = MODELOS_MERCADO[idx];
+    if (!m) { setModeloIdx(null); return; }
+    setModeloIdx(idx);
+    setTipo(m.tipo);
+    setNombreVehiculo(`${m.marca} ${m.modelo}`);
+    const d = DEFAULTS_POR_TIPO[m.tipo];
+    setSoat(d.soat);
+    setPctSeguro(d.pctSeguro);
+    setMantenimiento(d.mantenimiento);
+    setValorComercial(m.valor);
+    // El precio/día se recalcula solo (efecto abajo).
+  };
+
+  const modeloSel = modeloIdx != null ? MODELOS_MERCADO[modeloIdx] : null;
+
+  // Precio sugerido EFECTIVO: si hay modelo elegido manda la tabla marca+modelo (afinada por año);
+  // si no, se interpola por segmento según el valor comercial. En ambos casos aplica el ajuste %.
+  const precioSugerido = useMemo(
+    () => modeloSel
+      ? precioModeloSugerido(modeloSel, anio, ajustePrecio)
+      : precioMercadoSugerido(tipo, valorComercial, ajustePrecio),
+    [modeloSel, tipo, valorComercial, anio, ajustePrecio],
+  );
+
+  // El precio/día efectivo sigue al sugerido cuando cambia cualquiera de sus entradas (modelo,
+  // categoría, valor, año, ajuste). El usuario aún puede escribirlo a mano: queda hasta el próximo
+  // cambio de esas entradas.
   useEffect(() => {
-    setPrecioDia(precioMercadoSugerido(tipo, valorComercial) || 0);
-  }, [tipo, valorComercial]);
+    setPrecioDia(precioSugerido || 0);
+  }, [precioSugerido]);
 
   const input: RentabilidadInput = useMemo(() => ({
     valorComercial, soat, pctSeguro, mantenimiento,
@@ -276,10 +309,13 @@ export default function CalculadoraPropietariosPage() {
   const sensibilidad = useMemo(() => sensibilidadPorOcupacion(input), [input]);
   const requiereInspeccion = anio > 0 && anio < ANIO_MINIMO_SIN_INSPECCION;
 
-  // Precio de mercado interpolado por valor comercial (mismo motor que la vitrina) + banda de cordura.
-  const precioSugerido = useMemo(() => precioMercadoSugerido(tipo, valorComercial), [tipo, valorComercial]);
+  // Banda de cordura por valor comercial + posición del precio dentro de ella.
   const banda = useMemo(() => bandaPrecioValor(valorComercial), [valorComercial]);
-  const fueraDeBanda = valorComercial > 0 && precioDia > 0 && (precioDia < banda.min || precioDia > banda.max);
+  const fueraDeBanda: 'bajo' | 'alto' | null =
+    valorComercial > 0 && precioDia > 0
+      ? (precioDia < banda.min ? 'bajo' : precioDia > banda.max ? 'alto' : null)
+      : null;
+  const pctDelValor = valorComercial > 0 ? (precioDia / valorComercial) * 100 : 0;
 
   if (revisandoLead) return null;
 
@@ -355,6 +391,27 @@ export default function CalculadoraPropietariosPage() {
               <IconCar size={15} className="text-accent" /> Tu vehículo
             </h2>
             <div className="space-y-3">
+              <div>
+                <label className="text-xs font-medium text-ink/60 block mb-1">Marca y modelo</label>
+                <select value={modeloIdx ?? ''} onChange={e => aplicarModelo(e.target.value)}
+                  className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40">
+                  <option value="">Otro / no está en la lista</option>
+                  {(Object.keys(TIPO_VEHICULO_LABELS) as TipoVehiculo[]).map(t => {
+                    const items = MODELOS_MERCADO
+                      .map((m, i) => ({ m, i }))
+                      .filter(x => x.m.tipo === t);
+                    if (items.length === 0) return null;
+                    return (
+                      <optgroup key={t} label={TIPO_VEHICULO_LABELS[t]}>
+                        {items.map(({ m, i }) => (
+                          <option key={i} value={i}>{m.marca} {m.modelo}</option>
+                        ))}
+                      </optgroup>
+                    );
+                  })}
+                </select>
+                <p className="text-[11px] text-ink/50 mt-1">Elige tu modelo para un precio afinado al mercado. Si no está, usa &ldquo;Otro&rdquo; y se estima por categoría y valor.</p>
+              </div>
               <div>
                 <label className="text-xs font-medium text-ink/60 block mb-1">Nombre (referencia)</label>
                 <input type="text" value={nombreVehiculo} onChange={e => setNombreVehiculo(e.target.value)}
@@ -457,14 +514,18 @@ export default function CalculadoraPropietariosPage() {
             </h2>
             <div className="space-y-3">
               <div>
-                <label className="text-xs font-medium text-ink/60 block mb-1">Precio de alquiler por día (COP) <span className="text-ink/40 font-normal">— calculado de tu valor comercial</span></label>
+                <label className="text-xs font-medium text-ink/60 block mb-1">Precio de alquiler por día (COP)</label>
                 <input type="text" inputMode="numeric" value={precioDia.toLocaleString('es-CO')}
                   onChange={e => setPrecioDia(numInput(e.target.value))}
                   className="w-full border-2 border-accent/40 rounded-xl px-3 py-2.5 text-sm font-semibold text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40" />
                 {precioSugerido > 0 && (
                   <div className="flex items-center justify-between gap-2 mt-1.5">
-                    <p className="text-[11px] text-ink/50">
-                      Precio de mercado sugerido para tu carro: <strong className="text-accent">{cop(precioSugerido)}/día</strong>
+                    <p className="text-[11px] text-ink/60">
+                      {modeloSel
+                        ? <>Precio de mercado de <span className="font-semibold text-ink">{modeloSel.marca} {modeloSel.modelo}</span> (afinado al año)</>
+                        : <>Estimado por segmento según valor</>}
+                      : <span className="font-semibold text-accent">{cop(precioSugerido)}/día</span>
+                      <span className="text-ink/40"> · {pctDelValor.toFixed(2)}% del valor/día</span>
                     </p>
                     {precioDia !== precioSugerido && (
                       <button type="button" onClick={() => setPrecioDia(precioSugerido)}
@@ -474,11 +535,17 @@ export default function CalculadoraPropietariosPage() {
                     )}
                   </div>
                 )}
+                <div className="mt-2">
+                  <label className="text-xs font-medium text-ink/60 block mb-1">Ajuste por demanda / negociación (%)</label>
+                  <input type="number" step="1" value={ajustePrecio}
+                    onChange={e => setAjustePrecio(Number(e.target.value) || 0)}
+                    className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40" />
+                  <p className="text-[11px] text-ink/50 mt-1">Sube modelos muy pedidos (Fortuner, Prado, híbridos) o baja los de baja rotación. Recomendado: −15% a +15%.</p>
+                </div>
                 {fueraDeBanda && (
-                  <p className="text-[11px] text-warning mt-1.5 leading-relaxed">
-                    ⚠️ Ese precio queda fuera del rango de mercado para este valor comercial
-                    ({cop(banda.min)}–{cop(banda.max)}/día). Puedes usarlo, pero fuera de ese rango
-                    baja la ocupación o dejas plata sobre la mesa.
+                  <p className="text-[11px] text-warning mt-2 leading-relaxed">
+                    ⚠️ Este precio está {fueraDeBanda === 'alto' ? 'por encima' : 'por debajo'} del rango de mercado
+                    para un carro de este valor ({cop(banda.min)}–{cop(banda.max)}/día). Revísalo antes de publicar.
                   </p>
                 )}
               </div>

@@ -58,3 +58,74 @@ const MAPA_TIPO_LEGADO: Record<string, TipoVehiculo> = {
 export function segmentoValido(tipo: string | null | undefined): TipoVehiculo {
   return MAPA_TIPO_LEGADO[(tipo || '').trim()] ?? 'sedan';
 }
+
+// ─── Tabla de precios por MARCA+MODELO (Estudio de Mercado, 7 rentadoras Medellín, jul-2026) ───
+// La marca/modelo es la variable PRINCIPAL del precio: un modelo muy pedido (Tucson, Fortuner)
+// renta más que el carro más barato de su segmento aunque valgan parecido. Cuando el vehículo
+// está en esta tabla se usa su precio/día base (afinado por el año); si no, se cae a la
+// interpolación por segmento (precioMercadoSugerido). 'valor' = valor comercial típico de un
+// ejemplar reciente; 'precio' = tarifa/día de referencia para un modelo de <=3 años.
+export type ModeloMercado = {
+  marca: string; modelo: string; tipo: TipoVehiculo; valor: number; precio: number;
+};
+
+export const MODELOS_MERCADO: ModeloMercado[] = [
+  // Económico / sedán pequeño
+  { marca: 'Kia',           modelo: 'Picanto',         tipo: 'sedan',          valor: 55_000_000,  precio: 220_000 },
+  { marca: 'Renault',       modelo: 'Logan / Sandero', tipo: 'sedan',          valor: 55_000_000,  precio: 225_000 },
+  { marca: 'Chevrolet',     modelo: 'Onix',            tipo: 'sedan',          valor: 62_000_000,  precio: 240_000 },
+  { marca: 'Suzuki',        modelo: 'Swift / Dzire',   tipo: 'sedan',          valor: 65_000_000,  precio: 245_000 },
+  { marca: 'Mazda',         modelo: '2',               tipo: 'sedan',          valor: 65_000_000,  precio: 255_000 },
+  { marca: 'Nissan',        modelo: 'Versa',           tipo: 'sedan',          valor: 72_000_000,  precio: 275_000 },
+  // Sedán / compacto medio
+  { marca: 'Nissan',        modelo: 'Sentra',          tipo: 'sedan',          valor: 90_000_000,  precio: 320_000 },
+  { marca: 'Mazda',         modelo: '3',               tipo: 'sedan',          valor: 100_000_000, precio: 370_000 },
+  { marca: 'Toyota',        modelo: 'Corolla',         tipo: 'sedan',          valor: 110_000_000, precio: 385_000 },
+  { marca: 'Renault',       modelo: 'Arkana',          tipo: 'suv',            valor: 120_000_000, precio: 430_000 },
+  { marca: 'Mercedes-Benz', modelo: 'A200 / CLA',      tipo: 'lujo_auto',      valor: 180_000_000, precio: 490_000 },
+  // SUV compacta 5 puestos
+  { marca: 'Suzuki',        modelo: 'Vitara',          tipo: 'suv',            valor: 95_000_000,  precio: 340_000 },
+  { marca: 'Nissan',        modelo: 'Kicks',           tipo: 'suv',            valor: 98_000_000,  precio: 345_000 },
+  { marca: 'Chevrolet',     modelo: 'Equinox',         tipo: 'suv',            valor: 120_000_000, precio: 390_000 },
+  { marca: 'Mazda',         modelo: 'CX-30',           tipo: 'suv',            valor: 120_000_000, precio: 395_000 },
+  { marca: 'Kia',           modelo: 'Sportage',        tipo: 'suv',            valor: 120_000_000, precio: 410_000 },
+  { marca: 'Hyundai',       modelo: 'Tucson',          tipo: 'suv',            valor: 120_000_000, precio: 420_000 },
+  { marca: 'Mazda',         modelo: 'CX-5',            tipo: 'suv',            valor: 135_000_000, precio: 435_000 },
+  { marca: 'Volkswagen',    modelo: 'Tiguan',          tipo: 'suv',            valor: 140_000_000, precio: 440_000 },
+  { marca: 'Toyota',        modelo: 'RAV4',            tipo: 'suv',            valor: 160_000_000, precio: 480_000 },
+  // SUV grande / 7 puestos
+  { marca: 'Chevrolet',     modelo: 'Trailblazer',     tipo: 'camioneta7',     valor: 150_000_000, precio: 500_000 },
+  { marca: 'Mazda',         modelo: 'CX-9',            tipo: 'camioneta7',     valor: 160_000_000, precio: 520_000 },
+  { marca: 'Kia',           modelo: 'Sorento',         tipo: 'camioneta7',     valor: 170_000_000, precio: 530_000 },
+  { marca: 'Toyota',        modelo: 'Fortuner',        tipo: 'camioneta7',     valor: 190_000_000, precio: 600_000 },
+  { marca: 'Hyundai',       modelo: 'Palisade',        tipo: 'camioneta7',     valor: 210_000_000, precio: 650_000 },
+  { marca: 'Toyota',        modelo: '4Runner',         tipo: 'camioneta7',     valor: 230_000_000, precio: 680_000 },
+  { marca: 'Toyota',        modelo: 'Prado',           tipo: 'camioneta7',     valor: 290_000_000, precio: 850_000 },
+  // Lujo — sedán/coupé premium
+  { marca: 'BMW',           modelo: 'Serie 3 / 4',     tipo: 'lujo_auto',      valor: 260_000_000, precio: 720_000 },
+  // Lujo — SUV premium y camioneta grande
+  { marca: 'BMW',           modelo: 'X1 / X2',         tipo: 'lujo_camioneta', valor: 220_000_000, precio: 620_000 },
+  { marca: 'Audi',          modelo: 'Q5',              tipo: 'lujo_camioneta', valor: 280_000_000, precio: 780_000 },
+  { marca: 'BMW',           modelo: 'X4',              tipo: 'lujo_camioneta', valor: 320_000_000, precio: 850_000 },
+  { marca: 'Mercedes-Benz', modelo: 'GLC',             tipo: 'lujo_camioneta', valor: 330_000_000, precio: 880_000 },
+  { marca: 'Audi',          modelo: 'Q7 / Q8',         tipo: 'lujo_camioneta', valor: 450_000_000, precio: 1_000_000 },
+  { marca: 'Porsche',       modelo: 'Cayenne',         tipo: 'lujo_camioneta', valor: 520_000_000, precio: 1_120_000 },
+  { marca: 'Chevrolet',     modelo: 'Tahoe',           tipo: 'lujo_camioneta', valor: 310_000_000, precio: 975_000 },
+  { marca: 'Toyota',        modelo: 'Prado blindado',  tipo: 'lujo_camioneta', valor: 380_000_000, precio: 900_000 },
+  { marca: 'Chevrolet',     modelo: 'Tahoe blindado',  tipo: 'lujo_camioneta', valor: 430_000_000, precio: 1_150_000 },
+];
+
+// Factor de año aplicado al PRECIO (más suave que el del valor): un modelo más viejo renta algo menos.
+export function factorAnioPrecio(anio: number): number {
+  const edad = new Date().getFullYear() - (anio || new Date().getFullYear());
+  if (edad <= 3) return 1.00;
+  if (edad <= 6) return 0.92;
+  if (edad <= 9) return 0.84;
+  return 0.75;
+}
+
+// Precio sugerido cuando el propietario elige un modelo de la tabla.
+export function precioModeloSugerido(modelo: ModeloMercado, anio: number, ajustePct = 0): number {
+  const base = modelo.precio * factorAnioPrecio(anio) * (1 + ajustePct / 100);
+  return Math.round(base / 1000) * 1000;
+}
