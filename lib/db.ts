@@ -487,29 +487,29 @@ function initDb(db: Database.Database) {
 
     const propietarioId = (db.prepare("SELECT id FROM usuarios WHERE correo='propietario@rentdrive.com'").get() as { id: number }).id;
 
-    db.prepare(`INSERT INTO vehiculos (propietario_id, marca, modelo, anio, tipo, ubicacion, precio_dia, descripcion, fotos) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(propietarioId, 'Toyota', 'Corolla', 2022, 'sedan', 'Medellín', 120000, 'Vehículo en excelente estado, aire acondicionado, bluetooth.', JSON.stringify(['https://images.unsplash.com/photo-1621007947382-bb3c3994e3fb?w=400']));
-
-    db.prepare(`INSERT INTO vehiculos (propietario_id, marca, modelo, anio, tipo, ubicacion, precio_dia, descripcion, fotos) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(propietarioId, 'Mazda', 'CX-5', 2023, 'suv', 'Medellín', 180000, 'SUV espaciosa perfecta para familia o viajes largos.', JSON.stringify(['https://images.unsplash.com/photo-1544636331-e26879cd4d9b?w=400']));
-
-    db.prepare(`INSERT INTO vehiculos (propietario_id, marca, modelo, anio, tipo, ubicacion, precio_dia, descripcion, fotos) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(propietarioId, 'Chevrolet', 'Spark', 2021, 'compacto', 'Medellín', 80000, 'Compacto ideal para la ciudad, bajo consumo de combustible.', JSON.stringify(['https://images.unsplash.com/photo-1503376780353-7e6692767b70?w=400']));
+    // Flota demo: modelos comunes en el mercado colombiano con fotos reales del modelo
+    // (public/uploads/*.jpg, versionadas como fixtures) y precios coherentes con el motor
+    // de mercado (lib/precioMercado). Reemplazó a las fotos de stock exóticas anteriores.
+    const flotaDemo = [
+      { marca: 'Mazda',     modelo: '3',        anio: 2021, tipo: 'sedan',      valor: 100_000_000, precio: 395_000, placa: 'HXR421', foto: '/uploads/mazda3.jpg',
+        desc: 'Mazda 3 2021 sedán gris, transmisión automática. Motor SkyActiv económico, pantalla táctil con Android Auto y CarPlay, cámara de reversa y control crucero. Cómodo y elegante para la ciudad o viajes.' },
+      { marca: 'Chevrolet', modelo: 'Tracker',  anio: 2022, tipo: 'suv',        valor: 95_000_000,  precio: 300_000, placa: 'KMV872', foto: '/uploads/tracker.jpg',
+        desc: 'Chevrolet Tracker 2022 blanca, SUV turbo 1.2 automática. Amplia y de bajo consumo, con pantalla táctil, cámara de reversa y buen baúl. Ideal para familia y carretera.' },
+      { marca: 'Kia',       modelo: 'Picanto',  anio: 2021, tipo: 'sedan',      valor: 48_000_000,  precio: 230_000, placa: 'FDS194', foto: '/uploads/picanto.jpg',
+        desc: 'Kia Picanto 2021 azul, automático. Súper económico y fácil de parquear, perfecto para moverse por Medellín. Aire acondicionado, bluetooth y muy bajo consumo de gasolina.' },
+      { marca: 'Toyota',    modelo: 'Fortuner', anio: 2022, tipo: 'camioneta7', valor: 190_000_000, precio: 583_000, placa: 'MTG503', foto: '/uploads/fortuner.jpg',
+        desc: 'Toyota Fortuner 2022 blanca, 4x4 automática de 7 puestos. Robusta y confiable para viajes largos, carretera y familia grande. Excelente rendimiento y mucho espacio.' },
+      { marca: 'Ford',      modelo: 'Explorer', anio: 2021, tipo: 'camioneta7', valor: 210_000_000, precio: 650_000, placa: 'NPU667', foto: '/uploads/explorer.jpg',
+        desc: 'Ford Explorer 2021 blanca, SUV grande de 7 puestos automática. Espaciosa y potente, ideal para viajes en familia con todo el equipaje. Pantalla grande, cámara y mucha comodidad.' },
+    ];
+    const insVeh = db.prepare(`INSERT INTO vehiculos (propietario_id, marca, modelo, anio, tipo, ubicacion, precio_dia, valor_comercial, placa, descripcion, fotos) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    for (const v of flotaDemo) {
+      insVeh.run(propietarioId, v.marca, v.modelo, v.anio, v.tipo, 'Medellín', v.precio, v.valor, v.placa, v.desc, JSON.stringify([v.foto]));
+    }
 
     const hashUser = bcrypt.hashSync('user123', 10);
     db.prepare(`INSERT INTO usuarios (nombre, correo, password, rol) VALUES (?, ?, ?, ?)`)
       .run('María Usuario', 'usuario@rentdrive.com', hashUser, 'usuario');
   }
 
-  // Las fotos demo se sembraron con ancho bajo (?w=400) y se ven pixeladas al mostrarse
-  // en tamaños grandes (vitrina del inicio). Se reemplazan por versiones de mayor resolución
-  // solo si el vehículo sigue con esa foto exacta (si el propietario ya la cambió, no se toca).
-  const fotosBajaRes: Record<string, string> = {
-    'https://images.unsplash.com/photo-1621007947382-bb3c3994e3fb?w=400': 'https://images.unsplash.com/photo-1621007947382-bb3c3994e3fb?w=1600&q=80&auto=format&fit=crop',
-    'https://images.unsplash.com/photo-1544636331-e26879cd4d9b?w=400': 'https://images.unsplash.com/photo-1544636331-e26879cd4d9b?w=1600&q=80&auto=format&fit=crop',
-    'https://images.unsplash.com/photo-1503376780353-7e6692767b70?w=400': 'https://images.unsplash.com/photo-1503376780353-7e6692767b70?w=1600&q=80&auto=format&fit=crop',
-  };
-  for (const [vieja, nueva] of Object.entries(fotosBajaRes)) {
-    db.prepare(`UPDATE vehiculos SET fotos = ? WHERE fotos = ?`).run(JSON.stringify([nueva]), JSON.stringify([vieja]));
-  }
 }

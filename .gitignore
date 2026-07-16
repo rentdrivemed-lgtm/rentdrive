@@ -17,6 +17,12 @@ rentdrive.db-wal
 # Archivos subidos por usuarios (se persisten con volumen en Railway)
 public/uploads/*
 !public/uploads/.gitkeep
+# Fotos de la flota demo (fixtures del seed en lib/db.ts) — sí se versionan
+!public/uploads/mazda3.jpg
+!public/uploads/tracker.jpg
+!public/uploads/picanto.jpg
+!public/uploads/fortuner.jpg
+!public/uploads/explorer.jpg
 
 # Logs
 *.log
