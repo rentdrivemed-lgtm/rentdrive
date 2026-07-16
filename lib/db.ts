@@ -491,15 +491,15 @@ function initDb(db: Database.Database) {
     // (public/uploads/*.jpg, versionadas como fixtures) y precios coherentes con el motor
     // de mercado (lib/precioMercado). Reemplazó a las fotos de stock exóticas anteriores.
     const flotaDemo = [
-      { marca: 'Mazda',     modelo: '3',        anio: 2020, tipo: 'sedan',      valor: 100_000_000, precio: 380_000, placa: 'HXR421', foto: '/uploads/mazda3.jpg',
+      { marca: 'Mazda',     modelo: '3',        anio: 2020, tipo: 'sedan',      valor: 100_000_000, precio: 380_000, placa: 'HXR421', foto: '/uploads/mazda3.jpg?v=2',
         desc: 'Mazda 3 2020 blanco, hatchback automático. Motor SkyActiv económico, pantalla táctil con Android Auto y CarPlay, cámara de reversa y control crucero. Ágil y elegante para ciudad y viajes.' },
-      { marca: 'Chevrolet', modelo: 'Tracker',  anio: 2021, tipo: 'suv',        valor: 95_000_000,  precio: 300_000, placa: 'KMV872', foto: '/uploads/tracker.jpg',
+      { marca: 'Chevrolet', modelo: 'Tracker',  anio: 2021, tipo: 'suv',        valor: 95_000_000,  precio: 300_000, placa: 'KMV872', foto: '/uploads/tracker.jpg?v=2',
         desc: 'Chevrolet Tracker 2021 gris, SUV turbo automática. Amplia y de bajo consumo, con pantalla táctil, cámara de reversa y buen baúl. Ideal para familia y carretera.' },
-      { marca: 'Kia',       modelo: 'Picanto',  anio: 2015, tipo: 'sedan',      valor: 42_000_000,  precio: 210_000, placa: 'FDS194', foto: '/uploads/picanto.jpg',
+      { marca: 'Kia',       modelo: 'Picanto',  anio: 2015, tipo: 'sedan',      valor: 42_000_000,  precio: 210_000, placa: 'FDS194', foto: '/uploads/picanto.jpg?v=2',
         desc: 'Kia Picanto 2015 azul, hatchback económico y automático. Súper fácil de parquear y de muy bajo consumo, perfecto para moverse por Medellín. Aire acondicionado y bluetooth.' },
-      { marca: 'Toyota',    modelo: 'Fortuner', anio: 2018, tipo: 'camioneta7', valor: 175_000_000, precio: 550_000, placa: 'MTG503', foto: '/uploads/fortuner.jpg',
+      { marca: 'Toyota',    modelo: 'Fortuner', anio: 2018, tipo: 'camioneta7', valor: 175_000_000, precio: 550_000, placa: 'MTG503', foto: '/uploads/fortuner.jpg?v=2',
         desc: 'Toyota Fortuner 2018 negra, 4x4 automática de 7 puestos. Robusta y confiable para viajes largos, carretera y familia grande. Excelente rendimiento y espacio.' },
-      { marca: 'Ford',      modelo: 'Explorer', anio: 2010, tipo: 'camioneta7', valor: 80_000_000,  precio: 400_000, placa: 'NPU667', foto: '/uploads/explorer.jpg',
+      { marca: 'Ford',      modelo: 'Explorer', anio: 2010, tipo: 'camioneta7', valor: 80_000_000,  precio: 400_000, placa: 'NPU667', foto: '/uploads/explorer.jpg?v=2',
         desc: 'Ford Explorer 2010 negra, SUV grande de 7 puestos automática. Espaciosa y cómoda, ideal para viajes en familia con todo el equipaje. Mucho espacio interior.' },
     ];
     const insVeh = db.prepare(`INSERT INTO vehiculos (propietario_id, marca, modelo, anio, tipo, ubicacion, precio_dia, valor_comercial, placa, descripcion, fotos) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
