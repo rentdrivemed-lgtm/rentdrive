@@ -1,14 +1,18 @@
-// Logo de marca DrivePass — ícono oficial (07_Marca_e_Imagen/Logos/DrivePass_Icono.svg):
-// cuadro azul redondeado (#1B2A44) con la "A" de dos barras (blanca + naranja).
-// El "mark" es el isotipo; el "wordmark" añade el texto DrivePass + tagline "RENT A CAR".
+// Logo de marca DrivePass (vectorial, fiel al Design System: assets/logo-*.svg).
+// El "mark" es una placa azul redondeada con dos flechas de intercambio —naranja→ / ←clara—
+// que representan el handoff P2P (las llaves pasan del propietario al conductor). Se ve bien
+// sobre cualquier fondo. El "wordmark" añade el texto DrivePass + tagline "RENT A CAR".
 
 export function LogoMark({ size = 44, className = '' }: { size?: number; className?: string }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 100 100" fill="none"
+    <svg width={size} height={size} viewBox="0 0 96 96" fill="none"
       role="img" aria-label="DrivePass" className={className}>
-      <rect x="1" y="1" width="98" height="98" rx="26" fill="#1B2A44" stroke="rgba(255,255,255,0.18)" strokeWidth="2" />
-      <polygon points="43.88,83.27 30.12,80.73 42.12,15.73 55.88,18.27" fill="#F4F6FA" />
-      <polygon points="69.88,80.69 56.12,83.31 44.12,20.31 57.88,17.69" fill="#F25C2B" />
+      <rect x="4" y="4" width="88" height="88" rx="26" fill="#1B3356" />
+      <rect x="4.5" y="4.5" width="87" height="87" rx="25.5" fill="none" stroke="#FFFFFF" strokeOpacity="0.14" />
+      <path d="M26 38 H63" fill="none" stroke="#F25C2B" strokeWidth="8" strokeLinecap="round" />
+      <polyline points="55,29 66,38 55,47" fill="none" stroke="#F25C2B" strokeWidth="8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M70 58 H33" fill="none" stroke="#F4F6FA" strokeWidth="8" strokeLinecap="round" />
+      <polyline points="41,49 30,58 41,67" fill="none" stroke="#F4F6FA" strokeWidth="8" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -18,10 +22,13 @@ export function LogoWordmark({ height = 40, className = '' }: { height?: number;
   return (
     <svg width={width} height={height} viewBox="0 0 210 58" fill="none"
       role="img" aria-label="DrivePass rent a car" className={className}>
-      <g transform="translate(3,3) scale(0.44)">
-        <rect x="1" y="1" width="98" height="98" rx="26" fill="#1B2A44" stroke="rgba(255,255,255,0.18)" strokeWidth="2" />
-        <polygon points="43.88,83.27 30.12,80.73 42.12,15.73 55.88,18.27" fill="#F4F6FA" />
-        <polygon points="69.88,80.69 56.12,83.31 44.12,20.31 57.88,17.69" fill="#F25C2B" />
+      <g transform="translate(2,2) scale(0.458)">
+        <rect x="4" y="4" width="88" height="88" rx="26" fill="#1B3356" />
+        <rect x="4.5" y="4.5" width="87" height="87" rx="25.5" fill="none" stroke="#FFFFFF" strokeOpacity="0.14" />
+        <path d="M26 38 H63" fill="none" stroke="#F25C2B" strokeWidth="8" strokeLinecap="round" />
+        <polyline points="55,29 66,38 55,47" fill="none" stroke="#F25C2B" strokeWidth="8" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M70 58 H33" fill="none" stroke="#F4F6FA" strokeWidth="8" strokeLinecap="round" />
+        <polyline points="41,49 30,58 41,67" fill="none" stroke="#F4F6FA" strokeWidth="8" strokeLinecap="round" strokeLinejoin="round" />
       </g>
       <text x="54" y="30" fontFamily="var(--font-geist-sans), Geist, system-ui, sans-serif"
         fontSize="23" fontWeight="800" letterSpacing="-0.5" fill="#F4F6FA">

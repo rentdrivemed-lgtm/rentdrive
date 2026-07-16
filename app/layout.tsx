@@ -55,9 +55,9 @@ export const metadata: Metadata = {
     languages: { "es-CO": BASE_URL },
   },
   icons: {
-    icon: [{ url: "/brand/logo-mark.svg?v=5", type: "image/svg+xml" }],
-    shortcut: ["/brand/logo-mark.svg?v=5"],
-    apple: [{ url: "/icons/apple-touch-icon.png?v=5" }],
+    icon: [{ url: "/brand/logo-mark.svg?v=6", type: "image/svg+xml" }],
+    shortcut: ["/brand/logo-mark.svg?v=6"],
+    apple: [{ url: "/icons/apple-touch-icon.png?v=6" }],
   },
   manifest: "/manifest.json",
   appleWebApp: {

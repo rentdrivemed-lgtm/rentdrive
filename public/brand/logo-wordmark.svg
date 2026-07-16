@@ -1,9 +1,12 @@
 <svg width="210" height="58" viewBox="0 0 210 58" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="DrivePass rent a car">
 
-  <g transform="translate(3,3) scale(0.44)">
-    <rect x="1" y="1" width="98" height="98" rx="26" fill="#1B2A44" stroke="rgba(255,255,255,0.18)" stroke-width="2"></rect>
-    <polygon points="43.88,83.27 30.12,80.73 42.12,15.73 55.88,18.27" fill="#F4F6FA"></polygon>
-    <polygon points="69.88,80.69 56.12,83.31 44.12,20.31 57.88,17.69" fill="#F25C2B"></polygon>
+  <g transform="translate(2,2) scale(0.458)">
+    <rect x="4" y="4" width="88" height="88" rx="26" fill="#1B3356"></rect>
+    <rect x="4.5" y="4.5" width="87" height="87" rx="25.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.14"></rect>
+    <path d="M26 38 H63" fill="none" stroke="#F25C2B" stroke-width="8" stroke-linecap="round"></path>
+    <polyline points="55,29 66,38 55,47" fill="none" stroke="#F25C2B" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"></polyline>
+    <path d="M70 58 H33" fill="none" stroke="#F4F6FA" stroke-width="8" stroke-linecap="round"></path>
+    <polyline points="41,49 30,58 41,67" fill="none" stroke="#F4F6FA" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"></polyline>
   </g>
 
   <text x="54" y="30" font-family="Geist, system-ui, sans-serif" font-size="23" font-weight="800" letter-spacing="-0.5" fill="#F4F6FA">Drive<tspan fill="#F25C2B">Pass</tspan></text>
