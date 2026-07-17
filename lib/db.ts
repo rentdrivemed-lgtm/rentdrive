@@ -534,6 +534,9 @@ function initDb(db: Database.Database) {
     mazdacx30: '/uploads/cx30.jpg',
     renaultduster: '/uploads/duster.jpg',
     daciaduster: '/uploads/duster.jpg',
+    chevroletspark: '/uploads/spark.jpg',
+    toyotacorolla: '/uploads/corolla.jpg',
+    toyota4runner: '/uploads/4runner.jpg',
   };
   const normModelo = (marca: string, modelo: string) =>
     `${marca || ''}${modelo || ''}`.toLowerCase().replace(/[^a-z0-9]/g, '');
