@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600" role="img" aria-label="Foto pendiente">
+  <rect width="800" height="600" fill="#0F1B2E"/>
+  <rect width="800" height="600" fill="url(#g)"/>
+  <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#16263f"/><stop offset="1" stop-color="#0d1626"/></linearGradient></defs>
+  <g transform="translate(400,290)" fill="none" stroke="#5b6f8c" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M-150,20 L-120,-30 Q-110,-48 -88,-50 L70,-50 Q92,-48 108,-30 L150,15"/>
+    <path d="M-165,20 L155,20 Q170,20 170,38 L170,55 L-165,55 L-165,38 Q-165,20 -150,20 Z"/>
+    <circle cx="-95" cy="58" r="26" fill="#0F1B2E"/>
+    <circle cx="95" cy="58" r="26" fill="#0F1B2E"/>
+    <path d="M-95,-48 L-80,15 M40,-48 L60,15"/>
+  </g>
+  <text x="400" y="420" fill="#7f93b0" font-family="system-ui,Segoe UI,Roboto,sans-serif" font-size="30" font-weight="700" text-anchor="middle" letter-spacing="1">Foto en camino</text>
+  <text x="400" y="454" fill="#4d6082" font-family="system-ui,Segoe UI,Roboto,sans-serif" font-size="19" text-anchor="middle" letter-spacing="4">DRIVEPASS</text>
+</svg>

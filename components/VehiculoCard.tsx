@@ -36,7 +36,7 @@ export default function VehiculoCard({ v }: { v: Vehiculo }) {
   const [guardando, setGuardando] = useState(false);
   let fotos: string[] = [];
   try { fotos = JSON.parse(v.fotos); } catch { fotos = []; }
-  const foto = fotos[0] || 'https://images.unsplash.com/photo-1503376780353-7e6692767b70?w=400';
+  const foto = fotos[0] || '/uploads/placeholder-car.svg';
   let diasDisp: string[] = [];
   try { diasDisp = JSON.parse(v.dias_disponibles || '[]'); } catch { diasDisp = []; }
   const altaDisponibilidad = tieneAltaDisponibilidadEsteMes(diasDisp);

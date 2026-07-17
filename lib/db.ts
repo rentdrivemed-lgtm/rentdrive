@@ -512,4 +512,40 @@ function initDb(db: Database.Database) {
       .run('María Usuario', 'usuario@rentdrive.com', hashUser, 'usuario');
   }
 
+  // ── Migración de fotos (corre en CADA arranque, también en producción) ──
+  // El seed viejo sembró fotos de stock exóticas (Bugatti, Porsche, Camry deportivo) y muchos
+  // carros quedaron SIN foto (mostrando el respaldo). Aquí se reemplazan por fotos realistas del
+  // modelo (public/uploads/*.jpg, versionadas) o por un placeholder neutro. NUNCA se toca una foto
+  // real subida por el propietario (solo se corrigen las exóticas conocidas y los vehículos vacíos).
+  const FOTOS_EXOTICAS = [
+    'photo-1621007947382-bb3c3994e3fb', // "Corolla" → Camry deportivo
+    'photo-1544636331-e26879cd4d9b',    // "CX-5" → Bugatti Chiron
+    'photo-1503376780353-7e6692767b70', // "Spark"/respaldo → Porsche Panamera
+  ];
+  const PLACEHOLDER_FOTO = '/uploads/placeholder-car.svg';
+  // clave = (marca+modelo) sin espacios/guiones/mayúsculas → foto realista del modelo
+  const FOTOS_POR_MODELO: Record<string, string> = {
+    mazda3: '/uploads/mazda3.jpg',
+    chevrolettracker: '/uploads/tracker.jpg',
+    kiapicanto: '/uploads/picanto.jpg',
+    toyotafortuner: '/uploads/fortuner.jpg',
+    fordexplorer: '/uploads/explorer.jpg',
+    mazdacx5: '/uploads/cx5.jpg',
+    mazdacx30: '/uploads/cx30.jpg',
+    renaultduster: '/uploads/duster.jpg',
+    daciaduster: '/uploads/duster.jpg',
+  };
+  const normModelo = (marca: string, modelo: string) =>
+    `${marca || ''}${modelo || ''}`.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const setFoto = db.prepare('UPDATE vehiculos SET fotos = ? WHERE id = ?');
+  for (const v of db.prepare('SELECT id, marca, modelo, fotos FROM vehiculos').all() as
+       { id: number; marca: string; modelo: string; fotos: string }[]) {
+    let fotos: string[] = [];
+    try { fotos = JSON.parse(v.fotos || '[]'); } catch { fotos = []; }
+    const tieneExotica = fotos.some(f => FOTOS_EXOTICAS.some(e => (f || '').includes(e)));
+    const vacio = fotos.length === 0 || fotos.every(f => !f);
+    if (!tieneExotica && !vacio) continue; // respeta fotos reales subidas por el propietario
+    const nueva = FOTOS_POR_MODELO[normModelo(v.marca, v.modelo)] || PLACEHOLDER_FOTO;
+    setFoto.run(JSON.stringify([nueva]), v.id);
+  }
 }
