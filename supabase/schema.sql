@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS usuarios (
   numero_licencia       TEXT DEFAULT '',
   contacto_emergencia   TEXT DEFAULT '{}',
   cedula_url            TEXT DEFAULT '',
+  google_id             TEXT DEFAULT '',
   created_at            TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
 );
 

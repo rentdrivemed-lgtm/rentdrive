@@ -16,6 +16,7 @@
     "cloudinary": "^2.10.0",
     "date-fns": "^4.1.0",
     "geist": "^1.7.2",
+    "google-auth-library": "^11.0.2",
     "jsonwebtoken": "^9.0.3",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.7",

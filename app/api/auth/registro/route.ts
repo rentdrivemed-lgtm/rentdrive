@@ -4,6 +4,7 @@ import { signToken, UserPayload } from '@/lib/auth';
 import { enviarCorreo } from '@/lib/email';
 import { validarCelular, validarDireccion, validarDocumentoIdentidad, PAIS_TEL_DEFAULT } from '@/lib/validacion';
 import { asignarCodigoReferido, vincularReferido } from '@/lib/referidos';
+import { bloqueadoPorCsrf } from '@/lib/csrf';
 import bcrypt from 'bcryptjs';
 
 function calcularEdad(fechaNac: string): number {
@@ -18,6 +19,9 @@ function calcularEdad(fechaNac: string): number {
 }
 
 export async function POST(req: NextRequest) {
+  const csrfError = bloqueadoPorCsrf(req);
+  if (csrfError) return csrfError;
+
   const {
     nombre, correo, password, rol,
     tipo_documento, documento_identidad, fecha_nacimiento,
@@ -106,6 +110,9 @@ export async function POST(req: NextRequest) {
 
   const token = signToken(payload);
   const res = NextResponse.json({ user: payload }, { status: 201 });
-  res.cookies.set('token', token, { httpOnly: true, path: '/', maxAge: 60 * 60 * 24 * 7 });
+  res.cookies.set('token', token, {
+    httpOnly: true, path: '/', maxAge: 60 * 60 * 24 * 7,
+    secure: process.env.NODE_ENV === 'production', sameSite: 'lax',
+  });
   return res;
 }
