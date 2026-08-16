@@ -300,6 +300,19 @@ function initDb(db: Database.Database) {
       created_at TEXT DEFAULT (datetime('now', 'localtime'))
     );
 
+    -- Catálogo de proveedores — se guardan solos al registrar un gasto (evita
+    -- retipear) y también se pueden precargar a mano desde Contabilidad → Config.
+    CREATE TABLE IF NOT EXISTS proveedores (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      nombre TEXT NOT NULL COLLATE NOCASE UNIQUE,
+      nit TEXT DEFAULT '',
+      categoria_habitual TEXT DEFAULT '' CHECK(categoria_habitual IN ('', 'fijo','variable','servicio','producto','otro')),
+      notas TEXT DEFAULT '',
+      created_by INTEGER REFERENCES usuarios(id),
+      created_at TEXT DEFAULT (datetime('now', 'localtime')),
+      updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+    );
+
     CREATE TABLE IF NOT EXISTS remisiones (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       reserva_id INTEGER NOT NULL UNIQUE REFERENCES reservas(id),

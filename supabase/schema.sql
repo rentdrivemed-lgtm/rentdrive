@@ -57,6 +57,19 @@ CREATE TABLE IF NOT EXISTS gastos (
   created_at            TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
 );
 
+-- Catálogo de proveedores — se guardan solos al registrar un gasto (evita
+-- retipear) y también se pueden precargar a mano desde Contabilidad → Config.
+CREATE TABLE IF NOT EXISTS proveedores (
+  id                  SERIAL PRIMARY KEY,
+  nombre              TEXT NOT NULL UNIQUE,
+  nit                 TEXT DEFAULT '',
+  categoria_habitual  TEXT DEFAULT '' CHECK (categoria_habitual IN ('', 'fijo','variable','servicio','producto','otro')),
+  notas               TEXT DEFAULT '',
+  created_by          INTEGER REFERENCES usuarios(id),
+  created_at          TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
+  updated_at          TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+);
+
 -- ─────────────── remisiones (documento a nombre del dueño del vehículo) ───────────────
 CREATE TABLE IF NOT EXISTS remisiones (
   id                    SERIAL PRIMARY KEY,

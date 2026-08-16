@@ -26,6 +26,26 @@ export function datosEmpresa(db: DB) {
   };
 }
 
+// Guarda el proveedor en el catálogo si es nuevo (comparación insensible a
+// mayúsculas vía la collation NOCASE de la columna). Si ya existía sin NIT y
+// ahora llega uno, lo completa. Se llama automáticamente al crear/editar un
+// gasto — así el catálogo se arma solo, sin pasos extra.
+export function upsertProveedor(db: DB, nombre: string, nit?: string): void {
+  const n = (nombre || '').trim();
+  if (!n) return;
+  const nitLimpio = (nit || '').trim();
+  const existente = db.prepare('SELECT id, nit FROM proveedores WHERE nombre = ?').get(n) as { id: number; nit: string } | undefined;
+  if (existente) {
+    if (nitLimpio && !existente.nit) {
+      db.prepare("UPDATE proveedores SET nit = ?, updated_at = datetime('now','localtime') WHERE id = ?").run(nitLimpio, existente.id);
+    }
+    return;
+  }
+  try {
+    db.prepare('INSERT INTO proveedores (nombre, nit) VALUES (?, ?)').run(n, nitLimpio);
+  } catch { /* condición de carrera con la restricción UNIQUE — ya quedó guardado, no pasa nada */ }
+}
+
 function numero(prefijo: string, id: number): string {
   return `${prefijo}-${String(id).padStart(6, '0')}`;
 }

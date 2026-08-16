@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { guardArea } from '@/lib/guard';
 import { registrarAuditoria } from '@/lib/permisos';
+import { upsertProveedor } from '@/lib/contabilidad';
 
 export const dynamic = 'force-dynamic';
 
@@ -139,6 +140,7 @@ export async function POST(req: NextRequest) {
     body.extraido_ia ? 1 : 0, str(body.notas), user.id,
   );
   const id = Number(info.lastInsertRowid);
+  upsertProveedor(db, str(body.proveedor), str(body.nit_proveedor));
   registrarAuditoria(db, { ...user, nivel }, {
     area: 'contabilidad', accion: 'crear_gasto', entidad: 'gasto', entidad_id: id,
     detalle: `${str(body.proveedor) || 'Gasto'} · ${categoria} · total $${total.toLocaleString('es-CO')}`,
@@ -186,6 +188,7 @@ export async function PUT(req: NextRequest) {
     num(body.subtotal), num(body.iva), total, metodoPago, JSON.stringify(pagos), abonado,
     body.recurrente ? 1 : 0, str(body.comprobante_url), str(body.comprobante_pago_url), str(body.notas), id,
   );
+  upsertProveedor(db, str(body.proveedor), str(body.nit_proveedor));
   registrarAuditoria(db, { ...user, nivel }, {
     area: 'contabilidad', accion: 'editar_gasto', entidad: 'gasto', entidad_id: id,
     detalle: `${str(body.proveedor) || 'Gasto'} · total $${total.toLocaleString('es-CO')}`,

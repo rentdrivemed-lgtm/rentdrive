@@ -30,6 +30,10 @@ type Gasto = {
   recurrente: number; comprobante_url: string; comprobante_pago_url: string; extraido_ia: number; notas: string;
   estado: string; anulado_en: string; motivo_anulacion: string; created_at: string;
 };
+type Proveedor = {
+  id: number; nombre: string; nit: string; categoria_habitual: string; notas: string;
+  created_at: string; updated_at: string;
+};
 type PagoLineaForm = { metodo: string; valor: string };
 type GastoForm = {
   categoria: CategoriaGasto; proveedor: string; nit_proveedor: string; numero_factura: string;
@@ -181,6 +185,13 @@ export default function ContabilidadPanel() {
   const [gastosTotalFilas, setGastosTotalFilas] = useState(0);
   const [gastosPorPagina, setGastosPorPagina] = useState(15);
   const [exportandoExcel, setExportandoExcel] = useState(false);
+
+  // Proveedores (catálogo — se llenan solos al registrar gastos, o a mano en Config)
+  const [proveedores, setProveedores] = useState<Proveedor[]>([]);
+  const [provForm, setProvForm] = useState({ nombre: '', nit: '', categoria_habitual: '', notas: '' });
+  const [editandoProvId, setEditandoProvId] = useState<number | null>(null);
+  const [guardandoProv, setGuardandoProv] = useState(false);
+  const [provMsg, setProvMsg] = useState('');
   const [cargandoGastos, setCargandoGastos] = useState(false);
   const [errorGastos, setErrorGastos] = useState('');
   const [gForm, setGForm] = useState<GastoForm>(GFORM_INICIAL);
@@ -280,6 +291,58 @@ export default function ContabilidadPanel() {
     finally { setCargandoConfig(false); }
   };
 
+  const cargarProveedores = async () => {
+    try {
+      const res = await fetch('/api/contabilidad/proveedores', { cache: 'no-store' });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) setProveedores(d.proveedores || []);
+    } catch { /* silencioso — el catálogo es solo una ayuda, no bloquea nada */ }
+  };
+
+  // Al elegir/tipear un proveedor ya guardado en el gasto, completa el NIT si estaba vacío.
+  const onProveedorGastoChange = (nombre: string) => {
+    setGForm(f => {
+      if (f.nit_proveedor) return { ...f, proveedor: nombre };
+      const match = proveedores.find(p => p.nombre.toLowerCase() === nombre.trim().toLowerCase());
+      return { ...f, proveedor: nombre, nit_proveedor: match?.nit || f.nit_proveedor };
+    });
+  };
+
+  const provFormVacio = () => setProvForm({ nombre: '', nit: '', categoria_habitual: '', notas: '' });
+  const abrirEditarProveedor = (p: Proveedor) => {
+    setEditandoProvId(p.id);
+    setProvForm({ nombre: p.nombre, nit: p.nit || '', categoria_habitual: p.categoria_habitual || '', notas: p.notas || '' });
+    setProvMsg('');
+  };
+  const cancelarEdicionProveedor = () => { setEditandoProvId(null); provFormVacio(); setProvMsg(''); };
+
+  const guardarProveedor = async () => {
+    if (!provForm.nombre.trim()) { setProvMsg('Falta el nombre del proveedor.'); return; }
+    setGuardandoProv(true); setProvMsg('');
+    try {
+      const res = await fetch('/api/contabilidad/proveedores', {
+        method: editandoProvId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...(editandoProvId ? { id: editandoProvId } : {}), ...provForm }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { setProvMsg(d.error || 'No se pudo guardar el proveedor.'); return; }
+      setProvMsg(editandoProvId ? '✓ Proveedor actualizado.' : '✓ Proveedor guardado.');
+      cancelarEdicionProveedor();
+      cargarProveedores();
+      setTimeout(() => setProvMsg(''), 3000);
+    } catch {
+      setProvMsg('Sin conexión al guardar el proveedor.');
+    } finally {
+      setGuardandoProv(false);
+    }
+  };
+
+  const eliminarProveedor = async (p: Proveedor) => {
+    if (typeof window !== 'undefined' && !window.confirm(`¿Quitar "${p.nombre}" del catálogo de proveedores? Los gastos ya registrados con este nombre no se ven afectados.`)) return;
+    const res = await fetch(`/api/contabilidad/proveedores?id=${p.id}`, { method: 'DELETE' });
+    if (res.ok) cargarProveedores();
+  };
+
   const cargarGastos = async () => {
     setCargandoGastos(true); setErrorGastos('');
     try {
@@ -324,7 +387,7 @@ export default function ContabilidadPanel() {
     }
   };
 
-  useEffect(() => { cargarResumen(); cargarConfig(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { cargarResumen(); cargarConfig(); cargarProveedores(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (subTab === 'cotizaciones' && cotizaciones.length === 0) cargarCotizaciones();
     if (subTab === 'facturas' && facturas.length === 0) cargarFacturas();
@@ -821,8 +884,12 @@ export default function ContabilidadPanel() {
                 </div>
                 <div>
                   <label className="text-[11px] text-ink/50 block mb-1">Proveedor</label>
-                  <input value={gForm.proveedor} onChange={e => setGForm(f => ({ ...f, proveedor: e.target.value }))}
+                  <input value={gForm.proveedor} onChange={e => onProveedorGastoChange(e.target.value)} list="lista-proveedores"
                     placeholder="Ej. EPM, Terpel, Automax…" className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                  <datalist id="lista-proveedores">
+                    {proveedores.map(p => <option key={p.id} value={p.nombre} />)}
+                  </datalist>
+                  <p className="text-[10px] text-ink/40 mt-0.5">Se guarda solo en tu catálogo — la próxima vez te aparece sugerido.</p>
                 </div>
                 <div>
                   <label className="text-[11px] text-ink/50 block mb-1">NIT / documento del proveedor</label>
@@ -1571,6 +1638,65 @@ export default function ContabilidadPanel() {
                 {guardandoConfig ? 'Guardando…' : 'Guardar'}
               </button>
               {configMsg && <span className={`text-xs ${configMsg.startsWith('✓') ? 'text-success' : 'text-danger'}`}>{configMsg}</span>}
+            </div>
+          </div>
+
+          <div className="bg-surface-2 rounded-2xl border border-border p-5 space-y-4">
+            <div>
+              <p className="text-xs font-bold text-ink/60 uppercase tracking-wide">📇 Proveedores guardados</p>
+              <p className="text-[11px] text-ink/40 mt-0.5">Se guardan solos al registrar un gasto — aquí puedes precargarlos, corregir un nombre/NIT o quitar uno.</p>
+            </div>
+
+            {proveedores.length === 0 ? (
+              <p className="text-xs text-ink/40 italic">Aún no hay proveedores guardados.</p>
+            ) : (
+              <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
+                {proveedores.map(p => (
+                  <div key={p.id} className="flex items-center justify-between gap-2 bg-surface border border-border rounded-xl px-3 py-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-ink truncate">{p.nombre}</p>
+                      <p className="text-[11px] text-ink/40 truncate">
+                        {p.nit || 'sin NIT'}{p.categoria_habitual ? ` · ${CAT_GASTO[p.categoria_habitual as CategoriaGasto]?.label || p.categoria_habitual}` : ''}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <button onClick={() => abrirEditarProveedor(p)} className="text-xs border border-accent/30 text-accent px-2 py-1 rounded-lg hover:bg-accent-light transition">
+                        Editar
+                      </button>
+                      <button onClick={() => eliminarProveedor(p)} className="text-xs border border-danger/30 text-danger px-2 py-1 rounded-lg hover:bg-danger/10 transition">
+                        Quitar
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="border-t border-border pt-3 space-y-2">
+              <p className="text-xs font-semibold text-ink">{editandoProvId ? 'Editar proveedor' : '+ Nuevo proveedor'}</p>
+              <div className="grid grid-cols-2 gap-2">
+                <input value={provForm.nombre} onChange={e => setProvForm(f => ({ ...f, nombre: e.target.value }))}
+                  placeholder="Nombre" className="col-span-2 sm:col-span-1 bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                <input value={provForm.nit} onChange={e => setProvForm(f => ({ ...f, nit: e.target.value }))}
+                  placeholder="NIT (opcional)" className="col-span-2 sm:col-span-1 bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                <select value={provForm.categoria_habitual} onChange={e => setProvForm(f => ({ ...f, categoria_habitual: e.target.value }))}
+                  className="col-span-2 sm:col-span-1 bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink">
+                  <option value="">Categoría habitual (opcional)</option>
+                  {CATS_GASTO.map(c => <option key={c} value={c}>{CAT_GASTO[c].label}</option>)}
+                </select>
+                <input value={provForm.notas} onChange={e => setProvForm(f => ({ ...f, notas: e.target.value }))}
+                  placeholder="Notas (opcional)" className="col-span-2 sm:col-span-1 bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+              </div>
+              <div className="flex items-center gap-3">
+                <button onClick={guardarProveedor} disabled={guardandoProv}
+                  className="bg-accent hover:bg-accent-hover text-white px-4 py-2 rounded-xl font-semibold text-sm transition disabled:opacity-60">
+                  {guardandoProv ? 'Guardando…' : editandoProvId ? 'Guardar cambios' : 'Agregar proveedor'}
+                </button>
+                {editandoProvId && (
+                  <button onClick={cancelarEdicionProveedor} className="text-sm text-ink/50 hover:text-ink">Cancelar</button>
+                )}
+                {provMsg && <span className={`text-xs ${provMsg.startsWith('✓') ? 'text-success' : 'text-danger'}`}>{provMsg}</span>}
+              </div>
             </div>
           </div>
         </div>
