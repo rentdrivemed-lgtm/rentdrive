@@ -6,8 +6,14 @@ import { LogoMark } from '@/components/Logo';
 import { IconKey, IconCar } from '@/components/Icons';
 import { useSession } from '@/contexts/SessionContext';
 import { tomarDestino } from '@/lib/lugares';
+import GoogleAuthButton from '@/components/GoogleAuthButton';
 
 type Rol = 'usuario' | 'propietario';
+type SesionUser = { id: number; nombre: string; correo: string; rol: string };
+
+// Mismo chequeo que hace GoogleAuthButton (para no dejar un divisor "o" colgando
+// sin nada debajo mientras el dueño no haya configurado Google Cloud todavía).
+const GOOGLE_ENABLED = !!process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
 
 const CONTEXTO = {
   usuario: {
@@ -32,6 +38,21 @@ export default function LoginPage() {
 
   const ctx = CONTEXTO[rol];
 
+  // Compartido entre login con correo+contraseña y login con Google: actualiza la
+  // sesión global (navbar, polling) y redirige según el rol real de la cuenta.
+  const entrarComo = (user: SesionUser) => {
+    setUser(user);
+    refetch();
+
+    // Si venía de reservar (reserva en curso guardada), retoma el pago.
+    const destino = tomarDestino();
+    if (destino && user.rol === 'usuario') { router.push(destino); return; }
+
+    if (user.rol === 'admin') router.push('/dashboard/admin');
+    else if (user.rol === 'propietario') router.push('/dashboard/propietario');
+    else router.push('/dashboard/usuario');
+  };
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -44,20 +65,7 @@ export default function LoginPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setError(data.error || 'No pudimos iniciar sesión. Intenta de nuevo.'); return; }
-
-      // Actualiza la sesión global de inmediato (navbar, polling) sin esperar al
-      // re-fetch por cambio de ruta.
-      setUser(data.user);
-      refetch();
-
-      const userRol = data.user.rol;
-      // Si venía de reservar (reserva en curso guardada), retoma el pago.
-      const destino = tomarDestino();
-      if (destino && userRol === 'usuario') { router.push(destino); return; }
-
-      if (userRol === 'admin') router.push('/dashboard/admin');
-      else if (userRol === 'propietario') router.push('/dashboard/propietario');
-      else router.push('/dashboard/usuario');
+      entrarComo(data.user);
     } catch {
       setError('Sin conexión — revisa tu internet e intenta de nuevo.');
     } finally {
@@ -156,6 +164,22 @@ export default function LoginPage() {
               {loading ? 'Entrando…' : ctx.boton}
             </button>
           </form>
+
+          {GOOGLE_ENABLED && (
+            <>
+              <div className="flex items-center gap-3 my-4">
+                <div className="flex-1 h-px bg-border" />
+                <span className="text-[11px] text-ink/40 uppercase tracking-wide">o</span>
+                <div className="flex-1 h-px bg-border" />
+              </div>
+
+              <GoogleAuthButton
+                rol={rol}
+                onSuccess={entrarComo}
+                onError={msg => setError(msg)}
+              />
+            </>
+          )}
 
           <p className="text-center text-sm text-ink/50 mt-5">
             ¿No tienes cuenta?{' '}

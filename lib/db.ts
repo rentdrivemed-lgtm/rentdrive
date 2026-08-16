@@ -485,6 +485,11 @@ function initDb(db: Database.Database) {
   try { db.exec("ALTER TABLE usuarios ADD COLUMN codigo_referido TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE usuarios ADD COLUMN referido_por INTEGER DEFAULT NULL"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE usuarios ADD COLUMN creditos_referido REAL DEFAULT 0"); } catch { /* ya existe */ }
+  // Login con Google (Identity Services): id de cuenta de Google (`sub` del ID token
+  // verificado) para cuentas que entraron/vincularon por ese medio. `password` puede
+  // quedar '' para cuentas 100% Google (bcrypt.compareSync('x','') simplemente da
+  // false, no lanza excepción, así que el login con correo+contraseña sigue seguro).
+  try { db.exec("ALTER TABLE usuarios ADD COLUMN google_id TEXT DEFAULT ''"); } catch { /* ya existe */ }
 
   try { db.exec("ALTER TABLE reservas ADD COLUMN documento_id_url TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE reservas ADD COLUMN licencia_url TEXT DEFAULT ''"); } catch { /* ya existe */ }

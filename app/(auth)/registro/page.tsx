@@ -7,8 +7,15 @@ import { IconKey, IconCar, IconUser, IconArrowR, IconArrowL, IconShield } from '
 import { tomarDestino } from '@/lib/lugares';
 import { validarCelular, validarDireccion, validarDocumentoIdentidad, PAIS_TEL_DEFAULT } from '@/lib/validacion';
 import TelefonoInput from '@/components/TelefonoInput';
+import GoogleAuthButton from '@/components/GoogleAuthButton';
+import { useSession } from '@/contexts/SessionContext';
 
 type Rol = 'usuario' | 'propietario';
+type SesionUser = { id: number; nombre: string; correo: string; rol: string };
+
+// Mismo chequeo que hace GoogleAuthButton (para no dejar un divisor "o" colgando
+// sin nada debajo mientras el dueño no haya configurado Google Cloud todavía).
+const GOOGLE_ENABLED = !!process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
 
 const DOC_TIPOS = [
   { value: 'cedula',      label: 'Cédula de ciudadanía' },
@@ -36,6 +43,7 @@ function RegistroForm() {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { setUser, refetch } = useSession();
 
   const [cuenta, setCuenta] = useState({
     nombre: '', correo: '', password: '', confirmar: '',
@@ -94,6 +102,17 @@ function RegistroForm() {
     if (err) { setError(err); return; }
     setError('');
     setPaso(2);
+  };
+
+  // Google crea (o vincula) la cuenta directo en el servidor, sin pasar por los 2
+  // pasos del formulario (documento, celular, dirección quedan vacíos por ahora —
+  // se pueden completar luego desde el perfil).
+  const entrarConGoogle = (user: SesionUser) => {
+    setUser(user);
+    refetch();
+    const destino = tomarDestino();
+    if (destino && user.rol === 'usuario') { router.push(destino); return; }
+    router.push(user.rol === 'propietario' ? '/dashboard/propietario' : '/dashboard/usuario');
   };
 
   const submit = async (e: React.FormEvent) => {
@@ -203,6 +222,20 @@ function RegistroForm() {
           {/* ── PASO 1: Cuenta ── */}
           {paso === 1 && (
             <div className="space-y-4">
+              {GOOGLE_ENABLED && (
+                <>
+                  <GoogleAuthButton
+                    rol={rol}
+                    onSuccess={entrarConGoogle}
+                    onError={msg => setError(msg)}
+                  />
+                  <div className="flex items-center gap-3">
+                    <div className="flex-1 h-px bg-border" />
+                    <span className="text-[11px] text-ink/40 uppercase tracking-wide">o con tu correo</span>
+                    <div className="flex-1 h-px bg-border" />
+                  </div>
+                </>
+              )}
               <div>
                 <label className="block text-xs font-semibold text-ink/60 mb-1.5 uppercase tracking-wide">Nombre completo</label>
                 <input type="text" required autoComplete="name" placeholder="Como aparece en tu documento"
