@@ -409,6 +409,25 @@ function initDb(db: Database.Database) {
       created_by INTEGER REFERENCES usuarios(id),
       updated_at TEXT DEFAULT (datetime('now', 'localtime'))
     );
+
+    -- Tarjetas de presentación virtual (NFC) — una por creador/embajador (y a
+    -- futuro, por cliente). El HTML autocontenido vive en el volumen persistente
+    -- (lib/storage.ts) y se sirve tal cual en /tarjeta/<slug> para el tag físico.
+    CREATE TABLE IF NOT EXISTS nfc_cards (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug            TEXT UNIQUE NOT NULL,
+      usuario_id      INTEGER REFERENCES usuarios(id),
+      tipo            TEXT NOT NULL DEFAULT 'embajador' CHECK(tipo IN ('embajador','cliente')),
+      creador_nombre  TEXT NOT NULL,
+      creador_handle  TEXT DEFAULT '',
+      estado          TEXT NOT NULL DEFAULT 'borrador' CHECK(estado IN ('borrador','activa','inactiva')),
+      audio_manifest  TEXT DEFAULT '[]',    -- JSON [{ nombre, url, public_id }] (Cloudinary)
+      visitas         INTEGER DEFAULT 0,
+      notas           TEXT DEFAULT '',
+      created_by      INTEGER REFERENCES usuarios(id),
+      created_at      TEXT DEFAULT (datetime('now', 'localtime')),
+      updated_at      TEXT DEFAULT (datetime('now', 'localtime'))
+    );
   `);
 
   try { db.exec("ALTER TABLE liquidaciones ADD COLUMN comprobante_url TEXT DEFAULT ''"); } catch { /* ya existe */ }

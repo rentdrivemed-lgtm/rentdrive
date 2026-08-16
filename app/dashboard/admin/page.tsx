@@ -8,6 +8,7 @@ import SoportePanel from '@/components/SoportePanel';
 import LeadsPropietariosPanel from '@/components/LeadsPropietariosPanel';
 import AuditoriaPanel from '@/components/AuditoriaPanel';
 import CalculadoraPanel from '@/components/CalculadoraPanel';
+import NfcCardsPanel from '@/components/NfcCardsPanel';
 import { puede, normalizarNivel, NIVEL_LABEL, NIVELES, type AdminNivel } from '@/lib/permisos';
 import { parsePicoPlaca, picoPlacaVacio, placaRestringida, type PicoPlaca } from '@/lib/pico-placa';
 import { fechaHoraRecogida, esNoShowAplicable } from '@/lib/cancelacion';
@@ -183,7 +184,7 @@ function ResultadoIA({ res, auto }: { res: VerificacionResultado; auto?: string[
 }
 
 export default function DashboardAdmin() {
-  const [tab, setTab] = useState<'usuarios' | 'vehiculos' | 'reservas' | 'contabilidad' | 'mercado' | 'calculadora' | 'leads' | 'soporte' | 'config' | 'auditoria'>('usuarios');
+  const [tab, setTab] = useState<'usuarios' | 'vehiculos' | 'reservas' | 'contabilidad' | 'mercado' | 'calculadora' | 'leads' | 'soporte' | 'nfc' | 'config' | 'auditoria'>('usuarios');
   const [miNivel, setMiNivel] = useState<AdminNivel>('principal');
   const [miId, setMiId] = useState<number | null>(null);
   const [picoPlaca, setPicoPlaca] = useState<PicoPlaca>(picoPlacaVacio());
@@ -245,7 +246,7 @@ export default function DashboardAdmin() {
   // Si el nivel actual no puede ver la pestaña seleccionada, lo mandamos a la primera permitida.
   useEffect(() => {
     if (!puede(miNivel, tab)) {
-      const orden = ['reservas', 'leads', 'soporte', 'usuarios', 'vehiculos', 'contabilidad', 'mercado', 'calculadora', 'config', 'auditoria'] as const;
+      const orden = ['reservas', 'leads', 'soporte', 'usuarios', 'vehiculos', 'contabilidad', 'mercado', 'calculadora', 'nfc', 'config', 'auditoria'] as const;
       const primera = orden.find(k => puede(miNivel, k));
       if (primera) setTab(primera);
     }
@@ -646,6 +647,7 @@ export default function DashboardAdmin() {
           { key: 'calculadora', label: '🧮 Calculadora' },
           { key: 'leads', label: '🎯 Leads' },
           { key: 'soporte', label: '💬 Soporte' },
+          { key: 'nfc', label: '📇 Tarjetas NFC' },
           { key: 'config', label: 'Configuración' },
           { key: 'auditoria', label: '🧾 Bitácora' },
         ] as const).filter(t => puede(miNivel, t.key)).map(t => (
@@ -1294,6 +1296,8 @@ export default function DashboardAdmin() {
       {tab === 'leads' && <LeadsPropietariosPanel />}
 
       {tab === 'soporte' && <SoportePanel />}
+
+      {tab === 'nfc' && <NfcCardsPanel />}
 
       {tab === 'config' && <PicoPlacaConfig />}
 

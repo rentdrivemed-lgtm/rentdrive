@@ -51,3 +51,6 @@ _agentes/
 *.pptx
 *.xlsx
 *.docx
+
+# datos locales de tarjetas NFC en modo dev (en prod usan el volumen /app/data)
+/data/

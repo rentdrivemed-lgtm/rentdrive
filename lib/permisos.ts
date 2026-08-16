@@ -32,6 +32,7 @@ export const AREA_NIVELES: Record<string, AdminNivel[]> = {
   calculadora:  ['principal', 'socio'],
   leads:        ['principal', 'socio', 'secretaria'],
   soporte:      ['principal', 'socio', 'secretaria'],
+  nfc:          ['principal', 'socio'],
   config:       ['principal', 'socio'],
   auditoria:    ['principal', 'socio'],
   // Panel de Control interno (página aparte /control) — módulos de trabajo del equipo
