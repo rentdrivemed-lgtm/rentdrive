@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { IconCoin, IconCheck, IconExport, IconUpload, IconPhoto, IconX } from '@/components/Icons';
 import { descargarCotizacionPDF, descargarFacturaPDF, descargarRemisionPDF, descargarGastoPDF } from '@/lib/contabilidad-pdf';
+import { descargarGastosExcel } from '@/lib/contabilidad-excel';
 
 type SubTab = 'resumen' | 'gastos' | 'cotizaciones' | 'facturas' | 'liquidaciones' | 'config';
 
@@ -174,6 +175,12 @@ export default function ContabilidadPanel() {
   const [gDesde, setGDesde] = useState(primerDiaAnio());
   const [gHasta, setGHasta] = useState(hoy());
   const [gCategoria, setGCategoria] = useState('');
+  const [gQueryInput, setGQueryInput] = useState('');
+  const [gQuery, setGQuery] = useState('');
+  const [gPagina, setGPagina] = useState(1);
+  const [gastosTotalFilas, setGastosTotalFilas] = useState(0);
+  const [gastosPorPagina, setGastosPorPagina] = useState(15);
+  const [exportandoExcel, setExportandoExcel] = useState(false);
   const [cargandoGastos, setCargandoGastos] = useState(false);
   const [errorGastos, setErrorGastos] = useState('');
   const [gForm, setGForm] = useState<GastoForm>(GFORM_INICIAL);
@@ -276,8 +283,9 @@ export default function ContabilidadPanel() {
   const cargarGastos = async () => {
     setCargandoGastos(true); setErrorGastos('');
     try {
-      const q = new URLSearchParams({ desde: gDesde, hasta: gHasta, estado: gEstado });
+      const q = new URLSearchParams({ desde: gDesde, hasta: gHasta, estado: gEstado, pagina: String(gPagina) });
       if (gCategoria) q.set('categoria', gCategoria);
+      if (gQuery.trim()) q.set('q', gQuery.trim());
       const res = await fetch(`/api/contabilidad/gastos?${q.toString()}`, { cache: 'no-store' });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) { setErrorGastos('No pudimos cargar los gastos.'); return; }
@@ -287,10 +295,32 @@ export default function ContabilidadPanel() {
       setGastosAbonado(d.abonado_general || 0);
       setGastosPendiente(d.pendiente_general || 0);
       setAnuladosCount(d.anulados_count || 0);
+      setGastosTotalFilas(d.total_filas || 0);
+      setGastosPorPagina(d.por_pagina || 15);
     } catch {
       setErrorGastos('Sin conexión — intenta de nuevo.');
     } finally {
       setCargandoGastos(false);
+    }
+  };
+
+  // Excel con TODO lo que cumple los filtros actuales (ignora la paginación).
+  const exportarGastosExcel = async () => {
+    setExportandoExcel(true); setGastoMsg('');
+    try {
+      const q = new URLSearchParams({ desde: gDesde, hasta: gHasta, estado: gEstado, todo: '1' });
+      if (gCategoria) q.set('categoria', gCategoria);
+      if (gQuery.trim()) q.set('q', gQuery.trim());
+      const res = await fetch(`/api/contabilidad/gastos?${q.toString()}`, { cache: 'no-store' });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok || !d.gastos) { setGastoMsg('No se pudo generar el Excel.'); return; }
+      const catLabel = gCategoria ? CAT_GASTO[gCategoria as CategoriaGasto]?.label : 'Todas';
+      const filtrosLabel = `${gDesde} a ${gHasta} · Categoría: ${catLabel}${gQuery ? ` · Búsqueda: "${gQuery}"` : ''} · ${gEstado === 'anulado' ? 'Anulados' : 'Activos'}`;
+      await descargarGastosExcel(d.gastos, filtrosLabel);
+    } catch {
+      setGastoMsg('Sin conexión al generar el Excel.');
+    } finally {
+      setExportandoExcel(false);
     }
   };
 
@@ -301,10 +331,18 @@ export default function ContabilidadPanel() {
     if (subTab === 'liquidaciones') cargarLiquidaciones();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subTab, estadoLiq]);
+  // Debounce del buscador por nombre (proveedor/descripción/N° factura) — no dispara una
+  // consulta por cada tecla.
+  useEffect(() => {
+    const t = setTimeout(() => setGQuery(gQueryInput), 400);
+    return () => clearTimeout(t);
+  }, [gQueryInput]);
+  // Cualquier cambio de filtro (no de página) vuelve a la página 1.
+  useEffect(() => { setGPagina(1); }, [gDesde, gHasta, gCategoria, gEstado, gQuery]);
   useEffect(() => {
     if (subTab === 'gastos') cargarGastos();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subTab, gDesde, gHasta, gCategoria, gEstado]);
+  }, [subTab, gDesde, gHasta, gCategoria, gEstado, gQuery, gPagina]);
 
   const reenviarCotizacion = async (reservaId: number) => {
     setReenviandoId(reservaId);
@@ -837,28 +875,49 @@ export default function ContabilidadPanel() {
                     <p className="text-sm font-semibold text-ink">Medios de pago / abonos</p>
                     <p className="text-[11px] text-ink/50">Pago mixto: agrega cuánto pagaste con cada medio. Déjalo vacío si aún no has pagado nada.</p>
                   </div>
-                  <button type="button" onClick={() => setGForm(f => ({ ...f, pagos: [...f.pagos, { metodo: '', valor: '' }] }))}
-                    className="text-xs font-semibold border border-accent/30 text-accent px-3 py-1.5 rounded-xl hover:bg-accent-light transition flex-shrink-0">
-                    + Agregar medio
-                  </button>
+                  <div className="flex gap-2 flex-shrink-0">
+                    {gForm.pagos.length === 0 && (
+                      <button type="button"
+                        onClick={() => setGForm(f => ({ ...f, pagos: [...f.pagos, { metodo: '', valor: f.total || '' }] }))}
+                        disabled={!Number(gForm.total)}
+                        className="text-xs font-semibold border border-success/40 text-success px-3 py-1.5 rounded-xl hover:bg-success/10 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                        title="Agrega un abono con el valor total del gasto">
+                        ✓ Pago completo
+                      </button>
+                    )}
+                    <button type="button" onClick={() => setGForm(f => ({ ...f, pagos: [...f.pagos, { metodo: '', valor: '' }] }))}
+                      className="text-xs font-semibold border border-accent/30 text-accent px-3 py-1.5 rounded-xl hover:bg-accent-light transition">
+                      + Agregar medio
+                    </button>
+                  </div>
                 </div>
                 {gForm.pagos.length === 0 ? (
                   <p className="text-xs text-ink/40 italic">Sin abonos — el gasto queda 100% pendiente por pagar.</p>
                 ) : (
                   <div className="space-y-2">
-                    {gForm.pagos.map((p, i) => (
-                      <div key={i} className="flex items-center gap-2">
-                        <select value={p.metodo} onChange={e => setGForm(f => ({ ...f, pagos: f.pagos.map((pp, j) => j === i ? { ...pp, metodo: e.target.value } : pp) }))}
-                          className="bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink flex-shrink-0 min-w-[130px]">
-                          <option value="">Medio…</option>
-                          {METODOS_PAGO.map(m => <option key={m.v} value={m.v}>{m.label}</option>)}
-                        </select>
-                        <input value={p.valor} onChange={e => setGForm(f => ({ ...f, pagos: f.pagos.map((pp, j) => j === i ? { ...pp, valor: e.target.value.replace(/[^0-9.]/g, '') } : pp) }))}
-                          placeholder="Valor abonado" className="flex-1 min-w-0 bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
-                        <button type="button" onClick={() => setGForm(f => ({ ...f, pagos: f.pagos.filter((_, j) => j !== i) }))}
-                          className="text-danger/70 hover:text-danger flex-shrink-0"><IconX size={15} /></button>
-                      </div>
-                    ))}
+                    {gForm.pagos.map((p, i) => {
+                      const saldoRestante = Math.max(0, (Number(gForm.total) || 0) - sumaPagos(gForm.pagos.filter((_, j) => j !== i)));
+                      return (
+                        <div key={i} className="flex items-center gap-2">
+                          <select value={p.metodo} onChange={e => setGForm(f => ({ ...f, pagos: f.pagos.map((pp, j) => j === i ? { ...pp, metodo: e.target.value } : pp) }))}
+                            className="bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink flex-shrink-0 min-w-[130px]">
+                            <option value="">Medio…</option>
+                            {METODOS_PAGO.map(m => <option key={m.v} value={m.v}>{m.label}</option>)}
+                          </select>
+                          <input value={p.valor} onChange={e => setGForm(f => ({ ...f, pagos: f.pagos.map((pp, j) => j === i ? { ...pp, valor: e.target.value.replace(/[^0-9.]/g, '') } : pp) }))}
+                            placeholder="Valor abonado" className="flex-1 min-w-0 bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                          <button type="button"
+                            onClick={() => setGForm(f => ({ ...f, pagos: f.pagos.map((pp, j) => j === i ? { ...pp, valor: String(saldoRestante) } : pp) }))}
+                            disabled={!Number(gForm.total)}
+                            className="text-[11px] font-semibold text-accent border border-accent/30 rounded-lg px-2 py-2 hover:bg-accent-light transition flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+                            title="Rellenar con el saldo pendiente del total">
+                            Todo
+                          </button>
+                          <button type="button" onClick={() => setGForm(f => ({ ...f, pagos: f.pagos.filter((_, j) => j !== i) }))}
+                            className="text-danger/70 hover:text-danger flex-shrink-0"><IconX size={15} /></button>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
                 {(() => {
@@ -940,9 +999,19 @@ export default function ContabilidadPanel() {
                 {CATS_GASTO.map(c => <option key={c} value={c}>{CAT_GASTO[c].label}</option>)}
               </select>
             </div>
+            <div className="min-w-[180px]">
+              <label className="text-[11px] text-ink/50 block mb-1">Buscar por nombre</label>
+              <input value={gQueryInput} onChange={e => setGQueryInput(e.target.value)}
+                placeholder="Proveedor, descripción o N° factura…"
+                className="border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface w-full" />
+            </div>
+            <button onClick={exportarGastosExcel} disabled={exportandoExcel || gastosTotalFilas === 0}
+              className="flex items-center gap-2 text-sm font-medium border border-border text-ink/70 hover:bg-surface px-3.5 py-2 rounded-xl transition disabled:opacity-50">
+              <IconExport size={14} /> {exportandoExcel ? 'Generando…' : 'Descargar Excel'}
+            </button>
             <div className="ml-auto flex flex-wrap gap-2">
               <div className="bg-surface-2 border border-border rounded-2xl px-4 py-2.5 text-right">
-                <p className="text-[11px] text-ink/50 font-medium">Total gastos ({gastos.length})</p>
+                <p className="text-[11px] text-ink/50 font-medium">Total gastos ({gastosTotalFilas})</p>
                 <p className="text-xl font-black text-danger">{cop(gastosTotal)}</p>
               </div>
               <div className="bg-surface-2 border border-border rounded-2xl px-4 py-2.5 text-right">
@@ -1058,6 +1127,29 @@ export default function ContabilidadPanel() {
               ))}
             </div>
           )}
+
+          {/* Paginación (15 por página) */}
+          {!errorGastos && !cargandoGastos && gastosTotalFilas > gastosPorPagina && (() => {
+            const totalPaginas = Math.max(1, Math.ceil(gastosTotalFilas / gastosPorPagina));
+            const desdeN = (gPagina - 1) * gastosPorPagina + 1;
+            const hastaN = Math.min(gastosTotalFilas, gPagina * gastosPorPagina);
+            return (
+              <div className="flex items-center justify-between gap-3 flex-wrap pt-1">
+                <p className="text-xs text-ink/50">Mostrando {desdeN}–{hastaN} de {gastosTotalFilas}</p>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setGPagina(p => Math.max(1, p - 1))} disabled={gPagina <= 1}
+                    className="text-xs font-medium border border-border text-ink/70 px-3 py-1.5 rounded-xl hover:bg-surface transition disabled:opacity-40 disabled:cursor-not-allowed">
+                    ← Anterior
+                  </button>
+                  <span className="text-xs text-ink/50">Página {gPagina} de {totalPaginas}</span>
+                  <button onClick={() => setGPagina(p => Math.min(totalPaginas, p + 1))} disabled={gPagina >= totalPaginas}
+                    className="text-xs font-medium border border-border text-ink/70 px-3 py-1.5 rounded-xl hover:bg-surface transition disabled:opacity-40 disabled:cursor-not-allowed">
+                    Siguiente →
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Modal: ver detalle del gasto (solo lectura) */}
           {verGasto && (

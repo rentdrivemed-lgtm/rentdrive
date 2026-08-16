@@ -37,6 +37,8 @@ function sanitizarPagos(body: Record<string, unknown>) {
   return { pagos, abonado };
 }
 
+const POR_PAGINA = 15;
+
 export async function GET(req: NextRequest) {
   const g = await guardArea('contabilidad');
   if ('error' in g) return g.error;
@@ -47,6 +49,10 @@ export async function GET(req: NextRequest) {
   const hasta = searchParams.get('hasta') || '9999-12-31';
   const categoria = searchParams.get('categoria') || '';
   const estado = searchParams.get('estado') === 'anulado' ? 'anulado' : 'activo';
+  const q = (searchParams.get('q') || '').trim();
+  // "todo=1" — usado por la exportación a Excel: trae todo lo filtrado, sin paginar.
+  const todo = searchParams.get('todo') === '1';
+  const pagina = Math.max(1, Number(searchParams.get('pagina')) || 1);
 
   const filtros: string[] = ['fecha >= ?', 'fecha <= ?', 'estado = ?'];
   const params: unknown[] = [desde, hasta, estado];
@@ -54,11 +60,22 @@ export async function GET(req: NextRequest) {
     filtros.push('categoria = ?');
     params.push(categoria);
   }
+  if (q) {
+    // Busca por proveedor, descripción o N° de factura (lo más cercano a "nombre" en un gasto).
+    filtros.push('(proveedor LIKE ? OR descripcion LIKE ? OR numero_factura LIKE ?)');
+    const like = `%${q}%`;
+    params.push(like, like, like);
+  }
   const where = `WHERE ${filtros.join(' AND ')}`;
 
-  const rows = db.prepare(
-    `SELECT ${CAMPOS} FROM gastos ${where} ORDER BY fecha DESC, id DESC`
-  ).all(...params) as GastoRow[];
+  const totalFilas = (db.prepare(
+    `SELECT COUNT(*) AS n FROM gastos ${where}`
+  ).get(...params) as { n: number }).n;
+
+  const rows = todo
+    ? db.prepare(`SELECT ${CAMPOS} FROM gastos ${where} ORDER BY fecha DESC, id DESC`).all(...params) as GastoRow[]
+    : db.prepare(`SELECT ${CAMPOS} FROM gastos ${where} ORDER BY fecha DESC, id DESC LIMIT ? OFFSET ?`)
+        .all(...params, POR_PAGINA, (pagina - 1) * POR_PAGINA) as GastoRow[];
   const gastos = rows.map((row) => ({ ...row, pagos: parsePagos(row.pagos) }));
 
   const porCategoria = db.prepare(
@@ -81,6 +98,9 @@ export async function GET(req: NextRequest) {
     abonado_general: tot.abonado,
     pendiente_general: tot.total - tot.abonado,
     anulados_count: anuladosCount,
+    total_filas: totalFilas,
+    pagina: todo ? 1 : pagina,
+    por_pagina: POR_PAGINA,
   });
 }
 
