@@ -9,7 +9,7 @@ import { useSession } from '@/contexts/SessionContext';
 import {
   IconDashboard, IconChat, IconHistory, IconLogout,
   IconBell, IconBellOff, IconMenu, IconX, IconKey, IconUser, IconGlobe, IconInbox,
-  IconHome, IconCar, IconBuilding,
+  IconHome, IconCar, IconBuilding, IconCoin,
 } from '@/components/Icons';
 
 type Notif = {
@@ -175,6 +175,15 @@ export default function Navbar() {
                 </div>
               )}
             </div>
+
+            {/* Gana con tu carro — CTA propio para propietarios, con tratamiento de acento */}
+            <Link href="/calculadora-propietarios"
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold border transition
+                ${pathname === '/calculadora-propietarios'
+                  ? 'bg-accent/20 border-accent/50 text-white'
+                  : 'border-accent/40 bg-accent/10 text-accent hover:bg-accent/20 hover:text-accent-hover'}`}>
+              <IconCoin size={16} /> {t.nav.earn}
+            </Link>
 
             {publicLinks.map(l => (
               <Link key={l.href} href={l.href}
@@ -375,6 +384,13 @@ export default function Navbar() {
               <Link href="/"
                 className="flex items-center gap-2 text-white hover:bg-white/10 px-3 py-2.5 rounded-lg text-sm font-bold transition bg-white/10">
                 <IconHome size={16}/> {t.nav.browse}
+              </Link>
+
+              {/* Gana con tu carro — CTA propio para propietarios, destacado con acento */}
+              <Link href="/calculadora-propietarios"
+                className="flex items-center gap-3 border border-accent/40 bg-accent/10 hover:bg-accent/20 px-4 py-3.5 rounded-xl text-sm font-bold text-accent transition mt-1">
+                <span className="w-9 h-9 rounded-lg bg-accent/20 text-accent flex items-center justify-center flex-shrink-0"><IconCoin size={20} /></span>
+                {t.nav.earn}
               </Link>
 
               <p className="text-white/40 text-[11px] font-bold uppercase tracking-wide px-3 pt-3 pb-1">{t.nav.requirements}</p>
