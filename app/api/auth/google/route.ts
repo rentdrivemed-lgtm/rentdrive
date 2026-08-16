@@ -3,7 +3,7 @@ import { OAuth2Client, TokenPayload } from 'google-auth-library';
 import { getDb } from '@/lib/db';
 import { signToken, UserPayload } from '@/lib/auth';
 import { enviarCorreo } from '@/lib/email';
-import { asignarCodigoReferido } from '@/lib/referidos';
+import { asignarCodigoReferido, vincularReferido } from '@/lib/referidos';
 
 // Mismo Client ID en frontend (NEXT_PUBLIC_GOOGLE_CLIENT_ID, usado por Google Identity
 // Services para pedir el `credential`) y aquí en el servidor como `audience` al
@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'El login con Google no está configurado.' }, { status: 503 });
   }
 
-  const { credential, rol } = await req.json().catch(() => ({}));
+  const { credential, rol, codigo_referido: codigoReferido } = await req.json().catch(() => ({}));
   if (!credential || typeof credential !== 'string') {
     return NextResponse.json({ error: 'Falta el token de Google.' }, { status: 400 });
   }
@@ -49,9 +49,14 @@ export async function POST(req: NextRequest) {
   if (!user) {
     // ¿Ya existe una cuenta con este correo (creada con contraseña)? Google ya
     // verificó el correo, así que vinculamos automáticamente sin fricción extra
-    // (decisión de producto confirmada con el dueño).
+    // (decisión de producto confirmada con el dueño). Comprobamos el estado ANTES
+    // de escribir el UPDATE que vincula el google_id (no dejar rastro en una
+    // cuenta inactiva antes de rechazar el login).
     const porCorreo = db.prepare('SELECT * FROM usuarios WHERE correo = ?').get(correo) as Record<string, unknown> | undefined;
     if (porCorreo) {
+      if (porCorreo.estado_cuenta === 'inactiva') {
+        return NextResponse.json({ error: 'Cuenta inactiva' }, { status: 403 });
+      }
       db.prepare('UPDATE usuarios SET google_id = ? WHERE id = ?').run(googleId, porCorreo.id);
       user = { ...porCorreo, google_id: googleId };
     }
@@ -68,8 +73,9 @@ export async function POST(req: NextRequest) {
 
     try {
       asignarCodigoReferido(db, Number(user.id), nombre);
+      if (codigoReferido) vincularReferido(db, Number(user.id), String(codigoReferido));
     } catch (e) {
-      console.error('[auth/google] No se pudo asignar código de referido:', e instanceof Error ? e.message : e);
+      console.error('[auth/google] No se pudo procesar el código de referido:', e instanceof Error ? e.message : e);
     }
 
     try {

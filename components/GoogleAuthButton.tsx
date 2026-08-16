@@ -30,23 +30,32 @@ declare global {
 type Props = {
   /** Rol elegido en el formulario (solo aplica si Google crea una cuenta nueva). */
   rol?: 'usuario' | 'propietario';
+  /** Código de referido tomado de ?ref= (solo aplica si Google crea una cuenta nueva). */
+  codigoReferido?: string;
   onSuccess: (user: GoogleUser) => void;
   onError: (mensaje: string) => void;
 };
 
-export default function GoogleAuthButton({ rol, onSuccess, onError }: Props) {
+export default function GoogleAuthButton({ rol, codigoReferido, onSuccess, onError }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   // El callback de Google se registra una sola vez (al inicializar), así que leemos
-  // el rol vigente desde un ref en vez de re-inicializar el botón en cada cambio.
+  // el rol/código de referido vigentes desde un ref en vez de re-inicializar el
+  // botón cada vez que cambian.
   const rolRef = useRef(rol);
   useEffect(() => { rolRef.current = rol; }, [rol]);
+  const codigoReferidoRef = useRef(codigoReferido);
+  useEffect(() => { codigoReferidoRef.current = codigoReferido; }, [codigoReferido]);
 
   const handleCredential = useCallback(async (response: { credential: string }) => {
     try {
       const res = await fetch('/api/auth/google', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ credential: response.credential, rol: rolRef.current }),
+        body: JSON.stringify({
+          credential: response.credential,
+          rol: rolRef.current,
+          codigo_referido: codigoReferidoRef.current,
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { onError(data.error || 'No pudimos iniciar sesión con Google.'); return; }

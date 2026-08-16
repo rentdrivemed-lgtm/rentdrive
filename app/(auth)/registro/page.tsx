@@ -226,6 +226,7 @@ function RegistroForm() {
                 <>
                   <GoogleAuthButton
                     rol={rol}
+                    codigoReferido={codigoReferido}
                     onSuccess={entrarConGoogle}
                     onError={msg => setError(msg)}
                   />
