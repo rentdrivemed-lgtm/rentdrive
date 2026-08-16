@@ -6,10 +6,10 @@ import { useLang } from '@/contexts/LanguageContext';
 export default function Footer() {
   const { t } = useLang();
   return (
-    <footer className="hidden md:block bg-brand text-white/60 mt-auto">
-      <div className="max-w-7xl mx-auto px-6 py-10 grid grid-cols-1 sm:grid-cols-3 gap-8">
+    <footer className="bg-brand text-white/60 mt-auto">
+      <div className="max-w-7xl mx-auto px-6 py-10 grid grid-cols-1 sm:grid-cols-3 gap-8 text-center sm:text-left">
         {/* Brand */}
-        <div className="flex flex-col items-start gap-2.5">
+        <div className="flex flex-col items-center sm:items-start gap-2.5">
           <LogoWordmark height={42} />
           <p className="text-white/40 text-xs max-w-[30ch]">{t.footer.tagline}</p>
         </div>
@@ -27,7 +27,7 @@ export default function Footer() {
         {/* Legal + payments */}
         <div>
           <p className="text-white/80 font-semibold text-sm mb-3">Pagos aceptados</p>
-          <div className="flex gap-2 mb-4">
+          <div className="flex gap-2 mb-4 justify-center sm:justify-start">
             {/* Visa */}
             <div className="bg-surface-2 rounded-lg px-3 py-1.5 flex items-center justify-center" style={{minWidth: 54}}>
               <svg viewBox="0 0 54 20" width="54" height="20">

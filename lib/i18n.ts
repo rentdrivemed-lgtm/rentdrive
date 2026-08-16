@@ -1,7 +1,7 @@
 export const es = {
   nav: {
     home: 'Inicio', browse: 'Alquilar', rent: 'Para alquilar', owners: 'Para propietarios',
-    requirements: 'Requisitos',
+    requirements: 'Requisitos', earn: 'Gana con tu carro',
     alliance: 'DTravel', terms: 'Términos', dashboard: 'Panel', history: 'Historial',
     messages: 'Mensajes', profile: 'Mi perfil',
     login: 'Iniciar sesión', register: 'Registrarse', logout: 'Cerrar sesión',
@@ -18,7 +18,7 @@ export type Translations = typeof es;
 export const en: Translations = {
   nav: {
     home: 'Home', browse: 'Rent now', rent: 'Rent a car', owners: 'For owners',
-    requirements: 'Requirements',
+    requirements: 'Requirements', earn: 'Earn with your car',
     alliance: 'DTravel', terms: 'Terms', dashboard: 'Dashboard', history: 'History',
     messages: 'Messages', profile: 'My profile',
     login: 'Sign in', register: 'Sign up', logout: 'Sign out',

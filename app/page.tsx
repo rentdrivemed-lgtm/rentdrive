@@ -99,17 +99,16 @@ export default function Home() {
 
   return (
     <div>
-      {/* ── BARRA DE ANUNCIO (ribbon de marca, template landing) ── */}
-      <div className="text-center py-2.5 px-4 text-sm font-semibold tracking-tight"
-        style={{ background: '#F3E4DA', color: '#1B3356' }}>
+      {/* ── BARRA DE ANUNCIO (ribbon de marca) ── */}
+      <div className="text-center py-2.5 px-4 text-sm font-semibold tracking-tight bg-accent/10 border-b border-accent/20 text-ink">
         Tu ciudad. Tu ritmo. Tu DrivePass.
       </div>
 
       {/* ── HERO (banner a sangre completa, template DrivePass) ── */}
       <HeroSlider />
 
-      {/* ── FEATURES STRIP (bloque claro de confianza, template) ── */}
-      <section style={{ background: '#FFFFFF' }}>
+      {/* ── FEATURES STRIP (bloque de confianza, tema oscuro) ── */}
+      <section className="bg-surface border-b border-border">
         <div className="max-w-7xl mx-auto px-6 py-6 grid grid-cols-1 sm:grid-cols-3 gap-6">
           {[
             { icon: <IconKey size={22} className="text-accent"/>, ...c.features[0] },
@@ -117,11 +116,12 @@ export default function Home() {
             { icon: <IconRoute size={22} className="text-accent"/>, ...c.features[2] },
           ].map(f => (
             <div key={f.title} className="flex items-center gap-4">
-              <div className="flex items-center justify-center flex-shrink-0"
-                style={{ width: 46, height: 46, borderRadius: 14, background: 'rgba(242,92,43,0.14)' }}>{f.icon}</div>
+              <div className="w-[46px] h-[46px] rounded-2xl bg-accent-light flex items-center justify-center flex-shrink-0">
+                {f.icon}
+              </div>
               <div>
-                <p className="font-bold text-sm" style={{ color: '#0F1E33' }}>{f.title}</p>
-                <p className="text-xs" style={{ color: '#64748B' }}>{f.desc}</p>
+                <p className="font-bold text-sm text-ink">{f.title}</p>
+                <p className="text-xs text-ink-soft">{f.desc}</p>
               </div>
             </div>
           ))}
@@ -259,7 +259,7 @@ export default function Home() {
             <h3 className="text-xl sm:text-2xl font-bold text-white mb-1">{c.ctaTitle}</h3>
             <p className="text-white/60 text-sm sm:text-base">{c.ctaSub}</p>
           </div>
-          <a href="/registro?rol=propietario"
+          <a href="/calculadora-propietarios"
             className="w-full sm:w-auto flex-shrink-0 flex items-center justify-center gap-2 bg-accent hover:bg-accent-hover text-white font-bold px-8 py-3.5 rounded-xl transition shadow-lg shadow-accent/30">
             <IconKey size={18}/> {c.ctaBtn}
           </a>

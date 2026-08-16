@@ -83,7 +83,7 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-geist-sans), 'Inter', system-ui, sans-serif;
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -104,9 +104,12 @@ body {
 /* ── Transición global suave ── */
 * { transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); }
 
-/* ── Espacio para barra de navegación móvil ── */
+/* ── Espacio para barra de navegación móvil ──
+   footer es el último hermano antes de BottomNav (fixed, bottom:0) en
+   ConditionalShell, así que solo él necesita el colchón para que su
+   contenido no quede tapado por la barra. */
 @media (max-width: 767px) {
-  main { padding-bottom: calc(var(--bottomnav-h) + env(safe-area-inset-bottom, 0px)); }
+  footer { padding-bottom: calc(var(--bottomnav-h) + env(safe-area-inset-bottom, 0px)); }
 }
 
 /* ── Scrollbar invisible (tabs horizontales en móvil) ── */

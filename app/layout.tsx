@@ -93,7 +93,6 @@ const jsonLd = {
   url: BASE_URL,
   logo: `${BASE_URL}/brand/logo-mark.svg`,
   image: `${BASE_URL}/brand/og-image.jpg`,
-  telephone: "+57-300-0000000",
   email: "hola@drivepass.com.co",
   address: {
     "@type": "PostalAddress",
