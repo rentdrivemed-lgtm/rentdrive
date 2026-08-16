@@ -104,9 +104,12 @@ body {
 /* ── Transición global suave ── */
 * { transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); }
 
-/* ── Espacio para barra de navegación móvil ── */
+/* ── Espacio para barra de navegación móvil ──
+   main y footer son hermanos de BottomNav (fixed, bottom:0) en
+   ConditionalShell; ambos necesitan el mismo colchón para que su
+   contenido no quede tapado por la barra. */
 @media (max-width: 767px) {
-  main { padding-bottom: calc(var(--bottomnav-h) + env(safe-area-inset-bottom, 0px)); }
+  main, footer { padding-bottom: calc(var(--bottomnav-h) + env(safe-area-inset-bottom, 0px)); }
 }
 
 /* ── Scrollbar invisible (tabs horizontales en móvil) ── */
