@@ -16,6 +16,18 @@ RUN npm ci
 # Copiar el resto del código
 COPY . .
 
+# Variables NEXT_PUBLIC_* deben estar disponibles en build-time: Next.js las
+# inlinea en el bundle de JS al compilar, no las lee en runtime. Railway las
+# pasa como build-args de Docker, pero Docker las ignora si no se declaran.
+ARG NEXT_PUBLIC_APP_URL
+ARG NEXT_PUBLIC_CALCULADORA_VERIFICACION
+ARG NEXT_PUBLIC_GA_ID
+ARG NEXT_PUBLIC_GOOGLE_CLIENT_ID
+ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
+ENV NEXT_PUBLIC_CALCULADORA_VERIFICACION=$NEXT_PUBLIC_CALCULADORA_VERIFICACION
+ENV NEXT_PUBLIC_GA_ID=$NEXT_PUBLIC_GA_ID
+ENV NEXT_PUBLIC_GOOGLE_CLIENT_ID=$NEXT_PUBLIC_GOOGLE_CLIENT_ID
+
 # Build de Next.js
 RUN npm run build
 
