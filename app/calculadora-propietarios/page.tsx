@@ -578,12 +578,17 @@ export default function CalculadoraPropietariosPage() {
         {/* RESULTADOS */}
         <div className="space-y-5">
           <div className={`rounded-2xl p-6 border-2 ${r.esRentable ? 'border-success/40 bg-success/5' : 'border-danger/40 bg-danger/5'}`}>
-            <p className="text-xs font-bold uppercase tracking-wide text-ink/50 mb-1">Utilidad neta estimada</p>
-            <p className={`text-4xl font-black ${r.esRentable ? 'text-success' : 'text-danger'}`}>{cop(r.utilidadNetaMensual)}<span className="text-base font-semibold text-ink/50"> /mes</span></p>
-            <p className="text-sm text-ink/60 mt-1">{cop(r.utilidadNetaAnual)} al año · retorno de {pct(r.roiAnual)} anual sobre el valor de tu carro</p>
-            {!r.esRentable && (
-              <p className="text-xs text-danger mt-2 font-medium">A este precio y ocupación no cubres tus costos — sube el precio por día o la ocupación esperada.</p>
-            )}
+            <p className="text-xs font-bold uppercase tracking-wide text-ink/50 mb-1">Ingreso mensual (después de comisión)</p>
+            <p className="text-3xl font-black text-success">{cop(r.ingresoNetoAnual / 12)}<span className="text-base font-semibold text-ink/50"> /mes</span></p>
+
+            <div className="border-t border-border/60 mt-4 pt-4">
+              <p className="text-xs font-bold uppercase tracking-wide text-ink/50 mb-1">Ganancia neta (después de gastos)</p>
+              <p className={`text-2xl font-black ${r.esRentable ? 'text-success' : 'text-danger'}`}>{cop(r.utilidadNetaMensual)}<span className="text-sm font-semibold text-ink/50"> /mes</span></p>
+              <p className="text-sm text-ink/60 mt-1">{cop(r.utilidadNetaAnual)} al año · retorno de {pct(r.roiAnual)} anual sobre el valor de tu carro</p>
+              {!r.esRentable && (
+                <p className="text-xs text-danger mt-2 font-medium">A este precio y ocupación no cubres tus costos — sube el precio por día o la ocupación esperada.</p>
+              )}
+            </div>
           </div>
 
           <div className="bg-surface-2 rounded-2xl border border-border p-5">
