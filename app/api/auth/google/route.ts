@@ -4,6 +4,7 @@ import { getDb } from '@/lib/db';
 import { signToken, UserPayload } from '@/lib/auth';
 import { enviarCorreo } from '@/lib/email';
 import { asignarCodigoReferido, vincularReferido } from '@/lib/referidos';
+import { bloqueadoPorCsrf } from '@/lib/csrf';
 
 // Mismo Client ID en frontend (NEXT_PUBLIC_GOOGLE_CLIENT_ID, usado por Google Identity
 // Services para pedir el `credential`) y aquí en el servidor como `audience` al
@@ -12,6 +13,9 @@ import { asignarCodigoReferido, vincularReferido } from '@/lib/referidos';
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
 
 export async function POST(req: NextRequest) {
+  const csrfError = bloqueadoPorCsrf(req);
+  if (csrfError) return csrfError;
+
   if (!GOOGLE_CLIENT_ID) {
     return NextResponse.json({ error: 'El login con Google no está configurado.' }, { status: 503 });
   }
@@ -54,6 +58,11 @@ export async function POST(req: NextRequest) {
     // cuenta inactiva antes de rechazar el login).
     const porCorreo = db.prepare('SELECT * FROM usuarios WHERE correo = ?').get(correo) as Record<string, unknown> | undefined;
     if (porCorreo) {
+      // Las cuentas admin NUNCA se vinculan/autentican automáticamente por Google —
+      // deben seguir entrando con contraseña (decisión del dueño).
+      if (porCorreo.rol === 'admin') {
+        return NextResponse.json({ error: 'Esta cuenta debe iniciar sesión con contraseña.' }, { status: 403 });
+      }
       if (porCorreo.estado_cuenta === 'inactiva') {
         return NextResponse.json({ error: 'Cuenta inactiva' }, { status: 403 });
       }
@@ -103,6 +112,9 @@ export async function POST(req: NextRequest) {
 
   const token = signToken(tokenPayload);
   const res = NextResponse.json({ user: tokenPayload }, { status: esNuevo ? 201 : 200 });
-  res.cookies.set('token', token, { httpOnly: true, path: '/', maxAge: 60 * 60 * 24 * 7 });
+  res.cookies.set('token', token, {
+    httpOnly: true, path: '/', maxAge: 60 * 60 * 24 * 7,
+    secure: process.env.NODE_ENV === 'production', sameSite: 'lax',
+  });
   return res;
 }

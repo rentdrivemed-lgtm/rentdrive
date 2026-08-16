@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { signToken, UserPayload } from '@/lib/auth';
+import { bloqueadoPorCsrf } from '@/lib/csrf';
 import bcrypt from 'bcryptjs';
 
 export async function POST(req: NextRequest) {
+  const csrfError = bloqueadoPorCsrf(req);
+  if (csrfError) return csrfError;
+
   const { correo, password } = await req.json();
 
   if (!correo || !password) {
@@ -31,6 +35,9 @@ export async function POST(req: NextRequest) {
   const token = signToken(payload);
 
   const res = NextResponse.json({ user: payload });
-  res.cookies.set('token', token, { httpOnly: true, path: '/', maxAge: 60 * 60 * 24 * 7 });
+  res.cookies.set('token', token, {
+    httpOnly: true, path: '/', maxAge: 60 * 60 * 24 * 7,
+    secure: process.env.NODE_ENV === 'production', sameSite: 'lax',
+  });
   return res;
 }
