@@ -169,3 +169,22 @@ CREATE TABLE IF NOT EXISTS tablero_elementos (
   created_by INTEGER REFERENCES usuarios(id),
   updated_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
 );
+
+-- Tarjetas de presentación virtual (NFC) — una por creador/embajador (y a
+-- futuro, por cliente). El HTML autocontenido vive en el volumen persistente
+-- y se sirve tal cual en /tarjeta/<slug> para el tag físico.
+CREATE TABLE IF NOT EXISTS nfc_cards (
+  id              SERIAL PRIMARY KEY,
+  slug            TEXT UNIQUE NOT NULL,
+  usuario_id      INTEGER REFERENCES usuarios(id),
+  tipo            TEXT NOT NULL DEFAULT 'embajador' CHECK (tipo IN ('embajador','cliente')),
+  creador_nombre  TEXT NOT NULL,
+  creador_handle  TEXT DEFAULT '',
+  estado          TEXT NOT NULL DEFAULT 'borrador' CHECK (estado IN ('borrador','activa','inactiva')),
+  audio_manifest  TEXT DEFAULT '[]',
+  visitas         INTEGER DEFAULT 0,
+  notas           TEXT DEFAULT '',
+  created_by      INTEGER REFERENCES usuarios(id),
+  created_at      TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
+  updated_at      TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+);
