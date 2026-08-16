@@ -12,6 +12,19 @@ import { bloqueadoPorCsrf } from '@/lib/csrf';
 // (JWT) firmado por Google, no hacemos el intercambio de código de autorización.
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
 
+// Invariante real (no solo en el camino de "primer vínculo"): una cuenta admin
+// NUNCA entra por Google, y una cuenta inactiva nunca entra por ningún medio. Se
+// aplica en los dos puntos donde `user` puede resolverse (por google_id directo, o
+// por correo antes de vincular) y otra vez al final como defensa en profundidad.
+// Mensaje genérico a propósito: uno distinto para "es admin" filtraría esa
+// información a quien solo controle el correo.
+function accesoGoogleBloqueado(u: Record<string, unknown>): NextResponse | null {
+  if (u.rol === 'admin' || u.estado_cuenta === 'inactiva') {
+    return NextResponse.json({ error: 'No pudimos iniciar sesión con Google.' }, { status: 403 });
+  }
+  return null;
+}
+
 export async function POST(req: NextRequest) {
   const csrfError = bloqueadoPorCsrf(req);
   if (csrfError) return csrfError;
@@ -50,22 +63,25 @@ export async function POST(req: NextRequest) {
   let user = db.prepare('SELECT * FROM usuarios WHERE google_id = ?').get(googleId) as Record<string, unknown> | undefined;
   let esNuevo = false;
 
+  // Si el google_id ya está vinculado a una fila, el chequeo aplica igual que a
+  // cualquier otro camino (por si alguna vez una cuenta admin terminó con
+  // google_id seteado, a mano o por una versión anterior del flujo).
+  if (user) {
+    const bloqueo = accesoGoogleBloqueado(user);
+    if (bloqueo) return bloqueo;
+  }
+
   if (!user) {
     // ¿Ya existe una cuenta con este correo (creada con contraseña)? Google ya
     // verificó el correo, así que vinculamos automáticamente sin fricción extra
-    // (decisión de producto confirmada con el dueño). Comprobamos el estado ANTES
-    // de escribir el UPDATE que vincula el google_id (no dejar rastro en una
-    // cuenta inactiva antes de rechazar el login).
+    // (decisión de producto confirmada con el dueño), salvo que esté bloqueada
+    // (admin/inactiva) — chequeado ANTES de escribir el UPDATE que vincula el
+    // google_id, para no dejar rastro en una cuenta que de todos modos vamos a
+    // rechazar.
     const porCorreo = db.prepare('SELECT * FROM usuarios WHERE correo = ?').get(correo) as Record<string, unknown> | undefined;
     if (porCorreo) {
-      // Las cuentas admin NUNCA se vinculan/autentican automáticamente por Google —
-      // deben seguir entrando con contraseña (decisión del dueño).
-      if (porCorreo.rol === 'admin') {
-        return NextResponse.json({ error: 'Esta cuenta debe iniciar sesión con contraseña.' }, { status: 403 });
-      }
-      if (porCorreo.estado_cuenta === 'inactiva') {
-        return NextResponse.json({ error: 'Cuenta inactiva' }, { status: 403 });
-      }
+      const bloqueo = accesoGoogleBloqueado(porCorreo);
+      if (bloqueo) return bloqueo;
       db.prepare('UPDATE usuarios SET google_id = ? WHERE id = ?').run(googleId, porCorreo.id);
       user = { ...porCorreo, google_id: googleId };
     }
@@ -99,9 +115,11 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  if (user.estado_cuenta === 'inactiva') {
-    return NextResponse.json({ error: 'Cuenta inactiva' }, { status: 403 });
-  }
+  // Defensa en profundidad: cubre el camino de cuenta recién creada (por
+  // construcción nunca es admin/inactiva) y actúa de red de seguridad si algo
+  // arriba cambia en el futuro.
+  const bloqueoFinal = accesoGoogleBloqueado(user);
+  if (bloqueoFinal) return bloqueoFinal;
 
   const tokenPayload: UserPayload = {
     id: Number(user.id),

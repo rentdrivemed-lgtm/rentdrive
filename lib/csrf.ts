@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { LAN_DEV_ORIGINS } from '@/next.config';
 
 // Defensa básica contra CSRF en los endpoints de auth que mutan sesión
 // (login/registro/google/logout). Dos capas, independientes entre sí:
@@ -10,7 +11,17 @@ import { NextRequest, NextResponse } from 'next/server';
 //    same-origin), debe coincidir con nuestro propio dominio. Si no viene, se deja
 //    pasar (muchos navegadores/proxies no lo envían en requests same-origin).
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://www.drivepasscol.com';
-const ORIGENES_PERMITIDOS = new Set([APP_URL, 'http://localhost:3100']);
+const EN_PRODUCCION = process.env.NODE_ENV === 'production';
+
+// Fuera de producción, además del propio dominio, permitimos las mismas IPs LAN de
+// next.config.ts (allowedDevOrigins): el equipo prueba por celular en la misma red
+// y Safari manda Origin también en requests same-origin al entrar por IP (por eso
+// existe esa allowlist). localhost:3100 solo aplica en dev — en producción no hay
+// nada legítimo sirviendo ahí.
+const ORIGENES_PERMITIDOS = new Set([
+  APP_URL,
+  ...(EN_PRODUCCION ? [] : LAN_DEV_ORIGINS.map(host => `http://${host}:3100`)),
+]);
 
 export function origenNoPermitido(req: NextRequest): NextResponse | null {
   const origin = req.headers.get('origin');
