@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect, useRef, useCallback } from 'react';
+import Image from 'next/image';
 import { IconArrowL, IconArrowR, IconPhoto } from '@/components/Icons';
 import { useLang } from '@/contexts/LanguageContext';
 
@@ -41,8 +42,9 @@ export default function GaleriaVehiculo({ fotos }: { fotos: string[] }) {
       {/* Imagen principal con crossfade */}
       <div className="relative aspect-[4/3] rounded-2xl overflow-hidden border border-border bg-surface-2 group">
         {fotos.map((src, i) => (
-          <img key={src + i} src={src} alt={`${c.foto} ${i + 1}`}
-            className="absolute inset-0 w-full h-full object-cover transition-opacity duration-[600ms] ease-out"
+          <Image key={src + i} src={src} alt={`${c.foto} ${i + 1}`} fill priority={i === 0}
+            sizes="(max-width: 768px) 100vw, 448px"
+            className="object-cover transition-opacity duration-[600ms] ease-out"
             style={{ opacity: i === cur ? 1 : 0 }} />
         ))}
 
@@ -81,7 +83,7 @@ export default function GaleriaVehiculo({ fotos }: { fotos: string[] }) {
           {fotos.map((src, i) => (
             <button key={src + i} onClick={() => go(i)}
               className={`relative flex-none w-16 h-12 rounded-lg overflow-hidden border-2 transition ${i === cur ? 'border-accent' : 'border-border opacity-60 hover:opacity-100'}`}>
-              <img src={src} alt={`${c.miniatura} ${i + 1}`} className="w-full h-full object-cover" />
+              <Image src={src} alt={`${c.miniatura} ${i + 1}`} fill sizes="64px" className="object-cover" />
             </button>
           ))}
         </div>

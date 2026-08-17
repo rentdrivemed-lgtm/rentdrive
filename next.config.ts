@@ -16,6 +16,14 @@ const nextConfig: NextConfig = {
       { protocol: 'https', hostname: 'images.unsplash.com' },
       { protocol: 'https', hostname: 'res.cloudinary.com' },
     ],
+    // Next 16 bloquea por defecto las imágenes locales con query string
+    // (p. ej. "/uploads/mazda3.jpg?v=2", usado por lib/db.ts como cache-buster
+    // de las fotos semilla). Sin este patrón, next/image lanza
+    // "is using a query string which is not configured in images.localPatterns"
+    // en tiempo de ejecución (no falla el build).
+    localPatterns: [
+      { pathname: '/uploads/**' },
+    ],
     qualities: [75, 90],
   },
 };
