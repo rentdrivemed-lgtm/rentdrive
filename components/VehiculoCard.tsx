@@ -1,5 +1,6 @@
 'use client';
 import { useState } from 'react';
+import Image from 'next/image';
 import Link from 'next/link';
 import { IconPin, IconArrowR, IconStar } from '@/components/Icons';
 import { useSession } from '@/contexts/SessionContext';
@@ -37,6 +38,10 @@ export default function VehiculoCard({ v }: { v: Vehiculo }) {
   let fotos: string[] = [];
   try { fotos = JSON.parse(v.fotos); } catch { fotos = []; }
   const foto = fotos[0] || '/uploads/placeholder-car.svg';
+  // El placeholder es un SVG local: next/image no lo optimiza por defecto
+  // (dangerouslyAllowSVG está apagado a propósito para no arriesgarse con
+  // SVGs subidos por usuarios), así que se sirve tal cual.
+  const fotoEsPlaceholder = foto === '/uploads/placeholder-car.svg';
   let diasDisp: string[] = [];
   try { diasDisp = JSON.parse(v.dias_disponibles || '[]'); } catch { diasDisp = []; }
   const altaDisponibilidad = tieneAltaDisponibilidadEsteMes(diasDisp);
@@ -58,9 +63,11 @@ export default function VehiculoCard({ v }: { v: Vehiculo }) {
 
   return (
     <div className="bg-surface-2 rounded-2xl shadow-sm border border-border overflow-hidden hover:shadow-lg hover:-translate-y-0.5 transition-all group">
-      <div className="relative overflow-hidden">
-        <img src={foto} alt={`${v.marca} ${v.modelo}`}
-          className="w-full h-48 object-cover group-hover:scale-105 transition-transform duration-500" />
+      <div className="relative overflow-hidden h-48">
+        <Image src={foto} alt={`Alquiler de ${v.marca} ${v.modelo} ${v.anio} en ${v.ubicacion}`} fill
+          sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+          unoptimized={fotoEsPlaceholder}
+          className="object-cover group-hover:scale-105 transition-transform duration-500" />
         <span className="absolute top-3 left-3 bg-brand/80 backdrop-blur-sm text-white text-[11px] font-semibold px-2.5 py-1 rounded-full">
           {TIPO_VEHICULO_LABELS[segmentoValido(v.tipo)]}
         </span>
