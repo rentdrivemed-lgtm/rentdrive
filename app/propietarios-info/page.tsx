@@ -2,7 +2,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { useLang } from '@/contexts/LanguageContext';
-import { IconCar, IconShield, IconRoute, IconKey, IconCalendar, IconCheck, IconArrowR, IconCoin, IconPhoto, IconUsers } from '@/components/Icons';
+import { IconCar, IconShield, IconRoute, IconKey, IconCalendar, IconCheck, IconArrowR, IconCoin, IconPhoto, IconUsers, IconFlorMedellin } from '@/components/Icons';
 
 const T = {
   es: {
@@ -157,7 +157,7 @@ export default function PropietariosInfoPage() {
           />
           <div className="relative">
             <div className="w-16 h-16 rounded-2xl bg-accent-light border border-accent/30 flex items-center justify-center mx-auto mb-4">
-              <IconCoin size={30} className="text-accent" />
+              <IconFlorMedellin size={30} className="text-accent" />
             </div>
             <h2 className="font-black text-ink text-2xl sm:text-3xl leading-tight mb-2">{c.earningsTitle}</h2>
             <p className="text-ink-soft text-sm sm:text-base max-w-xl mx-auto mb-6">{c.earningsDesc}</p>

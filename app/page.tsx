@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import HeroSlider from '@/components/HeroSlider';
 import VehiculoCard from '@/components/VehiculoCard';
 import { useLang } from '@/contexts/LanguageContext';
-import { IconFilter, IconKey, IconShield, IconRoute, IconCar, IconCalendar, IconX } from '@/components/Icons';
+import { IconFilter, IconKey, IconShield, IconMetrocable, IconCar, IconCalendar, IconX } from '@/components/Icons';
 import { TIPO_VEHICULO_LABELS, type TipoVehiculo } from '@/lib/rentabilidad';
 
 const CATEGORIAS = Object.entries(TIPO_VEHICULO_LABELS) as [TipoVehiculo, string][];
@@ -113,7 +113,7 @@ export default function Home() {
           {[
             { icon: <IconKey size={22} className="text-accent"/>, ...c.features[0] },
             { icon: <IconShield size={22} className="text-accent"/>, ...c.features[1] },
-            { icon: <IconRoute size={22} className="text-accent"/>, ...c.features[2] },
+            { icon: <IconMetrocable size={22} className="text-accent"/>, ...c.features[2] },
           ].map(f => (
             <div key={f.title} className="flex items-center gap-4">
               <div className="w-[46px] h-[46px] rounded-2xl bg-accent-light flex items-center justify-center flex-shrink-0">
