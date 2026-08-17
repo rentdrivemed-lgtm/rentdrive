@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   IconCoin, IconCar, IconCheck, IconArrowR, IconArrowL, IconKey, IconCalendar, IconShield, IconUser, IconInbox,
+  IconComuna13,
 } from '@/components/Icons';
 import {
   DEFAULTS_POR_TIPO, TIPO_VEHICULO_LABELS,
@@ -139,7 +140,7 @@ function LeadGate({ tipo, onDesbloqueado }: { tipo: TipoVehiculo; onDesbloqueado
     <div className="max-w-md mx-auto px-4 sm:px-6 py-14">
       <div className="text-center mb-6">
         <div className="w-14 h-14 rounded-2xl bg-accent-light flex items-center justify-center mx-auto mb-4">
-          <IconCoin size={26} className="text-accent" />
+          <IconComuna13 size={26} className="text-accent" />
         </div>
         <h1 className="text-2xl font-bold text-ink mb-2">Calculadora de ganancias según tu vehículo</h1>
         {paso === 'datos' ? (

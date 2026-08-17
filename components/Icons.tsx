@@ -37,3 +37,9 @@ export const IconUsers     = ({ size, className }: IconProps) => <svg {...d(size
 export const IconHome      = ({ size, className }: IconProps) => <svg {...d(size, className)}><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>;
 export const IconInbox     = ({ size, className }: IconProps) => <svg {...d(size, className)}><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/></svg>;
 export const IconNfc       = ({ size, className }: IconProps) => <svg {...d(size, className)}><rect x="3" y="7" width="7" height="10" rx="1.5"/><path d="M13.5 8.5a5 5 0 010 7"/><path d="M17 5.5a9 9 0 010 13"/><path d="M20.3 3a13 13 0 010 18"/></svg>;
+
+// ── Set Medellín (identidad local) ──
+export const IconMetrocable  = ({ size, className }: IconProps) => <svg {...d(size, className)}><line x1="2" y1="6" x2="22" y2="10"/><circle cx="12" cy="8" r="1.3" fill="currentColor" stroke="none"/><line x1="12" y1="9.3" x2="12" y2="13"/><path d="M8 13h8l-1.5 6h-5z"/><line x1="9.5" y1="16" x2="14.5" y2="16"/></svg>;
+export const IconComuna13    = ({ size, className }: IconProps) => <svg {...d(size, className)}><path d="M3 21h4v-4h4v-4h4v-4h4v-4h3"/><line x1="3" y1="18" x2="22" y2="2"/></svg>;
+export const IconCordillera  = ({ size, className }: IconProps) => <svg {...d(size, className)}><polyline points="2 19 6 10 9 14 13 6 17 12 22 19"/></svg>;
+export const IconFlorMedellin= ({ size, className }: IconProps) => <svg {...d(size, className)}><circle cx="12" cy="7" r="3.3"/><circle cx="16.8" cy="10.5" r="3.3"/><circle cx="14.9" cy="16" r="3.3"/><circle cx="9.1" cy="16" r="3.3"/><circle cx="7.2" cy="10.5" r="3.3"/><circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/></svg>;
