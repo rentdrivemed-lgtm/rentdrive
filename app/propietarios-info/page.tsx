@@ -149,18 +149,20 @@ export default function PropietariosInfoPage() {
 
       {/* CALCULADORA DE RENTABILIDAD — banner llamativo */}
       <section className="max-w-4xl mx-auto px-6 pt-14">
-        <div className="relative overflow-hidden rounded-3xl p-6 sm:p-10 text-center"
-          style={{ background: 'var(--gradient-accent)' }}>
-          <div className="absolute -top-10 -right-10 w-56 h-56 rounded-full bg-white/10 blur-2xl" />
-          <div className="absolute -bottom-14 -left-10 w-56 h-56 rounded-full bg-white/10 blur-2xl" />
+        <div className="relative overflow-hidden rounded-3xl border-2 border-accent/30 bg-surface-2 p-6 sm:p-10 text-center shadow-[0_20px_60px_-15px_rgba(0,0,0,0.55)]">
+          <div className="absolute top-0 inset-x-0 h-1 bg-accent" />
+          <div
+            className="absolute inset-0 opacity-[0.06] pointer-events-none"
+            style={{ backgroundImage: 'radial-gradient(currentColor 1.5px, transparent 1.5px)', backgroundSize: '20px 20px', color: 'var(--color-ink)' }}
+          />
           <div className="relative">
-            <div className="w-16 h-16 rounded-2xl bg-white/15 flex items-center justify-center mx-auto mb-4 backdrop-blur-sm">
-              <IconCoin size={30} className="text-white" />
+            <div className="w-16 h-16 rounded-2xl bg-accent-light border border-accent/30 flex items-center justify-center mx-auto mb-4">
+              <IconCoin size={30} className="text-accent" />
             </div>
-            <h2 className="font-black text-white text-2xl sm:text-3xl leading-tight mb-2">{c.earningsTitle}</h2>
-            <p className="text-white/85 text-sm sm:text-base max-w-xl mx-auto mb-6">{c.earningsDesc}</p>
+            <h2 className="font-black text-ink text-2xl sm:text-3xl leading-tight mb-2">{c.earningsTitle}</h2>
+            <p className="text-ink-soft text-sm sm:text-base max-w-xl mx-auto mb-6">{c.earningsDesc}</p>
             <Link href="/calculadora-propietarios"
-              className="glow-accent inline-flex items-center gap-2.5 bg-white text-accent font-black text-base sm:text-lg px-8 py-4 rounded-2xl transition hover:-translate-y-0.5 hover:shadow-2xl">
+              className="glow-accent inline-flex items-center gap-2.5 bg-accent hover:bg-accent-hover text-white font-black text-base sm:text-lg px-8 py-4 rounded-2xl transition hover:-translate-y-0.5 hover:shadow-2xl">
               <IconCoin size={20} /> {c.calcBtn} <IconArrowR size={18} />
             </Link>
           </div>
