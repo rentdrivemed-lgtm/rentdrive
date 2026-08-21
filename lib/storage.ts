@@ -25,7 +25,7 @@ export async function uploadFile(filename: string, contentType: string, data: Ar
 }
 
 // ── Tarjetas NFC ──────────────────────────────────────────────────────────
-// El HTML autocontenido (pequeño, <5MB) se guarda en el volumen persistente
+// El HTML autocontenido (pequeño, <8MB) se guarda en el volumen persistente
 // de Railway — mismo criterio que rentdrive.db en lib/db.ts (fuera del
 // volumen, cualquier redeploy borra el filesystem del contenedor). Los
 // audios (binarios más pesados, pensados para CDN) van a Cloudinary como el
