@@ -33,7 +33,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     if (html && html.type !== 'text/html' && !html.name.toLowerCase().endsWith('.html')) {
       return NextResponse.json({ error: 'El archivo principal debe ser .html' }, { status: 400 });
     }
-    if (html && html.size > 5 * 1024 * 1024) return NextResponse.json({ error: 'El HTML supera 5 MB' }, { status: 400 });
+    if (html && html.size > 8 * 1024 * 1024) return NextResponse.json({ error: 'El HTML supera 8 MB' }, { status: 400 });
     for (const a of audios) {
       if (!a.type.startsWith('audio/') && !a.name.toLowerCase().endsWith('.mp3')) {
         return NextResponse.json({ error: `"${a.name}" no parece un audio válido` }, { status: 400 });
