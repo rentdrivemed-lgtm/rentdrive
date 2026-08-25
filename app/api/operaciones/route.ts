@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getDb } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth';
+import { guardArea } from '@/lib/guard';
 import { cargarDetalleServicio, getConfig, crearOperacionParaReserva } from '@/lib/operaciones';
 import { whatsappHabilitado } from '@/lib/whatsapp';
 import { tieneClaveAnthropic } from '@/lib/anthropic';
@@ -14,10 +13,9 @@ type OperacionRow = {
 };
 
 export async function GET() {
-  const user = await getCurrentUser();
-  if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
-
-  const db = getDb();
+  const g = await guardArea('operaciones');
+  if ('error' in g) return g.error;
+  const { db } = g;
 
   // Backfill idempotente: crea la operación para reservas confirmadas/en curso que
   // aún no la tengan (p. ej. confirmadas antes de existir este módulo). Sin WhatsApp.

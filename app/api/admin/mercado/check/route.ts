@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth';
+import { guardArea } from '@/lib/guard';
 import { extraerPreciosPagina, calcularPrecioObjetivo } from '@/lib/mercado';
 
 export const dynamic = 'force-dynamic';
@@ -15,11 +15,11 @@ export async function POST(req: NextRequest) {
   const cronSecretEnv = process.env.CRON_SECRET;
   const esCron = cronSecretEnv && cronSecret === cronSecretEnv;
 
+  // Doble puerta: el cron entra con su secreto; una persona entra solo si es admin
+  // Y tiene la sección "mercado" (el chequeo puede reescribir precios de la flota).
   if (!esCron) {
-    const user = await getCurrentUser();
-    if (!user || user.rol !== 'admin') {
-      return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
-    }
+    const g = await guardArea('mercado');
+    if ('error' in g) return g.error;
   }
 
   const db = getDb();

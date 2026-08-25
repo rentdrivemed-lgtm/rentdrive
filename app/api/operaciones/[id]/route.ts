@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDb } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth';
+import { guardArea } from '@/lib/guard';
 import { cargarDetalleServicio, mensajeMensajero, mensajeAdmin, getConfig, recomputarEstadoOperacion, ejecutarInspeccion, appBaseUrl } from '@/lib/operaciones';
 import { enviarWhatsapp } from '@/lib/whatsapp';
 import { tieneClaveAnthropic } from '@/lib/anthropic';
@@ -12,13 +11,13 @@ type Op = { id: number; reserva_id: number; mensajero_id: number | null; estado:
 const ESTADOS_OP = ['pendiente', 'asignada', 'en_proceso', 'finalizada'];
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser();
-  if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+  const g = await guardArea('operaciones');
+  if ('error' in g) return g.error;
+  const { db } = g;
 
   const { id } = await params;
   const opId = Number(id);
   const body = await req.json().catch(() => ({}));
-  const db = getDb();
 
   const op = db.prepare('SELECT id, reserva_id, mensajero_id, estado, notas FROM operaciones WHERE id = ?').get(opId) as Op | undefined;
   if (!op) return NextResponse.json({ error: 'Operación no encontrada' }, { status: 404 });

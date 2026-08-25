@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
+import { adminTieneArea, sinPermisoArea } from '@/lib/guard';
 import { calcularRecargo, lugarValido, type Lugar } from '@/lib/lugares';
 import { enviarCorreo } from '@/lib/email';
 import { generarCotizacion } from '@/lib/contabilidad';
@@ -45,12 +46,17 @@ export async function GET(req: NextRequest) {
   `;
   const params: unknown[] = [];
 
+  // Ruta compartida: cliente ve SUS reservas, propietario las de SUS vehículos y el
+  // admin las ve todas. Solo la rama de administración (la que no filtra por dueño)
+  // exige la sección "reservas"; a cliente y propietario no se les cambia nada.
   if (user.rol === 'usuario') {
     query += ' AND r.usuario_id = ?';
     params.push(user.id);
   } else if (user.rol === 'propietario') {
     query += ' AND v.propietario_id = ?';
     params.push(user.id);
+  } else if (!adminTieneArea(db, user.id, 'reservas')) {
+    return sinPermisoArea();
   }
 
   if (vehiculoId)  { query += ' AND r.vehiculo_id = ?';         params.push(Number(vehiculoId)); }

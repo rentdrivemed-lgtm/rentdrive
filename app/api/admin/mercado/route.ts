@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDb } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth';
+import { guardArea } from '@/lib/guard';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,11 +14,10 @@ type PrecioRow = {
 };
 
 // GET — lista competidores + sus últimos precios
-export async function GET(req: NextRequest) {
-  const user = await getCurrentUser();
-  if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
-
-  const db = getDb();
+export async function GET() {
+  const g = await guardArea('mercado');
+  if ('error' in g) return g.error;
+  const { db } = g;
   const competidores = db.prepare('SELECT * FROM competidores ORDER BY nombre').all() as Competidor[];
 
   const conPrecios = competidores.map(c => {
@@ -34,15 +32,15 @@ export async function GET(req: NextRequest) {
 
 // POST — agregar competidor
 export async function POST(req: NextRequest) {
-  const user = await getCurrentUser();
-  if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+  const g = await guardArea('mercado');
+  if ('error' in g) return g.error;
+  const { db } = g;
 
   const { nombre, url, ajuste_pct = -5, auto_actualizar = 0 } = await req.json() as {
     nombre?: string; url?: string; ajuste_pct?: number; auto_actualizar?: number;
   };
   if (!nombre || !url) return NextResponse.json({ error: 'Nombre y URL son obligatorios' }, { status: 400 });
 
-  const db = getDb();
   const res = db.prepare(
     'INSERT INTO competidores (nombre, url, ajuste_pct, auto_actualizar) VALUES (?, ?, ?, ?)'
   ).run(nombre, url, ajuste_pct, auto_actualizar ? 1 : 0);
@@ -52,8 +50,9 @@ export async function POST(req: NextRequest) {
 
 // PUT — editar o activar/desactivar competidor
 export async function PUT(req: NextRequest) {
-  const user = await getCurrentUser();
-  if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+  const g = await guardArea('mercado');
+  if ('error' in g) return g.error;
+  const { db } = g;
 
   const body = await req.json() as { id: number; nombre?: string; url?: string; activo?: number; ajuste_pct?: number; auto_actualizar?: number };
   const { id, ...campos } = body;
@@ -65,20 +64,19 @@ export async function PUT(req: NextRequest) {
 
   if (sets.length === 0) return NextResponse.json({ error: 'Nada que actualizar' }, { status: 400 });
 
-  const db = getDb();
   db.prepare(`UPDATE competidores SET ${sets.join(', ')} WHERE id = ?`).run(...values, id);
   return NextResponse.json({ ok: true });
 }
 
 // DELETE — eliminar competidor
 export async function DELETE(req: NextRequest) {
-  const user = await getCurrentUser();
-  if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+  const g = await guardArea('mercado');
+  if ('error' in g) return g.error;
+  const { db } = g;
 
   const { id } = await req.json() as { id: number };
   if (!id) return NextResponse.json({ error: 'Falta id' }, { status: 400 });
 
-  const db = getDb();
   db.prepare('DELETE FROM precios_mercado WHERE competidor_id = ?').run(id);
   db.prepare('DELETE FROM competidores WHERE id = ?').run(id);
   return NextResponse.json({ ok: true });

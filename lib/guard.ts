@@ -24,3 +24,22 @@ export async function guardArea(area: string): Promise<GuardOk | { error: NextRe
   }
   return { user, nivel, db, permisos: extra };
 }
+
+// ── Endpoints compartidos entre roles ────────────────────────────────────────
+// Hay rutas que atienden a varios roles a la vez: el cliente consulta SUS reservas,
+// el propietario edita SUS vehículos y el admin ve/edita todo. Ahí `guardArea` no
+// sirve: exige rol admin y le respondería 403 al cliente o al propietario legítimo.
+//
+// Estos dos helpers permiten partir el chequeo en dos ramas dentro de la misma ruta:
+//   · rama de administración → exigir el área con `adminTieneArea` (nivel + excepciones);
+//   · rama del dueño de los datos → dejar intacta la lógica de pertenencia que ya existía.
+// Así, revocar una casilla cierra de verdad la puerta del admin sin tocar a nadie más.
+export function adminTieneArea(db: Database.Database, userId: number, area: string): boolean {
+  const { nivel, extra } = permisosDe(db, userId);
+  return puede(nivel, area, extra);
+}
+
+// Respuesta única para "eres admin, pero esta sección no está entre tus permisos".
+export function sinPermisoArea(): NextResponse {
+  return NextResponse.json({ error: 'No tienes permiso para esta sección.' }, { status: 403 });
+}
