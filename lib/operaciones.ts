@@ -125,9 +125,19 @@ export function mensajeMensajero(det: DetalleServicio, tareas: { titulo: string;
   return lines.join('\n');
 }
 
+// Base de los enlaces que salen de la app hacia afuera (panel del mensajero
+// /m/<token> por WhatsApp, reseteo de contraseña por correo). Debe apuntar
+// SIEMPRE al origen canónico: la cookie de sesión `token` es host-only y la
+// allowlist de Origin de lib/csrf.ts solo conoce NEXT_PUBLIC_APP_URL (y su
+// variante sin www), así que un enlace a un tercer origen dejaría al usuario
+// sin sesión y con los POST bloqueados por CSRF.
+// Por eso NEXT_PUBLIC_APP_URL va PRIMERO: hoy RAILWAY_PUBLIC_DOMAIN vale
+// "www.drivepasscol.com" y coincide, pero es una variable que inyecta Railway
+// y podría pasar a exponer el *.up.railway.app; RAILWAY_PUBLIC_DOMAIN queda
+// solo como respaldo para despliegues sin dominio propio configurado.
 export function appBaseUrl(): string {
-  if (process.env.RAILWAY_PUBLIC_DOMAIN) return `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`;
   if (process.env.NEXT_PUBLIC_APP_URL) return process.env.NEXT_PUBLIC_APP_URL;
+  if (process.env.RAILWAY_PUBLIC_DOMAIN) return `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`;
   return '';
 }
 

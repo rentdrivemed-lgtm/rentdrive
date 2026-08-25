@@ -25,6 +25,38 @@ const ESTADO_BADGE: Record<string, string> = {
 };
 const ESTADO_LABEL: Record<string, string> = { borrador: 'Borrador', activa: 'Activa', inactiva: 'Inactiva' };
 
+// Origen que se muestra y se copia para las URLs públicas de las tarjetas: es
+// el texto con el que el admin programa los tags NFC FÍSICOS, así que NO debe
+// depender de en qué dominio esté parado (entrando por el apex
+// drivepasscol.com los tags quedaban grabados con el apex, que ahora solo
+// redirige al www). Por eso se prefiere NEXT_PUBLIC_APP_URL —el mismo canónico
+// que usan lib/csrf.ts y next.config.ts, disponible en cliente porque Next
+// inlinea las NEXT_PUBLIC_* en el bundle— antes que window.location.origin.
+// En desarrollo esa variable no está definida y se cae al origen del navegador
+// (localhost o la IP LAN) para poder abrir la tarjeta desde el celular; como
+// el valor inicial es el mismo en servidor y cliente, no hay desajuste de
+// hidratación.
+// Se normaliza a .origin (no se usa el valor crudo del entorno) porque este string
+// termina grabado en un tag NFC físico: si NEXT_PUBLIC_APP_URL trajera barra final
+// —el mismo footgun que lib/csrf.ts neutraliza con aOrigin()— el enlace saldría con
+// doble barra y quedaría escrito en hardware ya entregado, que es el único sitio del
+// sistema donde un carácter de más no se puede deshacer con un redeploy.
+const APP_ORIGIN = (() => {
+  const raw = process.env.NEXT_PUBLIC_APP_URL;
+  if (!raw) return '';
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return '';
+  }
+})();
+
+function useOrigenPublico(): string {
+  const [origen, setOrigen] = useState(APP_ORIGIN);
+  useEffect(() => { if (!APP_ORIGIN) setOrigen(window.location.origin); }, []);
+  return origen;
+}
+
 function slugify(s: string): string {
   return s
     .normalize('NFD').replace(/[̀-ͯ]/g, '') // quita tildes
@@ -43,9 +75,7 @@ export default function NfcCardsPanel() {
   const [modal, setModal] = useState<'nueva' | Tarjeta | null>(null);
   const [copiado, setCopiado] = useState<number | null>(null);
   const [previewId, setPreviewId] = useState<number | null>(null);
-  const [origen, setOrigen] = useState('');
-
-  useEffect(() => { setOrigen(window.location.origin); }, []);
+  const origen = useOrigenPublico();
 
   const cargar = async () => {
     const res = await fetch('/api/admin/nfc-cards', { cache: 'no-store' });
@@ -211,6 +241,7 @@ function TarjetaModal({ tarjeta, onClose, onSaved }: {
   onSaved: (t: Tarjeta) => void;
 }) {
   const esNueva = !tarjeta;
+  const origen = useOrigenPublico();
   const [nombre, setNombre] = useState(tarjeta?.creador_nombre || '');
   const [handle, setHandle] = useState(tarjeta?.creador_handle || '');
   const [tipo, setTipo] = useState<'embajador' | 'cliente'>(tarjeta?.tipo || 'embajador');
@@ -308,7 +339,9 @@ function TarjetaModal({ tarjeta, onClose, onSaved }: {
                 className="w-full border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40 disabled:opacity-50 disabled:cursor-not-allowed" />
             </div>
           </div>
-          {slug && <p className="text-[11px] text-ink/40 -mt-2">URL pública: <span className="text-accent">drivepasscol.com/tarjeta/{slug}</span></p>}
+          {/* Sin el protocolo, como estaba antes, pero derivado del origen canónico
+              (ya no el apex hardcodeado, que era lo que se grababa en los tags). */}
+          {slug && <p className="text-[11px] text-ink/40 -mt-2">URL pública: <span className="text-accent">{origen.replace(/^https?:\/\//, '')}/tarjeta/{slug}</span></p>}
 
           <div>
             <label className="text-xs font-medium text-ink/60 block mb-1">
