@@ -21,15 +21,43 @@ const EN_PRODUCCION = process.env.NODE_ENV === 'production';
 // drivepasscol.com sin "www" cuando APP_URL apunta a www.drivepasscol.com). Se
 // deriva automáticamente la variante alterna en vez de hardcodear un segundo
 // literal, para que siga funcionando si el dominio configurado cambia.
-function varianteWww(url: string): string | null {
+// Ambos helpers devuelven null ante cualquier entrada que no sea una URL http(s)
+// bien formada. El guard de protocolo NO es decorativo: con un esquema no-especial
+// (un typo tipo "htps://..." o un "host:puerto" sin esquema) `new URL()` NO lanza,
+// el catch no se activa, y `u.origin` devuelve el string literal "null" — que es
+// justamente el Origin que manda un navegador desde un iframe sandbox o una URL
+// data:, o sea, el único origin que un atacante SÍ puede falsificar. Sin este
+// guard, una variable de entorno mal escrita convertiría la allowlist en
+// "permitir al atacante" en silencio; con él, una config mala falla cerrada
+// (nadie entra) en vez de fallar medio-abierta.
+function aOrigin(url: string): string | null {
   try {
     const u = new URL(url);
-    u.hostname = u.hostname.startsWith('www.') ? u.hostname.slice(4) : `www.${u.hostname}`;
-    return u.origin;
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
+    return u.origin === 'null' ? null : u.origin;
   } catch {
     return null;
   }
 }
+
+function varianteWww(url: string): string | null {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
+    u.hostname = u.hostname.startsWith('www.') ? u.hostname.slice(4) : `www.${u.hostname}`;
+    return u.origin === 'null' ? null : u.origin;
+  } catch {
+    return null;
+  }
+}
+
+// APP_URL se normaliza con `aOrigin` antes de entrar a la allowlist: el header
+// Origin que manda el navegador nunca trae barra final, path ni mayúsculas, así
+// que meter el valor crudo del entorno haría que un APP_URL escrito como
+// "https://www.drivepasscol.com/" (con slash, muy fácil de configurar así) no
+// matcheara nunca — reintroduciendo el mismo bug que este archivo arregla, pero
+// del lado del dominio principal.
+const APP_URL_ORIGIN = aOrigin(APP_URL);
 const APP_URL_VARIANTE = varianteWww(APP_URL);
 
 // Fuera de producción, además del propio dominio, permitimos las mismas IPs LAN de
@@ -38,7 +66,7 @@ const APP_URL_VARIANTE = varianteWww(APP_URL);
 // existe esa allowlist). localhost:3100 solo aplica en dev — en producción no hay
 // nada legítimo sirviendo ahí.
 const ORIGENES_PERMITIDOS = new Set([
-  APP_URL,
+  ...(APP_URL_ORIGIN ? [APP_URL_ORIGIN] : []),
   ...(APP_URL_VARIANTE ? [APP_URL_VARIANTE] : []),
   ...(EN_PRODUCCION ? [] : LAN_DEV_ORIGINS.map(host => `http://${host}:3100`)),
 ]);
