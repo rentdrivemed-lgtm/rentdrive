@@ -13,6 +13,25 @@ import { LAN_DEV_ORIGINS } from '@/next.config';
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://www.drivepasscol.com';
 const EN_PRODUCCION = process.env.NODE_ENV === 'production';
 
+// Railway sirve el sitio en dos dominios (con y sin "www") SIN redirigir uno al
+// otro — un visitante real puede llegar por cualquiera de los dos, y el navegador
+// manda el Origin exacto que usó. Si solo permitiéramos APP_URL, cualquiera que
+// entre por la variante no configurada quedaría bloqueado del login/registro/Google
+// con un 403 "Origen no permitido" (bug real confirmado en producción: entrar por
+// drivepasscol.com sin "www" cuando APP_URL apunta a www.drivepasscol.com). Se
+// deriva automáticamente la variante alterna en vez de hardcodear un segundo
+// literal, para que siga funcionando si el dominio configurado cambia.
+function varianteWww(url: string): string | null {
+  try {
+    const u = new URL(url);
+    u.hostname = u.hostname.startsWith('www.') ? u.hostname.slice(4) : `www.${u.hostname}`;
+    return u.origin;
+  } catch {
+    return null;
+  }
+}
+const APP_URL_VARIANTE = varianteWww(APP_URL);
+
 // Fuera de producción, además del propio dominio, permitimos las mismas IPs LAN de
 // next.config.ts (allowedDevOrigins): el equipo prueba por celular en la misma red
 // y Safari manda Origin también en requests same-origin al entrar por IP (por eso
@@ -20,6 +39,7 @@ const EN_PRODUCCION = process.env.NODE_ENV === 'production';
 // nada legítimo sirviendo ahí.
 const ORIGENES_PERMITIDOS = new Set([
   APP_URL,
+  ...(APP_URL_VARIANTE ? [APP_URL_VARIANTE] : []),
   ...(EN_PRODUCCION ? [] : LAN_DEV_ORIGINS.map(host => `http://${host}:3100`)),
 ]);
 
