@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import CalendarioReservas, { type ReservaCalendario } from '@/components/CalendarioReservas';
 import PicoPlacaConfig from '@/components/PicoPlacaConfig';
@@ -9,7 +9,10 @@ import LeadsPropietariosPanel from '@/components/LeadsPropietariosPanel';
 import AuditoriaPanel from '@/components/AuditoriaPanel';
 import CalculadoraPanel from '@/components/CalculadoraPanel';
 import NfcCardsPanel from '@/components/NfcCardsPanel';
-import { puede, normalizarNivel, NIVEL_LABEL, NIVELES, type AdminNivel } from '@/lib/permisos';
+import {
+  puede, normalizarNivel, NIVEL_LABEL, NIVELES, GRUPOS_AREAS, areaLabel,
+  parsePermisosExtra, type AdminNivel, type PermisosExtra,
+} from '@/lib/permisos';
 import { parsePicoPlaca, picoPlacaVacio, placaRestringida, type PicoPlaca } from '@/lib/pico-placa';
 import { fechaHoraRecogida, esNoShowAplicable } from '@/lib/cancelacion';
 import { IconUser, IconCar, IconX, IconCheck, IconCalendar, IconShield } from '@/components/Icons';
@@ -17,7 +20,7 @@ import type { VerificacionResultado } from '@/lib/verificacion-docs';
 
 type Usuario = {
   id: number; nombre: string; correo: string;
-  rol: string; admin_nivel?: string; estado_cuenta: string; created_at: string;
+  rol: string; admin_nivel?: string; permisos_extra?: string; estado_cuenta: string; created_at: string;
   tipo_documento?: string; documento_identidad?: string;
   fecha_nacimiento?: string; celular?: string; celular_indicativo?: string;
   direccion?: string; ciudad?: string;
@@ -183,10 +186,95 @@ function ResultadoIA({ res, auto }: { res: VerificacionResultado; auto?: string[
   );
 }
 
+// Firma estable de un mapa de excepciones, para saber si hay cambios sin guardar.
+const firmaPermisos = (p: PermisosExtra) =>
+  JSON.stringify(Object.entries(p).sort((a, b) => a[0].localeCompare(b[0])));
+
+// Casillas de secciones por empleado. El NIVEL es la plantilla base; aquí solo se
+// guardan las EXCEPCIONES (lo que se aparta de esa plantilla). Por eso, si vuelves a
+// marcar/desmarcar hasta el valor del nivel, la excepción desaparece sola y la casilla
+// vuelve a decir "nivel": así se ve de un vistazo qué es heredado y qué es a la medida.
+function PermisosSecciones({ u, draft, onToggle, onReset, onGuardar, guardando, msg }: {
+  u: Usuario;
+  draft: PermisosExtra;
+  onToggle: (area: string) => void;
+  onReset: () => void;
+  onGuardar: () => void;
+  guardando: boolean;
+  msg: string;
+}) {
+  const nivelU = normalizarNivel(u.admin_nivel);
+  const guardado = parsePermisosExtra(u.permisos_extra);
+  const cambiado = firmaPermisos(draft) !== firmaPermisos(guardado);
+  const nExcepciones = Object.keys(draft).length;
+
+  return (
+    <div className="rounded-2xl border border-border bg-surface-2 p-4 space-y-4">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <p className="text-sm font-bold text-ink">🔐 Secciones de {u.nombre}</p>
+          <p className="text-[11px] text-ink/50 max-w-2xl">
+            Parte de <strong>{NIVEL_LABEL[nivelU]}</strong>: lo que dice <span className="text-ink/40 font-semibold">nivel</span> es lo que le toca por su rol.
+            Al marcar o desmarcar, esa sección queda como <span className="text-warning font-semibold">excepción</span> solo para esta persona.
+            Para devolverla a lo normal, vuelve a dejarla como estaba (o usa “Volver todo al nivel”).
+            La <strong>gestión del equipo</strong> (esta pantalla) no se puede marcar: es exclusiva del administrador principal.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <button onClick={onReset} disabled={nExcepciones === 0}
+            className="text-xs px-3 py-1.5 rounded-xl border border-border text-ink/70 hover:bg-surface transition font-medium disabled:opacity-40">
+            ↺ Volver todo al nivel
+          </button>
+          <button onClick={onGuardar} disabled={!cambiado || guardando}
+            className="bg-accent hover:bg-accent-hover text-white px-4 py-1.5 rounded-xl font-semibold text-xs transition disabled:opacity-40">
+            {guardando ? 'Guardando…' : cambiado ? 'Guardar cambios' : 'Sin cambios'}
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-x-6 gap-y-4">
+        {GRUPOS_AREAS.map(g => (
+          <div key={g.titulo}>
+            <p className="text-[10px] font-bold uppercase tracking-wide text-ink/40 mb-1.5">{g.titulo}</p>
+            <div className="space-y-0.5">
+              {g.areas.map(area => {
+                const base = puede(nivelU, area);
+                const efectivo = puede(nivelU, area, draft);
+                const esExcepcion = efectivo !== base;
+                return (
+                  <label key={area}
+                    className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-surface transition cursor-pointer">
+                    <input type="checkbox" checked={efectivo} onChange={() => onToggle(area)}
+                      className="w-4 h-4 rounded accent-[var(--color-accent)] flex-shrink-0" />
+                    <span className={`text-xs flex-1 truncate ${efectivo ? 'text-ink' : 'text-ink/40'}`}>{areaLabel(area)}</span>
+                    {esExcepcion ? (
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-warning/15 text-warning border border-warning/25 flex-shrink-0">excepción</span>
+                    ) : (
+                      <span className="text-[9px] text-ink/30 flex-shrink-0">nivel</span>
+                    )}
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <p className="text-[11px] text-ink/40">
+        Ojo: esto controla qué secciones ve y qué APIs puede usar. El contenido marcado
+        “solo socios” (tareas, eventos y documentos reservados) sigue dependiendo del nivel, no de estas casillas.
+      </p>
+      {msg && <p className={`text-xs ${msg.startsWith('✓') ? 'text-success' : 'text-danger'}`}>{msg}</p>}
+    </div>
+  );
+}
+
 export default function DashboardAdmin() {
   const [tab, setTab] = useState<'usuarios' | 'vehiculos' | 'reservas' | 'contabilidad' | 'mercado' | 'calculadora' | 'leads' | 'soporte' | 'nfc' | 'config' | 'auditoria'>('usuarios');
   const [miNivel, setMiNivel] = useState<AdminNivel>('principal');
   const [miId, setMiId] = useState<number | null>(null);
+  // Excepciones de permisos de MI cuenta (solo para pintar pestañas; el gating real es del servidor).
+  const [misPermisos, setMisPermisos] = useState<PermisosExtra>({});
   const [picoPlaca, setPicoPlaca] = useState<PicoPlaca>(picoPlacaVacio());
   const [usuarios, setUsuarios]   = useState<Usuario[]>([]);
   const [vehiculos, setVehiculos] = useState<Vehiculo[]>([]);
@@ -232,6 +320,7 @@ export default function DashboardAdmin() {
       if (!d.user || d.user.rol !== 'admin') { router.push('/login'); return; }
       setMiNivel(normalizarNivel(d.user.admin_nivel));
       setMiId(d.user.id ?? null);
+      setMisPermisos(parsePermisosExtra(d.user.permisos_extra));
     }).catch(() => router.push('/login'));
     cargarUsuarios();
     cargarVehiculos();
@@ -245,12 +334,12 @@ export default function DashboardAdmin() {
 
   // Si el nivel actual no puede ver la pestaña seleccionada, lo mandamos a la primera permitida.
   useEffect(() => {
-    if (!puede(miNivel, tab)) {
+    if (!puede(miNivel, tab, misPermisos)) {
       const orden = ['reservas', 'leads', 'soporte', 'usuarios', 'vehiculos', 'contabilidad', 'mercado', 'calculadora', 'nfc', 'config', 'auditoria'] as const;
-      const primera = orden.find(k => puede(miNivel, k));
+      const primera = orden.find(k => puede(miNivel, k, misPermisos));
       if (primera) setTab(primera);
     }
-  }, [miNivel, tab]);
+  }, [miNivel, misPermisos, tab]);
 
   const cargarMercado = () => {
     setMercadoLoading(true);
@@ -360,6 +449,61 @@ export default function DashboardAdmin() {
     });
     if (res.ok) setUsuarios(prev => prev.map(x => x.id === u.id ? { ...x, admin_nivel: nivel } : x));
     else { const d = await res.json().catch(() => ({})); alert(d.error || 'No se pudo cambiar el nivel.'); }
+  };
+
+  // ── Permisos por sección (casillas por empleado) ───────────────────────────
+  // Solo se envían al servidor las excepciones; el servidor revalida todo (lista
+  // blanca de áreas, no editarse a uno mismo, `usuarios_gestion` prohibida).
+  const [permisosAbierto, setPermisosAbierto] = useState<number | null>(null);
+  const [permisosDraft, setPermisosDraft] = useState<Record<number, PermisosExtra>>({});
+  const [permisosMsg, setPermisosMsg] = useState('');
+  const [guardandoPermisos, setGuardandoPermisos] = useState(false);
+
+  const abrirPermisos = (u: Usuario) => {
+    setPermisosMsg('');
+    if (permisosAbierto === u.id) { setPermisosAbierto(null); return; }
+    setPermisosDraft(prev => ({ ...prev, [u.id]: parsePermisosExtra(u.permisos_extra) }));
+    setPermisosAbierto(u.id);
+  };
+
+  const alternarArea = (u: Usuario, area: string) => {
+    const nivelU = normalizarNivel(u.admin_nivel);
+    setPermisosDraft(prev => {
+      const actual = prev[u.id] ?? parsePermisosExtra(u.permisos_extra);
+      const valor = !puede(nivelU, area, actual);
+      const nuevo = { ...actual };
+      // Si el valor elegido coincide con el del nivel, no es excepción: se hereda.
+      if (valor === puede(nivelU, area)) delete nuevo[area];
+      else nuevo[area] = valor;
+      return { ...prev, [u.id]: nuevo };
+    });
+  };
+
+  const restablecerPermisos = (u: Usuario) => setPermisosDraft(prev => ({ ...prev, [u.id]: {} }));
+
+  const guardarPermisos = async (u: Usuario) => {
+    const draft = permisosDraft[u.id] ?? parsePermisosExtra(u.permisos_extra);
+    setGuardandoPermisos(true); setPermisosMsg('');
+    try {
+      const res = await fetch('/api/admin/usuarios', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: u.id, permisos_extra: draft }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        const guardados = parsePermisosExtra(d.permisos_extra ?? draft);
+        setUsuarios(prev => prev.map(x => x.id === u.id ? { ...x, permisos_extra: JSON.stringify(guardados) } : x));
+        setPermisosDraft(prev => ({ ...prev, [u.id]: guardados }));
+        setPermisosMsg('✓ Permisos guardados.');
+        setTimeout(() => setPermisosMsg(''), 4000);
+      } else {
+        setPermisosMsg(d.error || 'No se pudieron guardar los permisos.');
+      }
+    } catch {
+      setPermisosMsg('Sin conexión — intenta de nuevo.');
+    } finally {
+      setGuardandoPermisos(false);
+    }
   };
 
   const guardarNuevaContrasena = async () => {
@@ -650,7 +794,7 @@ export default function DashboardAdmin() {
           { key: 'nfc', label: '📇 Tarjetas NFC' },
           { key: 'config', label: 'Configuración' },
           { key: 'auditoria', label: '🧾 Bitácora' },
-        ] as const).filter(t => puede(miNivel, t.key)).map(t => (
+        ] as const).filter(t => puede(miNivel, t.key, misPermisos)).map(t => (
           <button key={t.key} onClick={() => setTab(t.key)}
             className={`relative px-4 py-2.5 text-sm font-medium capitalize border-b-2 -mb-px transition ${
               tab === t.key ? 'border-accent text-accent' : 'border-transparent text-ink/50 hover:text-ink'
@@ -714,7 +858,8 @@ export default function DashboardAdmin() {
               </thead>
               <tbody className="divide-y divide-border">
                 {usuarios.map(u => (
-                  <tr key={u.id} className="hover:bg-surface transition">
+                  <Fragment key={u.id}>
+                  <tr className="hover:bg-surface transition">
                     <td className="px-4 py-3 font-semibold text-ink">
                       <span className="flex items-center gap-2">
                         {u.nombre}
@@ -747,6 +892,19 @@ export default function DashboardAdmin() {
                             {NIVELES.map(n => <option key={n} value={n}>{NIVEL_LABEL[n]}</option>)}
                           </select>
                         )}
+                        {u.rol === 'admin' && puede(miNivel, 'usuarios_gestion') && u.id !== miId && (
+                          <button onClick={() => abrirPermisos(u)} title="Elegir qué secciones ve esta persona"
+                            className={`text-xs px-3 py-1.5 rounded-xl border transition font-medium ${
+                              permisosAbierto === u.id ? 'border-accent text-accent bg-accent-light' : 'border-border text-ink/70 hover:bg-surface'
+                            }`}>
+                            🔐 Secciones
+                            {Object.keys(parsePermisosExtra(u.permisos_extra)).length > 0 && (
+                              <span className="ml-1 text-[10px] font-bold text-warning">
+                                ({Object.keys(parsePermisosExtra(u.permisos_extra)).length})
+                              </span>
+                            )}
+                          </button>
+                        )}
                         {(u.rol !== 'admin' || (puede(miNivel, 'usuarios_gestion') && u.id !== miId)) && (
                           <button onClick={() => toggleEstado(u)}
                             className={`text-xs px-3 py-1.5 rounded-xl border transition font-medium ${
@@ -760,6 +918,22 @@ export default function DashboardAdmin() {
                       </div>
                     </td>
                   </tr>
+                  {u.rol === 'admin' && puede(miNivel, 'usuarios_gestion') && u.id !== miId && permisosAbierto === u.id && (
+                    <tr className="bg-surface">
+                      <td colSpan={5} className="px-4 py-4">
+                        <PermisosSecciones
+                          u={u}
+                          draft={permisosDraft[u.id] ?? parsePermisosExtra(u.permisos_extra)}
+                          onToggle={area => alternarArea(u, area)}
+                          onReset={() => restablecerPermisos(u)}
+                          onGuardar={() => guardarPermisos(u)}
+                          guardando={guardandoPermisos}
+                          msg={permisosMsg}
+                        />
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>

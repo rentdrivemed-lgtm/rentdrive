@@ -482,6 +482,10 @@ function initDb(db: Database.Database) {
   try { db.exec("ALTER TABLE usuarios ADD COLUMN celular_indicativo TEXT DEFAULT '+57'"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE usuarios ADD COLUMN cedula_url_dorso TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE usuarios ADD COLUMN admin_nivel TEXT DEFAULT 'principal'"); } catch { /* ya existe */ }
+  // Permisos por empleado: excepciones explícitas al nivel, como mapa JSON { area: boolean }.
+  // '{}' (sin excepciones) = la cuenta se comporta exactamente igual que su nivel.
+  // Ver lib/permisos.ts — `usuarios_gestion` nunca es asignable por esta vía.
+  try { db.exec("ALTER TABLE usuarios ADD COLUMN permisos_extra TEXT DEFAULT '{}'"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE usuarios ADD COLUMN codigo_referido TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE usuarios ADD COLUMN referido_por INTEGER DEFAULT NULL"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE usuarios ADD COLUMN creditos_referido REAL DEFAULT 0"); } catch { /* ya existe */ }

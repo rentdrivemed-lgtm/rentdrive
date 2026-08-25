@@ -4,7 +4,7 @@ import { getDb } from '@/lib/db';
 import { validarCelular, validarDireccion, validarDocumentoIdentidad } from '@/lib/validacion';
 import { referidoHabilitado } from '@/lib/referidos';
 
-const CAMPOS_SELECT = 'tipo_documento, documento_identidad, celular, celular_indicativo, direccion, ciudad, cedula_url, cedula_url_dorso, banco, numero_cuenta, certificado_bancario_url, codigo_referido, creditos_referido, admin_nivel';
+const CAMPOS_SELECT = 'tipo_documento, documento_identidad, celular, celular_indicativo, direccion, ciudad, cedula_url, cedula_url_dorso, banco, numero_cuenta, certificado_bancario_url, codigo_referido, creditos_referido, admin_nivel, permisos_extra';
 
 export async function GET() {
   const user = await getCurrentUser();

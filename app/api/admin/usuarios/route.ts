@@ -1,14 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 import { guardArea } from '@/lib/guard';
-import { registrarAuditoria, normalizarNivel, esNivel, NIVEL_LABEL } from '@/lib/permisos';
+import {
+  registrarAuditoria, normalizarNivel, esNivel, NIVEL_LABEL,
+  AREAS_ASIGNABLES, AREA_NO_ASIGNABLE, areaLabel, esAreaAsignable,
+  parsePermisosExtra, serializarPermisosExtra, type PermisosExtra,
+} from '@/lib/permisos';
 
 export async function GET() {
   const g = await guardArea('usuarios');
   if ('error' in g) return g.error;
   const { db } = g;
   const usuarios = db.prepare(`
-    SELECT id, nombre, correo, rol, admin_nivel, estado_cuenta, created_at,
+    SELECT id, nombre, correo, rol, admin_nivel, permisos_extra, estado_cuenta, created_at,
            tipo_documento, documento_identidad, fecha_nacimiento,
            celular, celular_indicativo, direccion, ciudad, numero_licencia, contacto_emergencia,
            cedula_url, cedula_url_dorso
@@ -56,12 +60,12 @@ export async function PUT(req: NextRequest) {
   if ('error' in g) return g.error;
   const { db, user, nivel } = g;
 
-  const body = await req.json() as { id?: number; estado_cuenta?: string; nueva_contrasena?: string; admin_nivel?: string };
+  const body = await req.json() as { id?: number; estado_cuenta?: string; nueva_contrasena?: string; admin_nivel?: string; permisos_extra?: unknown };
   const { id, estado_cuenta, nueva_contrasena, admin_nivel } = body;
   if (!id) return NextResponse.json({ error: 'Falta id' }, { status: 400 });
 
-  const objetivo = db.prepare('SELECT id, nombre, correo, rol, admin_nivel FROM usuarios WHERE id = ?').get(id) as
-    { id: number; nombre: string; correo: string; rol: string; admin_nivel: string } | undefined;
+  const objetivo = db.prepare('SELECT id, nombre, correo, rol, admin_nivel, permisos_extra FROM usuarios WHERE id = ?').get(id) as
+    { id: number; nombre: string; correo: string; rol: string; admin_nivel: string; permisos_extra?: string } | undefined;
   if (!objetivo) return NextResponse.json({ error: 'Usuario no encontrado' }, { status: 404 });
 
   if (nueva_contrasena) {
@@ -89,6 +93,55 @@ export async function PUT(req: NextRequest) {
       detalle: `Cambió el nivel de ${objetivo.nombre} de ${NIVEL_LABEL[normalizarNivel(objetivo.admin_nivel)]} a ${NIVEL_LABEL[admin_nivel]}`,
     });
     return NextResponse.json({ ok: true });
+  }
+
+  // ── Permisos por empleado (casillas por sección) ───────────────────────────
+  // Guardas duras, en este orden:
+  //  1) solo cuentas rol='admin' reciben excepciones (nunca clientes ni propietarios);
+  //  2) nadie edita sus propias excepciones (aunque la UI lo escondiera);
+  //  3) `usuarios_gestion` se RECHAZA explícitamente (403) — es la raíz de confianza:
+  //     quien la tuviera podría repartirse el resto de permisos y escalar a dueño;
+  //  4) lista blanca estricta de áreas (solo claves de AREA_NIVELES) y valores booleanos.
+  // Nota: llegar hasta aquí ya exige `usuarios_gestion`, que solo tiene el nivel
+  // `principal` y que no es otorgable por casilla, así que el reparto de permisos
+  // queda cerrado sobre el dueño.
+  if (body.permisos_extra !== undefined) {
+    if (objetivo.rol !== 'admin') {
+      return NextResponse.json({ error: 'Los permisos por sección solo aplican a cuentas de administración.' }, { status: 400 });
+    }
+    if (objetivo.id === user.id) {
+      return NextResponse.json({ error: 'No puedes cambiar tus propios permisos.' }, { status: 403 });
+    }
+    const payload = body.permisos_extra;
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return NextResponse.json({ error: 'Formato de permisos inválido.' }, { status: 400 });
+    }
+    for (const [clave, valor] of Object.entries(payload as Record<string, unknown>)) {
+      if (clave === AREA_NO_ASIGNABLE) {
+        return NextResponse.json({ error: 'La gestión del equipo no se puede asignar por casilla: es exclusiva del administrador principal.' }, { status: 403 });
+      }
+      if (!esAreaAsignable(clave)) {
+        return NextResponse.json({ error: `Sección desconocida: ${clave}` }, { status: 400 });
+      }
+      if (typeof valor !== 'boolean') {
+        return NextResponse.json({ error: `El valor de "${clave}" debe ser verdadero o falso.` }, { status: 400 });
+      }
+    }
+
+    const antes = parsePermisosExtra(objetivo.permisos_extra);
+    const despues: PermisosExtra = parsePermisosExtra(payload);
+    db.prepare('UPDATE usuarios SET permisos_extra = ? WHERE id = ?').run(serializarPermisosExtra(despues), id);
+
+    const cambios = AREAS_ASIGNABLES.flatMap(area => {
+      if (antes[area] === despues[area]) return [];
+      if (despues[area] === undefined) return [`${areaLabel(area)}: vuelve al nivel`];
+      return [`${areaLabel(area)}: ${despues[area] ? 'otorgado' : 'revocado'}`];
+    });
+    registrarAuditoria(db, { ...user, nivel }, {
+      area: 'usuarios', accion: 'cambiar_permisos', entidad: 'usuario', entidad_id: id,
+      detalle: `Permisos por sección de ${objetivo.nombre} (${objetivo.correo}) — ${cambios.length ? cambios.join('; ') : 'sin cambios'}`,
+    });
+    return NextResponse.json({ ok: true, permisos_extra: despues });
   }
 
   if (estado_cuenta) {
