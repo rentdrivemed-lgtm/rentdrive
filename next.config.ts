@@ -80,6 +80,11 @@ const nextConfig: NextConfig = {
         // llegan a ver esta redirección. Dejando /sw.js en 200 el kill-switch
         // se instala, borra cachés y se desregistra. El patrón de exclusión
         // por lookahead es el que documenta Next para `source`.
+        // Nota: Next compila el `source` sin flag `sensitive` (ver
+        // caseSensitiveRoutes en router-utils/filesystem.js), así que la
+        // excepción es case-INsensitive: "/Sw.Js" tampoco redirige y cae en
+        // 404. Inocuo —esa ruta no existe en ninguno de los dos dominios— pero
+        // conviene no leer este patrón como coincidencia exacta.
         source: '/:path((?!sw\\.js$).*)',
         // El `value` de un `has` de tipo host lo compila Next como regex
         // ANCLADA (`^valor$`, ver matchHas en prepare-destination.js) y sin

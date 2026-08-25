@@ -36,7 +36,20 @@ const ESTADO_LABEL: Record<string, string> = { borrador: 'Borrador', activa: 'Ac
 // (localhost o la IP LAN) para poder abrir la tarjeta desde el celular; como
 // el valor inicial es el mismo en servidor y cliente, no hay desajuste de
 // hidratación.
-const APP_ORIGIN = process.env.NEXT_PUBLIC_APP_URL || '';
+// Se normaliza a .origin (no se usa el valor crudo del entorno) porque este string
+// termina grabado en un tag NFC físico: si NEXT_PUBLIC_APP_URL trajera barra final
+// —el mismo footgun que lib/csrf.ts neutraliza con aOrigin()— el enlace saldría con
+// doble barra y quedaría escrito en hardware ya entregado, que es el único sitio del
+// sistema donde un carácter de más no se puede deshacer con un redeploy.
+const APP_ORIGIN = (() => {
+  const raw = process.env.NEXT_PUBLIC_APP_URL;
+  if (!raw) return '';
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return '';
+  }
+})();
 
 function useOrigenPublico(): string {
   const [origen, setOrigen] = useState(APP_ORIGIN);
