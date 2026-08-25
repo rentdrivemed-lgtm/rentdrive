@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth';
+import { guardArea } from '@/lib/guard';
 import { getConfig } from '@/lib/operaciones';
 import { parsePicoPlaca, placaRestringida, ultimoDigitoPlaca, fechaISOLocal } from '@/lib/pico-placa';
 import { enviarWhatsapp } from '@/lib/whatsapp';
@@ -17,10 +17,24 @@ type Afectada = {
   propietario_id: number; propietario_nombre: string; propietario_celular: string;
 };
 
-function autorizado(req: NextRequest, rol?: string): boolean {
-  if (rol === 'admin') return true;
+// Doble puerta (mismo patrón que /api/admin/mercado/check): el cron entra con su
+// secreto y sin sesión; una persona entra solo si es admin Y tiene la sección "config".
+//
+// ¿Por qué "config" y no "operaciones"? Por dos razones:
+//  1) El POST dispara WhatsApp MASIVO a clientes y propietarios reales: es un efecto
+//     externo e irreversible (no se puede "des-enviar"). Entre las dos áreas candidatas,
+//     "config" es la MÁS restrictiva —principal+socio— frente a "operaciones", que
+//     además incluye a la secretaría; se elige a propósito la que limita más quién
+//     puede lanzar mensajería masiva.
+//  2) La única entrada desde la interfaz es PicoPlacaConfig, que vive en la pestaña
+//     Configuración. Gatear por "config" evita la incoherencia de "ves el panel pero
+//     la API te contesta 403".
+// Devuelve null si puede pasar, o la respuesta de error que debe retornar la ruta.
+async function puertaDeEntrada(req: NextRequest): Promise<NextResponse | null> {
   const secret = req.headers.get('x-cron-secret') || new URL(req.url).searchParams.get('secret');
-  return !!process.env.CRON_SECRET && secret === process.env.CRON_SECRET;
+  if (process.env.CRON_SECRET && secret === process.env.CRON_SECRET) return null;
+  const g = await guardArea('config');
+  return 'error' in g ? g.error : null;
 }
 
 // Reservas activas hoy cuyo vehículo está restringido por pico y placa hoy.
@@ -47,8 +61,8 @@ function afectadasHoy(db: ReturnType<typeof getDb>, hoy: Date): Afectada[] {
 
 // GET: previsualizar a quién afectaría hoy (sin enviar).
 export async function GET(req: NextRequest) {
-  const user = await getCurrentUser();
-  if (!autorizado(req, user?.rol)) return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+  const veto = await puertaDeEntrada(req);
+  if (veto) return veto;
   const db = getDb();
   const hoy = new Date();
   return NextResponse.json({ fecha: fechaISOLocal(hoy), afectadas: afectadasHoy(db, hoy) });
@@ -56,8 +70,8 @@ export async function GET(req: NextRequest) {
 
 // POST: enviar los avisos (idempotente por reserva+día).
 export async function POST(req: NextRequest) {
-  const user = await getCurrentUser();
-  if (!autorizado(req, user?.rol)) return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+  const veto = await puertaDeEntrada(req);
+  if (veto) return veto;
 
   const db = getDb();
   const hoy = new Date();

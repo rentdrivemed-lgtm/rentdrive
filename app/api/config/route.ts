@@ -13,6 +13,15 @@ const CLAVES = [
   'referido_habilitado', 'referido_recompensa_referrer', 'referido_recompensa_referido',
 ] as const;
 
+// LECTURA COMÚN A CUALQUIER ADMIN — decidido a propósito, NO es un descuido.
+// Este GET no se gatea con el área "config" porque lo consumen tres pantallas que no
+// son la de Configuración: el dashboard admin al arrancar (resalta los carros con pico
+// y placa hoy), OperacionesPanel y ContabilidadPanel. Atarlo a "config" —principal+socio—
+// rompería esas tres vistas para la secretaría, que hoy las usa legítimamente, y el costo
+// de eso supera el beneficio de ocultarle la comisión a alguien que ya es administrador.
+// El riesgo real está en MODIFICAR, y el PUT de abajo sí exige `config_editar` (principal).
+// MEJORA FUTURA: separar las claves sensibles (comision_plataforma_pct, empresa_nit) de
+// las operativas (pico_placa) y devolver solo estas últimas a quien no tenga "config".
 export async function GET() {
   const user = await getCurrentUser();
   if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
