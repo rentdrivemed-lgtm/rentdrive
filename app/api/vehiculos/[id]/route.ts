@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
+import { adminTieneArea, sinPermisoArea } from '@/lib/guard';
 import { precioMercadoSugerido, segmentoValido } from '@/lib/precioMercado';
 
 const DOC_KEYS = ['soat', 'tecno', 'tarjeta', 'todo_riesgo'] as const;
@@ -66,12 +67,17 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   const vehiculo = db.prepare('SELECT * FROM vehiculos WHERE id = ?').get(Number(id)) as Record<string, unknown> | undefined;
   if (!vehiculo) return NextResponse.json({ error: 'No encontrado' }, { status: 404 });
 
-  if (user.rol !== 'admin' && Number(vehiculo.propietario_id) !== user.id) {
+  // Ruta compartida: la usan el propietario dueño del carro Y el admin.
+  // Rama admin -> se le exige la sección "vehiculos" (nivel + excepciones por empleado);
+  // rama propietario -> sigue mandando la pertenencia, sin tocar permisos de admin.
+  const isAdmin = user.rol === 'admin';
+  if (isAdmin) {
+    if (!adminTieneArea(db, user.id, 'vehiculos')) return sinPermisoArea();
+  } else if (Number(vehiculo.propietario_id) !== user.id) {
     return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
   }
 
   const body = await req.json();
-  const isAdmin = user.rol === 'admin';
 
   // ── Admin: review individual document ──
   if (isAdmin && body.revisar_documento) {
@@ -188,7 +194,10 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   const vehiculo = db.prepare('SELECT * FROM vehiculos WHERE id = ?').get(Number(id)) as Record<string, unknown> | undefined;
   if (!vehiculo) return NextResponse.json({ error: 'No encontrado' }, { status: 404 });
 
-  if (user.rol !== 'admin' && Number(vehiculo.propietario_id) !== user.id) {
+  // Mismo criterio que el PUT: al admin se le exige la sección, al propietario la pertenencia.
+  if (user.rol === 'admin') {
+    if (!adminTieneArea(db, user.id, 'vehiculos')) return sinPermisoArea();
+  } else if (Number(vehiculo.propietario_id) !== user.id) {
     return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
   }
 

@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS usuarios (
   password              TEXT NOT NULL,
   rol                   TEXT NOT NULL CHECK (rol IN ('admin','propietario','usuario')),
   admin_nivel           TEXT DEFAULT 'principal',
+  permisos_extra        TEXT DEFAULT '{}',   -- excepciones de permisos por empleado (JSON { area: boolean })
   documento_identidad   TEXT DEFAULT '',
   estado_cuenta         TEXT DEFAULT 'activa' CHECK (estado_cuenta IN ('activa','inactiva')),
   celular               TEXT DEFAULT '',
@@ -95,6 +96,8 @@ CREATE TABLE IF NOT EXISTS remisiones (
 
 -- ─────────────── auditoría (bitácora: quién hizo qué y a qué hora) ───────────────
 -- El nivel de admin va en usuarios.admin_nivel ('principal' | 'socio' | 'secretaria').
+-- Las excepciones por empleado van en usuarios.permisos_extra (JSON { area: boolean });
+-- si la tabla ya existía: ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS permisos_extra TEXT DEFAULT '{}';
 CREATE TABLE IF NOT EXISTS auditoria (
   id             SERIAL PRIMARY KEY,
   usuario_id     INTEGER REFERENCES usuarios(id),

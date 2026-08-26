@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
+import { adminTieneArea, sinPermisoArea } from '@/lib/guard';
 import { crearOperacionParaReserva, cargarDetalleServicio, mensajeAdmin, getConfig } from '@/lib/operaciones';
 import { enviarWhatsapp } from '@/lib/whatsapp';
 import { enviarCorreo } from '@/lib/email';
@@ -26,12 +27,17 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
   if (!reserva) return NextResponse.json({ error: 'No encontrado' }, { status: 404 });
 
-  const canUpdate =
-    user.rol === 'admin' ||
-    (user.rol === 'propietario' && Number(reserva.propietario_id) === user.id) ||
-    (user.rol === 'usuario' && Number(reserva.usuario_id) === user.id);
-
-  if (!canUpdate) return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+  // Ruta compartida (admin / propietario del vehículo / arrendatario). A la rama de
+  // administración se le exige además la sección "reservas": sin ella, un admin no
+  // puede confirmar, cancelar ni marcar pagos aunque escriba la URL a mano.
+  if (user.rol === 'admin') {
+    if (!adminTieneArea(db, user.id, 'reservas')) return sinPermisoArea();
+  } else {
+    const canUpdate =
+      (user.rol === 'propietario' && Number(reserva.propietario_id) === user.id) ||
+      (user.rol === 'usuario' && Number(reserva.usuario_id) === user.id);
+    if (!canUpdate) return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+  }
 
   if (body.marcar_no_show === true && user.rol !== 'admin') {
     return NextResponse.json({ error: 'Solo un administrador puede marcar no-show' }, { status: 403 });

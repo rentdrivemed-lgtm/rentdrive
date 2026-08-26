@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
+import { adminTieneArea, guardArea } from '@/lib/guard';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,10 +21,14 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   if (!user) return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
 
   const { id } = await params;
-  const conv = await cargarConversacion(Number(id), user.id, user.rol === 'admin');
+  // Ruta compartida: el solicitante ve SU conversación siempre. El admin ve la de
+  // cualquiera solo si tiene la sección "soporte"; sin ella entra como un usuario
+  // más y solo alcanza lo suyo (no se le abre la bandeja ajena).
+  const db = getDb();
+  const comoAdmin = user.rol === 'admin' && adminTieneArea(db, user.id, 'soporte');
+  const conv = await cargarConversacion(Number(id), user.id, comoAdmin);
   if (!conv) return NextResponse.json({ error: 'No encontrado' }, { status: 404 });
 
-  const db = getDb();
   const mensajes = db.prepare(
     'SELECT id, remitente_tipo, remitente_admin_id, contenido, created_at FROM mensajes_soporte WHERE conversacion_id = ? ORDER BY id ASC'
   ).all(Number(id));
@@ -33,11 +38,11 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
 // POST — un admin responde manualmente (nunca dispara al asistente).
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser();
-  if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+  const g = await guardArea('soporte');
+  if ('error' in g) return g.error;
+  const { user, db } = g;
 
   const { id } = await params;
-  const db = getDb();
   const conv = db.prepare('SELECT * FROM conversaciones_soporte WHERE id = ?').get(Number(id)) as ConvRow | undefined;
   if (!conv) return NextResponse.json({ error: 'No encontrado' }, { status: 404 });
 
@@ -57,12 +62,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
 // PUT — admin marca la conversación como resuelta (reactiva el modo asistente para el próximo mensaje).
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser();
-  if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+  const g = await guardArea('soporte');
+  if ('error' in g) return g.error;
+  const { db } = g;
 
   const { id } = await params;
   const body = await req.json().catch(() => ({}));
-  const db = getDb();
   const conv = db.prepare('SELECT * FROM conversaciones_soporte WHERE id = ?').get(Number(id)) as ConvRow | undefined;
   if (!conv) return NextResponse.json({ error: 'No encontrado' }, { status: 404 });
 
