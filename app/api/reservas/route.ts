@@ -7,7 +7,7 @@ import { enviarCorreo } from '@/lib/email';
 import { generarCotizacion } from '@/lib/contabilidad';
 import { consumirCreditos } from '@/lib/referidos';
 import { MIN_NOCHES_RESERVA } from '@/lib/disponibilidad-reglas';
-import { validarDireccion } from '@/lib/validacion';
+import { validarDireccion, validarCiudad, validarNombreContacto, validarTelefonoContacto } from '@/lib/validacion';
 
 export const dynamic = 'force-dynamic';
 
@@ -128,18 +128,35 @@ export async function POST(req: NextRequest) {
   try { emergenciaGuardada = JSON.parse(perfil?.contacto_emergencia || '{}') || {}; } catch { emergenciaGuardada = {}; }
 
   const txt = (v: unknown) => String(v ?? '').trim();
-  const direccionFinal = txt(perfil?.direccion) || txt(direccion);
-  const ciudadFinal    = txt(perfil?.ciudad)    || txt(ciudad);
-  const emNombreFinal  = txt(emergenciaGuardada.nombre)  || txt(emergencia_nombre);
-  const emTelFinal     = (txt(emergenciaGuardada.telefono) || txt(emergencia_tel)).replace(/\D/g, '');
+
+  // Usuarios legacy (registro viejo, casi sin validación) pueden tener guardado
+  // un valor que las reglas ACTUALES rechazarían (p. ej. ciudad "a", teléfono
+  // "300"). Priorizar "¿ya lo tiene guardado?" solo por truthiness los dejaría
+  // atascados para siempre: nunca se les volvería a pedir el dato y no tienen
+  // dónde corregirlo. Por eso se revalida el valor guardado con las MISMAS
+  // reglas que se le exigirían hoy a un dato nuevo; si no pasa, se trata como si
+  // no existiera (se pide al cliente y se puede sobrescribir con uno válido).
+  const direccionGuardada = txt(perfil?.direccion);
+  const direccionFinal = validarDireccion(direccionGuardada) === null ? direccionGuardada : txt(direccion);
+
+  const ciudadGuardada = txt(perfil?.ciudad);
+  const ciudadFinal = validarCiudad(ciudadGuardada) === null ? ciudadGuardada : txt(ciudad);
+
+  const emNombreGuardado = txt(emergenciaGuardada.nombre);
+  const emNombreFinal = validarNombreContacto(emNombreGuardado) === null ? emNombreGuardado : txt(emergencia_nombre);
+
+  const emTelGuardado = txt(emergenciaGuardada.telefono).replace(/\D/g, '');
+  const emTelEnviado = txt(emergencia_tel).replace(/\D/g, '');
+  const emTelFinal = validarTelefonoContacto(emTelGuardado) === null ? emTelGuardado : emTelEnviado;
 
   const errDireccion = validarDireccion(direccionFinal);
   if (errDireccion) return NextResponse.json({ error: errDireccion }, { status: 400 });
-  if (ciudadFinal.length < 3) return NextResponse.json({ error: 'Indica tu ciudad de residencia.' }, { status: 400 });
-  if (emNombreFinal.length < 3) return NextResponse.json({ error: 'Indica el nombre de tu contacto de emergencia.' }, { status: 400 });
-  if (emTelFinal.length < 7 || emTelFinal.length > 15) {
-    return NextResponse.json({ error: 'Indica un teléfono válido para tu contacto de emergencia.' }, { status: 400 });
-  }
+  const errCiudad = validarCiudad(ciudadFinal);
+  if (errCiudad) return NextResponse.json({ error: errCiudad }, { status: 400 });
+  const errEmNombre = validarNombreContacto(emNombreFinal);
+  if (errEmNombre) return NextResponse.json({ error: errEmNombre }, { status: 400 });
+  const errEmTel = validarTelefonoContacto(emTelFinal);
+  if (errEmTel) return NextResponse.json({ error: errEmTel }, { status: 400 });
 
   const recogidaL = recogida as Lugar | undefined;
   const entregaL  = entrega  as Lugar | undefined;

@@ -66,6 +66,28 @@ export function validarDireccion(direccion: string): string | null {
   return null;
 }
 
+/** Ciudad de residencia: solo un mínimo de longitud (no hay catálogo cerrado). */
+export function validarCiudad(ciudad: string): string | null {
+  if ((ciudad || '').trim().length < 3) return 'Indica tu ciudad de residencia.';
+  return null;
+}
+
+/** Nombre del contacto de emergencia: mismo criterio mínimo que la ciudad. */
+export function validarNombreContacto(nombre: string): string | null {
+  if ((nombre || '').trim().length < 3) return 'Indica el nombre de tu contacto de emergencia.';
+  return null;
+}
+
+/**
+ * Teléfono del contacto de emergencia: solo dígitos, 7-15. Más laxo que
+ * `validarCelular` porque puede ser de cualquier país y aquí no se pide indicativo.
+ */
+export function validarTelefonoContacto(telefono: string): string | null {
+  const limpio = (telefono || '').replace(/\D/g, '');
+  if (limpio.length < 7 || limpio.length > 15) return 'Indica un teléfono válido para tu contacto de emergencia.';
+  return null;
+}
+
 export type TipoDocumentoIdentidad = 'cedula' | 'cedula_ext' | 'pasaporte' | string;
 
 /** Devuelve el mensaje de error, o null si el número de documento es válido para ese tipo. */

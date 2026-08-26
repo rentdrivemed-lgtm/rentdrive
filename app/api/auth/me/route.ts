@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
 import { getDb } from '@/lib/db';
-import { validarCelular, validarDireccion, validarDocumentoIdentidad } from '@/lib/validacion';
+import { validarCelular, validarDireccion, validarDocumentoIdentidad, validarNombreContacto, validarTelefonoContacto } from '@/lib/validacion';
 import { referidoHabilitado } from '@/lib/referidos';
 
-// contacto_emergencia se devuelve (solo lectura) para que el flujo de reserva sepa
-// si ya lo tiene guardado y no se lo vuelva a pedir. No está en CAMPOS_EDITABLES:
-// se guarda desde /api/reservas, que es donde se valida.
+// contacto_emergencia se devuelve para que el flujo de reserva sepa si ya lo
+// tiene guardado y no se lo vuelva a pedir. También se puede editar desde acá
+// (CAMPOS_EDITABLES abajo): es la única vía de autoservicio que tiene hoy un
+// usuario con un contacto de emergencia legacy inválido para corregirlo, ya que
+// no hay página de perfil dedicada para ese campo todavía.
 const CAMPOS_SELECT = 'tipo_documento, documento_identidad, celular, celular_indicativo, direccion, ciudad, contacto_emergencia, cedula_url, cedula_url_dorso, banco, numero_cuenta, certificado_bancario_url, codigo_referido, creditos_referido, admin_nivel, permisos_extra';
 
 export async function GET() {
@@ -21,7 +23,9 @@ export async function GET() {
 }
 
 // Campos que el usuario puede editar de su propio perfil.
-const CAMPOS_EDITABLES = ['tipo_documento', 'documento_identidad', 'celular', 'celular_indicativo', 'direccion', 'ciudad', 'cedula_url', 'cedula_url_dorso', 'banco', 'numero_cuenta', 'certificado_bancario_url'] as const;
+// contacto_emergencia se maneja aparte porque es un objeto (nombre + teléfono),
+// no un string plano como el resto: se serializa a JSON al guardar.
+const CAMPOS_EDITABLES = ['tipo_documento', 'documento_identidad', 'celular', 'celular_indicativo', 'direccion', 'ciudad', 'cedula_url', 'cedula_url_dorso', 'banco', 'numero_cuenta', 'certificado_bancario_url', 'contacto_emergencia'] as const;
 
 export async function PUT(req: NextRequest) {
   const user = await getCurrentUser();
@@ -45,13 +49,24 @@ export async function PUT(req: NextRequest) {
     const err = validarDireccion(String(body.direccion));
     if (err) return NextResponse.json({ error: err }, { status: 400 });
   }
+  let contactoEmergenciaJson: string | null = null;
+  if ('contacto_emergencia' in body) {
+    const c = (body.contacto_emergencia || {}) as { nombre?: unknown; telefono?: unknown };
+    const nombre = String(c.nombre ?? '').trim();
+    const telefono = String(c.telefono ?? '').replace(/\D/g, '');
+    const errNombre = validarNombreContacto(nombre);
+    if (errNombre) return NextResponse.json({ error: errNombre }, { status: 400 });
+    const errTelefono = validarTelefonoContacto(telefono);
+    if (errTelefono) return NextResponse.json({ error: errTelefono }, { status: 400 });
+    contactoEmergenciaJson = JSON.stringify({ nombre, telefono });
+  }
 
   const sets: string[] = [];
   const valores: unknown[] = [];
   for (const campo of CAMPOS_EDITABLES) {
     if (campo in body) {
       sets.push(`${campo} = ?`);
-      valores.push(body[campo] == null ? '' : String(body[campo]));
+      valores.push(campo === 'contacto_emergencia' ? contactoEmergenciaJson : (body[campo] == null ? '' : String(body[campo])));
     }
   }
   if (sets.length === 0) {
