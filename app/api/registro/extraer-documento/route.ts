@@ -21,12 +21,28 @@ export const runtime = 'nodejs';
 //    real necesita 1-2 (cédula y licencia), más algún reintento por foto movida.
 // 3) Techo global por hora: aunque alguien rote IPs (VPN, botnet), el gasto de IA
 //    queda acotado. Se prefiere degradar el atajo (la persona escribe a mano) antes
-//    que quemar el presupuesto.
-// 4) Tamaño: se rechaza por Content-Length antes de leer el body, y otra vez por
-//    file.size. Evita que suban un archivo enorme solo para gastar memoria/tokens.
+//    que quemar el presupuesto. IMPORTANTE: este techo solo se consume DESPUÉS de
+//    validar tipo/tamaño real del archivo (ver más abajo) — si contara desde el
+//    principio, cualquiera podría agotar el cupo de TODOS mandando basura que ni
+//    siquiera llega a costar una consulta de IA. El límite por IP (6/10min, 40/día)
+//    sí cuenta cualquier intento, válido o no: ese es para frenar abuso de una sola
+//    fuente, no para cuidar el gasto de IA.
+// 4) Tamaño: se corta en dos capas. (a) Content-Length declarado, rechazado antes
+//    de tocar el body — pero un cliente puede omitir ese header (p. ej. chunked) y
+//    saltarse esta capa por completo. (b) Por eso el body se lee como stream con un
+//    límite duro impuesto mientras se lee (`formDataConLimite`, abajo): si en algún
+//    punto de la lectura se supera MAX_BYTES, se corta ahí mismo, ANTES de tener el
+//    FormData completo en memoria. Ver el comentario de esa función para el detalle
+//    y la limitación conocida.
 // 5) Tipo MIME REAL: no se confía en `file.type` (lo pone el cliente y se falsifica
 //    trivialmente); se leen los bytes mágicos. Solo JPG/PNG/WebP — nada de PDF, que
 //    consume muchos más tokens y no aporta para una foto de cédula.
+// 6) Consentimiento (Ley 1581 de 2012): el checkbox del formulario es solo la
+//    superficie visible. El enforcement real es este endpoint: si no llega
+//    `consiente=true` en el FormData, se rechaza ANTES de tocar el archivo o llamar
+//    a la IA. Sin esto, cualquiera que le pegue directo al endpoint (curl, etc.) se
+//    saltaría por completo el aviso de tratamiento de datos que se le muestra a la
+//    persona en pantalla.
 //
 // La imagen NO se guarda en ningún lado: va a la IA y se descarta. Además de ser
 // mejor para la privacidad de alguien que aún no es usuario, evita que este
@@ -57,6 +73,57 @@ export async function GET() {
   return NextResponse.json({ disponible: tieneClaveAnthropic() });
 }
 
+const PAYLOAD_TOO_LARGE = 'PAYLOAD_TOO_LARGE';
+
+/**
+ * Lee el body multipart como STREAM, cortando en cuanto se supera `maxBytes`, en
+ * vez de esperar a que `req.formData()` termine de bufferizar todo el cuerpo.
+ *
+ * Por qué hace falta además del chequeo de Content-Length de arriba: ese header
+ * lo declara el cliente y es perfectamente válido no mandarlo (p. ej. con
+ * Transfer-Encoding: chunked); si falta, el guard de Content-Length nunca corre y
+ * `await req.formData()` bufferizaría el cuerpo completo en memoria ANTES de que
+ * el código llegue a revisar `file.size`. Envolver el stream en un
+ * `TransformStream` que corta al vuelo cierra ese hueco: el límite se impone
+ * mientras se está leyendo, sin depender de ningún header declarado por el cliente.
+ *
+ * Limitación conocida y verificada: esto limita bytes de RED (lo que via por el
+ * stream), no garantiza un techo de memoria de proceso *exacto* — Node puede
+ * mantener en buffer algunos chunks ya leídos antes de que el corte se propague,
+ * y decodificar/reconstruir el FormData todavía usa memoria proporcional a lo ya
+ * leído hasta el corte (como mucho `maxBytes` más el tamaño de un chunk). Es una
+ * cota real y muy por debajo de "sin límite", pero no es una garantía de memoria
+ * bit-exacta.
+ */
+async function formDataConLimite(req: NextRequest, maxBytes: number): Promise<FormData> {
+  const body = req.body;
+  if (!body) return req.formData();
+
+  let total = 0;
+  const limitador = new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      total += chunk.byteLength;
+      if (total > maxBytes) {
+        controller.error(new Error(PAYLOAD_TOO_LARGE));
+        return;
+      }
+      controller.enqueue(chunk);
+    },
+  });
+
+  const streamLimitado = body.pipeThrough(limitador);
+  const reqLimitada = new Request(req.url, {
+    method: req.method,
+    headers: req.headers,
+    body: streamLimitado,
+    // Node/undici lo exige cuando el body es un stream (no hay red real de por
+    // medio acá, pero el constructor de Request lo valida igual).
+    duplex: 'half',
+  } as RequestInit & { duplex: 'half' });
+
+  return reqLimitada.formData();
+}
+
 export async function POST(req: NextRequest) {
   const errOrigen = origenNoPermitido(req);
   if (errOrigen) return errOrigen;
@@ -83,15 +150,12 @@ export async function POST(req: NextRequest) {
       { status: 429 },
     );
   }
-  const esperaGlobal = consumirIntento('registro-ocr:global', GLOBAL_MAX_HORA, HORA_MS);
-  if (esperaGlobal !== null) {
-    return NextResponse.json(
-      { error: 'La lectura automática está saturada en este momento. Puedes llenar el formulario a mano.' },
-      { status: 429 },
-    );
-  }
+  // OJO: el techo GLOBAL (registro-ocr:global) NO se consume acá todavía — se
+  // consume más abajo, solo si la request pasa validación de tipo/tamaño real
+  // (ver comentario 3 al inicio del archivo).
 
-  // Corte por Content-Length antes de bufferizar nada.
+  // Corte por Content-Length antes de bufferizar nada (capa 1; ver formDataConLimite
+  // para la capa 2, que cubre el caso sin este header).
   const declarado = Number(req.headers.get('content-length') || 0);
   if (declarado && declarado > MAX_BYTES + 64 * 1024) {
     return NextResponse.json({ error: 'La imagen no puede pesar más de 8 MB.' }, { status: 413 });
@@ -99,9 +163,24 @@ export async function POST(req: NextRequest) {
 
   let formData: FormData;
   try {
-    formData = await req.formData();
-  } catch {
+    formData = await formDataConLimite(req, MAX_BYTES + 64 * 1024);
+  } catch (e) {
+    if (e instanceof Error && e.message === PAYLOAD_TOO_LARGE) {
+      return NextResponse.json({ error: 'La imagen no puede pesar más de 8 MB.' }, { status: 413 });
+    }
     return NextResponse.json({ error: 'No pudimos leer el archivo enviado.' }, { status: 400 });
+  }
+
+  // Consentimiento (Ley 1581): enforcement real en servidor. Se revisa apenas se
+  // tiene el FormData, ANTES de mirar el tipo/archivo o llamar a la IA. La casilla
+  // del formulario (app/(auth)/registro/page.tsx) es solo la superficie visible de
+  // este requisito — sin este chequeo, un curl directo se lo saltaría entero.
+  const consiente = String(formData.get('consiente') || '') === 'true';
+  if (!consiente) {
+    return NextResponse.json(
+      { error: 'Debes autorizar el tratamiento de la foto de tu documento para usar la lectura automática.' },
+      { status: 400 },
+    );
   }
 
   const tipoRaw = String(formData.get('tipo') || '');
@@ -127,6 +206,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       { error: 'Solo aceptamos fotos en JPG, PNG o WebP. Toma una foto del documento con la cámara.' },
       { status: 400 },
+    );
+  }
+
+  // Recién acá se sabe que la request va a costar una consulta real de IA:
+  // consume el techo global en este punto, no antes (comentario 3 al inicio).
+  const esperaGlobal = consumirIntento('registro-ocr:global', GLOBAL_MAX_HORA, HORA_MS);
+  if (esperaGlobal !== null) {
+    return NextResponse.json(
+      { error: 'La lectura automática está saturada en este momento. Puedes llenar el formulario a mano.' },
+      { status: 429 },
     );
   }
 

@@ -140,6 +140,10 @@ function RegistroForm() {
       const fd = new FormData();
       fd.append('file', imagen, 'documento.jpg');
       fd.append('tipo', tipo);
+      // El botón ya está deshabilitado sin la casilla marcada, pero el
+      // enforcement real vive en el servidor (ver route.ts): esto es lo que
+      // ese endpoint valida, no la deshabilitación del botón.
+      fd.append('consiente', String(consiente));
       const res = await fetch('/api/registro/extraer-documento', { method: 'POST', body: fd });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
