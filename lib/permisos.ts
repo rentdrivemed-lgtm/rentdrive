@@ -43,7 +43,12 @@ export const AREA_NIVELES: Record<string, AdminNivel[]> = {
   tableros:     ['principal', 'socio', 'secretaria'],
   // Acciones sensibles (gating fino, más allá de ver la sección)
   usuarios_gestion: ['principal'], // crear cuentas de equipo, cambiar nivel/estado, resetear clave
-  config_editar:    ['principal'], // guardar comisión / config
+  // `config_editar` se partió en dos casillas independientes (ver nota más abajo).
+  // `config_editar_operativo` conserva los mismos niveles base que tenía `config_editar`.
+  config_editar_operativo:  ['principal'], // admin_whatsapp, pico_placa
+  // `config_editar_financiero` toca dinero (comisión) y datos fiscales (NIT): nunca
+  // 'secretaria' por defecto, aunque sí es asignable por excepción como cualquier otra área.
+  config_editar_financiero: ['principal', 'socio'], // comisión, empresa/NIT, referidos
 };
 
 // ── Permisos por empleado (excepciones al nivel) ─────────────────────────────
@@ -57,8 +62,12 @@ export type PermisosExtra = Record<string, boolean>;
 // con esa casilla podría auto-asignarse todo y escalar a dueño. Por eso queda
 // atada al nivel `principal` y NUNCA es asignable por excepción.
 //
-// `config_editar` SÍ es asignable: solo permite guardar la comisión / pico y placa;
-// no reparte permisos ni crea cuentas, así que no habilita escalada de privilegios.
+// `config_editar_operativo` y `config_editar_financiero` SÍ son asignables: entre
+// las dos solo permiten guardar config del sistema (whatsapp, pico y placa, comisión,
+// datos fiscales, referidos); ninguna reparte permisos ni crea cuentas, así que no
+// habilitan escalada de privilegios. Se separaron en dos casillas para que dar acceso
+// a ajustar pico y placa (operativo) no implique dar acceso a la comisión de la
+// plataforma ni al NIT de la empresa (financiero) — ver PUT /api/config.
 export const AREA_NO_ASIGNABLE = 'usuarios_gestion';
 
 // Lista blanca: únicas claves que pueden aparecer en un mapa de excepciones.
@@ -87,7 +96,8 @@ export const AREA_LABEL: Record<string, string> = {
   calendario: 'Calendario',
   documentos: 'Documentos',
   tableros: 'Tableros',
-  config_editar: 'Guardar cambios de configuración',
+  config_editar_operativo: 'Config. operativa (WhatsApp, pico y placa)',
+  config_editar_financiero: 'Config. financiera (comisión, NIT, referidos)',
   usuarios_gestion: 'Gestión del equipo',
 };
 
@@ -101,7 +111,7 @@ export function areaLabel(area: string): string {
 const GRUPOS_BASE: { titulo: string; areas: string[] }[] = [
   { titulo: 'Panel de administración', areas: ['usuarios', 'vehiculos', 'reservas', 'contabilidad', 'mercado', 'calculadora', 'leads', 'soporte', 'nfc', 'config', 'auditoria'] },
   { titulo: 'Panel de control del equipo', areas: ['panel', 'operaciones', 'tareas', 'calendario', 'documentos', 'tableros'] },
-  { titulo: 'Acciones sensibles', areas: ['config_editar'] },
+  { titulo: 'Acciones sensibles', areas: ['config_editar_operativo', 'config_editar_financiero'] },
 ];
 
 export const GRUPOS_AREAS: { titulo: string; areas: string[] }[] = (() => {
