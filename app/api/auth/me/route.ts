@@ -4,7 +4,10 @@ import { getDb } from '@/lib/db';
 import { validarCelular, validarDireccion, validarDocumentoIdentidad } from '@/lib/validacion';
 import { referidoHabilitado } from '@/lib/referidos';
 
-const CAMPOS_SELECT = 'tipo_documento, documento_identidad, celular, celular_indicativo, direccion, ciudad, cedula_url, cedula_url_dorso, banco, numero_cuenta, certificado_bancario_url, codigo_referido, creditos_referido, admin_nivel';
+// contacto_emergencia se devuelve (solo lectura) para que el flujo de reserva sepa
+// si ya lo tiene guardado y no se lo vuelva a pedir. No está en CAMPOS_EDITABLES:
+// se guarda desde /api/reservas, que es donde se valida.
+const CAMPOS_SELECT = 'tipo_documento, documento_identidad, celular, celular_indicativo, direccion, ciudad, contacto_emergencia, cedula_url, cedula_url_dorso, banco, numero_cuenta, certificado_bancario_url, codigo_referido, creditos_referido, admin_nivel';
 
 export async function GET() {
   const user = await getCurrentUser();
