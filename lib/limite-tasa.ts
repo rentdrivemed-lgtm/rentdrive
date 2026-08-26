@@ -47,16 +47,22 @@ export function consumirIntento(clave: string, max: number, ventanaMs: number): 
 }
 
 /**
- * IP del cliente detrás del proxy de Railway. `x-forwarded-for` es falsificable
- * por quien hable directo con el servidor, pero en Railway el borde lo reescribe,
- * así que el primer valor es la IP real del visitante. Se usa solo para limitar
- * tasa (nunca para autorizar).
+ * IP del cliente detrás del proxy de Railway. `x-forwarded-for` puede traer una
+ * cadena de varios saltos ("cliente, proxy1, proxy2, ..."): cada proxy AGREGA su
+ * valor al final de lo que recibió, no lo reemplaza. Con exactamente UN proxy
+ * confiable delante de la app (el borde de Railway), el único valor en el que se
+ * puede confiar es el ÚLTIMO: es el que puso ese proxy al recibir la conexión
+ * directa, y un atacante no puede escribir nada después de su propio salto. El
+ * PRIMER valor, en cambio, lo pone el cliente original en su request y lo puede
+ * falsificar libremente (`X-Forwarded-For: 1.2.3.4` inventado). Se usa solo para
+ * limitar tasa (nunca para autorizar).
  */
 export function ipCliente(req: Request): string {
   const xff = req.headers.get('x-forwarded-for');
   if (xff) {
-    const primera = xff.split(',')[0].trim();
-    if (primera) return primera;
+    const partes = xff.split(',').map(s => s.trim()).filter(Boolean);
+    const ultima = partes.pop();
+    if (ultima) return ultima;
   }
   return req.headers.get('x-real-ip')?.trim() || 'desconocida';
 }
