@@ -11,7 +11,7 @@ import CalculadoraPanel from '@/components/CalculadoraPanel';
 import NfcCardsPanel from '@/components/NfcCardsPanel';
 import {
   puede, normalizarNivel, NIVEL_LABEL, NIVELES, GRUPOS_AREAS, areaLabel,
-  parsePermisosExtra, type AdminNivel, type PermisosExtra,
+  parsePermisosExtra, type AdminNivel, type PermisosExtra, type PermisosExtraDelta,
 } from '@/lib/permisos';
 import { parsePicoPlaca, picoPlacaVacio, placaRestringida, type PicoPlaca } from '@/lib/pico-placa';
 import { fechaHoraRecogida, esNoShowAplicable } from '@/lib/cancelacion';
@@ -194,9 +194,13 @@ const firmaPermisos = (p: PermisosExtra) =>
 // guardan las EXCEPCIONES (lo que se aparta de esa plantilla). Por eso, si vuelves a
 // marcar/desmarcar hasta el valor del nivel, la excepción desaparece sola y la casilla
 // vuelve a decir "nivel": así se ve de un vistazo qué es heredado y qué es a la medida.
-function PermisosSecciones({ u, draft, onToggle, onReset, onGuardar, guardando, msg }: {
+function PermisosSecciones({ u, draft, baseline, onToggle, onReset, onGuardar, guardando, msg }: {
   u: Usuario;
   draft: PermisosExtra;
+  // Snapshot que tenía este panel al abrirse (no necesariamente el u.permisos_extra
+  // más reciente, que puede haber cambiado por otra sesión). Contra esto se calcula
+  // el delta que se manda al guardar, para no pisar cambios ajenos.
+  baseline: PermisosExtra;
   onToggle: (area: string) => void;
   onReset: () => void;
   onGuardar: () => void;
@@ -204,8 +208,7 @@ function PermisosSecciones({ u, draft, onToggle, onReset, onGuardar, guardando, 
   msg: string;
 }) {
   const nivelU = normalizarNivel(u.admin_nivel);
-  const guardado = parsePermisosExtra(u.permisos_extra);
-  const cambiado = firmaPermisos(draft) !== firmaPermisos(guardado);
+  const cambiado = firmaPermisos(draft) !== firmaPermisos(baseline);
   const nExcepciones = Object.keys(draft).length;
 
   return (
@@ -456,14 +459,34 @@ export default function DashboardAdmin() {
   // blanca de áreas, no editarse a uno mismo, `usuarios_gestion` prohibida).
   const [permisosAbierto, setPermisosAbierto] = useState<number | null>(null);
   const [permisosDraft, setPermisosDraft] = useState<Record<number, PermisosExtra>>({});
+  // Snapshot de permisos_extra que tenía cada panel al abrirse. Se usa para calcular
+  // el DELTA a enviar (solo lo que esta sesión cambió), en vez de mandar el mapa
+  // completo del draft y arriesgarse a pisar cambios de otra sesión concurrente.
+  const [permisosBaseline, setPermisosBaseline] = useState<Record<number, PermisosExtra>>({});
   const [permisosMsg, setPermisosMsg] = useState('');
   const [guardandoPermisos, setGuardandoPermisos] = useState(false);
 
   const abrirPermisos = (u: Usuario) => {
     setPermisosMsg('');
     if (permisosAbierto === u.id) { setPermisosAbierto(null); return; }
-    setPermisosDraft(prev => ({ ...prev, [u.id]: parsePermisosExtra(u.permisos_extra) }));
+    const actual = parsePermisosExtra(u.permisos_extra);
+    setPermisosDraft(prev => ({ ...prev, [u.id]: actual }));
+    setPermisosBaseline(prev => ({ ...prev, [u.id]: actual }));
     setPermisosAbierto(u.id);
+  };
+
+  // Diferencia entre lo que había al abrir el panel y lo que quedó en el draft:
+  // solo esas claves se mandan al servidor (null = "quitar la excepción, volver al nivel").
+  const deltaPermisos = (baseline: PermisosExtra, draft: PermisosExtra): PermisosExtraDelta => {
+    const delta: PermisosExtraDelta = {};
+    const claves = new Set([...Object.keys(baseline), ...Object.keys(draft)]);
+    for (const clave of claves) {
+      const antes = baseline[clave];
+      const despues = draft[clave];
+      if (antes === despues) continue;
+      delta[clave] = despues === undefined ? null : despues;
+    }
+    return delta;
   };
 
   const alternarArea = (u: Usuario, area: string) => {
@@ -483,17 +506,20 @@ export default function DashboardAdmin() {
 
   const guardarPermisos = async (u: Usuario) => {
     const draft = permisosDraft[u.id] ?? parsePermisosExtra(u.permisos_extra);
+    const baseline = permisosBaseline[u.id] ?? parsePermisosExtra(u.permisos_extra);
+    const delta = deltaPermisos(baseline, draft);
     setGuardandoPermisos(true); setPermisosMsg('');
     try {
       const res = await fetch('/api/admin/usuarios', {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: u.id, permisos_extra: draft }),
+        body: JSON.stringify({ id: u.id, permisos_extra: delta }),
       });
       const d = await res.json().catch(() => ({}));
       if (res.ok) {
         const guardados = parsePermisosExtra(d.permisos_extra ?? draft);
         setUsuarios(prev => prev.map(x => x.id === u.id ? { ...x, permisos_extra: JSON.stringify(guardados) } : x));
         setPermisosDraft(prev => ({ ...prev, [u.id]: guardados }));
+        setPermisosBaseline(prev => ({ ...prev, [u.id]: guardados }));
         setPermisosMsg('✓ Permisos guardados.');
         setTimeout(() => setPermisosMsg(''), 4000);
       } else {
@@ -924,6 +950,7 @@ export default function DashboardAdmin() {
                         <PermisosSecciones
                           u={u}
                           draft={permisosDraft[u.id] ?? parsePermisosExtra(u.permisos_extra)}
+                          baseline={permisosBaseline[u.id] ?? parsePermisosExtra(u.permisos_extra)}
                           onToggle={area => alternarArea(u, area)}
                           onReset={() => restablecerPermisos(u)}
                           onGuardar={() => guardarPermisos(u)}

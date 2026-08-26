@@ -4,6 +4,7 @@ import { guardArea } from '@/lib/guard';
 import { getConfig } from '@/lib/operaciones';
 import { parsePicoPlaca, placaRestringida, ultimoDigitoPlaca, fechaISOLocal } from '@/lib/pico-placa';
 import { enviarWhatsapp } from '@/lib/whatsapp';
+import { secretoCronValido } from '@/lib/cron-secret';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -32,7 +33,7 @@ type Afectada = {
 // Devuelve null si puede pasar, o la respuesta de error que debe retornar la ruta.
 async function puertaDeEntrada(req: NextRequest): Promise<NextResponse | null> {
   const secret = req.headers.get('x-cron-secret') || new URL(req.url).searchParams.get('secret');
-  if (process.env.CRON_SECRET && secret === process.env.CRON_SECRET) return null;
+  if (secretoCronValido(secret, process.env.CRON_SECRET)) return null;
   const g = await guardArea('config');
   return 'error' in g ? g.error : null;
 }

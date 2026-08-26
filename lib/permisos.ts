@@ -135,6 +135,23 @@ export function serializarPermisosExtra(p: PermisosExtra): string {
   return JSON.stringify(parsePermisosExtra(p));
 }
 
+// Delta de permisos: solo las claves que el cliente cambió desde que abrió el panel
+// (no el mapa completo). `null` significa "quitar la excepción" (vuelve al nivel);
+// un booleano fija la excepción a ese valor. Se fusiona sobre el valor ACTUAL en BD
+// (releído en el momento de escribir) para no pisar cambios de otra sesión que haya
+// tocado otras claves del mismo empleado mientras tanto — ver PUT /api/admin/usuarios.
+export type PermisosExtraDelta = Record<string, boolean | null>;
+
+export function fusionarPermisosExtra(actual: PermisosExtra, delta: PermisosExtraDelta): PermisosExtra {
+  const out: PermisosExtra = { ...parsePermisosExtra(actual) };
+  for (const [clave, valor] of Object.entries(delta)) {
+    if (!esAreaAsignable(clave)) continue;
+    if (valor === null) delete out[clave];
+    else if (typeof valor === 'boolean') out[clave] = valor;
+  }
+  return out;
+}
+
 // Permiso efectivo. El tercer parámetro es OPCIONAL: sin él, el comportamiento es
 // idéntico al de siempre (solo la matriz por nivel).
 export function puede(nivel: AdminNivel, area: string, extra?: PermisosExtra | null): boolean {

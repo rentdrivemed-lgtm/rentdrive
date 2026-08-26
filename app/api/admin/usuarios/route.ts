@@ -4,7 +4,8 @@ import { guardArea } from '@/lib/guard';
 import {
   registrarAuditoria, normalizarNivel, esNivel, NIVEL_LABEL,
   AREAS_ASIGNABLES, AREA_NO_ASIGNABLE, areaLabel, esAreaAsignable,
-  parsePermisosExtra, serializarPermisosExtra, type PermisosExtra,
+  parsePermisosExtra, serializarPermisosExtra, fusionarPermisosExtra,
+  type PermisosExtraDelta,
 } from '@/lib/permisos';
 
 export async function GET() {
@@ -116,6 +117,9 @@ export async function PUT(req: NextRequest) {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
       return NextResponse.json({ error: 'Formato de permisos inválido.' }, { status: 400 });
     }
+    // El cliente manda un DELTA (solo las claves que tocó desde que abrió el panel),
+    // no el mapa completo. `null` = quitar la excepción (volver al nivel).
+    const delta: PermisosExtraDelta = {};
     for (const [clave, valor] of Object.entries(payload as Record<string, unknown>)) {
       if (clave === AREA_NO_ASIGNABLE) {
         return NextResponse.json({ error: 'La gestión del equipo no se puede asignar por casilla: es exclusiva del administrador principal.' }, { status: 403 });
@@ -123,14 +127,25 @@ export async function PUT(req: NextRequest) {
       if (!esAreaAsignable(clave)) {
         return NextResponse.json({ error: `Sección desconocida: ${clave}` }, { status: 400 });
       }
-      if (typeof valor !== 'boolean') {
-        return NextResponse.json({ error: `El valor de "${clave}" debe ser verdadero o falso.` }, { status: 400 });
+      if (valor !== null && typeof valor !== 'boolean') {
+        return NextResponse.json({ error: `El valor de "${clave}" debe ser verdadero, falso o nulo (para quitar la excepción).` }, { status: 400 });
       }
+      delta[clave] = valor as boolean | null;
     }
 
-    const antes = parsePermisosExtra(objetivo.permisos_extra);
-    const despues: PermisosExtra = parsePermisosExtra(payload);
-    db.prepare('UPDATE usuarios SET permisos_extra = ? WHERE id = ?').run(serializarPermisosExtra(despues), id);
+    // Se relee `permisos_extra` de la BD justo antes de escribir (dentro de una
+    // transacción) y se fusiona el delta encima, en vez de reemplazar el mapa
+    // completo con el draft que el navegador tenía en memoria. Así, si otra sesión
+    // cambió una clave distinta del mismo empleado mientras esta editaba, ambos
+    // cambios quedan aplicados (no se pisan entre sí).
+    const fusionar = db.transaction((idObjetivo: number, cambios: PermisosExtraDelta) => {
+      const fila = db.prepare('SELECT permisos_extra FROM usuarios WHERE id = ?').get(idObjetivo) as { permisos_extra?: string } | undefined;
+      const actual = parsePermisosExtra(fila?.permisos_extra);
+      const fusionado = fusionarPermisosExtra(actual, cambios);
+      db.prepare('UPDATE usuarios SET permisos_extra = ? WHERE id = ?').run(serializarPermisosExtra(fusionado), idObjetivo);
+      return { antes: actual, despues: fusionado };
+    });
+    const { antes, despues } = fusionar(id, delta);
 
     const cambios = AREAS_ASIGNABLES.flatMap(area => {
       if (antes[area] === despues[area]) return [];
