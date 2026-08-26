@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth';
+import { guardArea } from '@/lib/guard';
 import { enviarCorreo } from '@/lib/email';
 import { enviarWhatsappCodigo } from '@/lib/whatsapp';
 
@@ -58,13 +58,13 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ id: result.lastInsertRowid, enviado: envio.enviado, detalle: envio.detalle });
 }
 
+// El POST de arriba es público (formulario de la calculadora de propietarios);
+// este GET es la bandeja de leads del panel admin -> exige la sección "leads".
 export async function GET() {
-  const user = await getCurrentUser();
-  if (!user || user.rol !== 'admin') {
-    return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
-  }
+  const g = await guardArea('leads');
+  if ('error' in g) return g.error;
+  const { db } = g;
 
-  const db = getDb();
   const leads = db.prepare(
     'SELECT id, nombre, correo, celular, tipo_vehiculo, canal_verificacion, verificado, created_at FROM leads_propietarios ORDER BY created_at DESC'
   ).all();

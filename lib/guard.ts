@@ -4,21 +4,42 @@ import { NextResponse } from 'next/server';
 import type Database from 'better-sqlite3';
 import { getCurrentUser, type UserPayload } from './auth';
 import { getDb } from './db';
-import { nivelDe, puede, type AdminNivel } from './permisos';
+import { permisosDe, puede, type AdminNivel, type PermisosExtra } from './permisos';
 
-export type GuardOk = { user: UserPayload; nivel: AdminNivel; db: Database.Database };
+export type GuardOk = { user: UserPayload; nivel: AdminNivel; db: Database.Database; permisos: PermisosExtra };
 
-// Devuelve { user, nivel, db } si el usuario es admin y su nivel puede acceder al área,
+// Devuelve { user, nivel, permisos, db } si el usuario es admin y puede acceder al área,
 // o { error: NextResponse } (403) en caso contrario.
+// El permiso efectivo = matriz por nivel + excepciones por empleado (usuarios.permisos_extra).
+// El servidor es la única fuente de verdad: que la UI oculte una pestaña es cosmético.
 export async function guardArea(area: string): Promise<GuardOk | { error: NextResponse }> {
   const user = await getCurrentUser();
   if (!user || user.rol !== 'admin') {
     return { error: NextResponse.json({ error: 'No autorizado' }, { status: 403 }) };
   }
   const db = getDb();
-  const nivel = nivelDe(db, user.id);
-  if (!puede(nivel, area)) {
+  const { nivel, extra } = permisosDe(db, user.id);
+  if (!puede(nivel, area, extra)) {
     return { error: NextResponse.json({ error: 'No tienes permiso para esta sección.' }, { status: 403 }) };
   }
-  return { user, nivel, db };
+  return { user, nivel, db, permisos: extra };
+}
+
+// ── Endpoints compartidos entre roles ────────────────────────────────────────
+// Hay rutas que atienden a varios roles a la vez: el cliente consulta SUS reservas,
+// el propietario edita SUS vehículos y el admin ve/edita todo. Ahí `guardArea` no
+// sirve: exige rol admin y le respondería 403 al cliente o al propietario legítimo.
+//
+// Estos dos helpers permiten partir el chequeo en dos ramas dentro de la misma ruta:
+//   · rama de administración → exigir el área con `adminTieneArea` (nivel + excepciones);
+//   · rama del dueño de los datos → dejar intacta la lógica de pertenencia que ya existía.
+// Así, revocar una casilla cierra de verdad la puerta del admin sin tocar a nadie más.
+export function adminTieneArea(db: Database.Database, userId: number, area: string): boolean {
+  const { nivel, extra } = permisosDe(db, userId);
+  return puede(nivel, area, extra);
+}
+
+// Respuesta única para "eres admin, pero esta sección no está entre tus permisos".
+export function sinPermisoArea(): NextResponse {
+  return NextResponse.json({ error: 'No tienes permiso para esta sección.' }, { status: 403 });
 }

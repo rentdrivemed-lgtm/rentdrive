@@ -1,6 +1,6 @@
 'use client';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { normalizarNivel, NIVEL_LABEL, type AdminNivel } from '@/lib/permisos';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { normalizarNivel, parsePermisosExtra, puede, NIVEL_LABEL, type AdminNivel, type PermisosExtra } from '@/lib/permisos';
 import PanelHoy from '@/components/control/PanelHoy';
 import TareasBoard from '@/components/control/TareasBoard';
 import CalendarioBoard from '@/components/control/CalendarioBoard';
@@ -22,6 +22,7 @@ const NAV: { key: Seccion; label: string; listo: boolean }[] = [
 
 export default function ControlApp() {
   const [nivel, setNivel] = useState<AdminNivel>('secretaria');
+  const [permisos, setPermisos] = useState<PermisosExtra>({});
   const [nombre, setNombre] = useState('');
   const [seccion, setSeccion] = useState<Seccion>('panel');
   const [notifs, setNotifs] = useState<Notif[]>([]);
@@ -43,6 +44,7 @@ export default function ControlApp() {
       .then(d => {
         if (d?.user) {
           setNivel(normalizarNivel(d.user.admin_nivel));
+          setPermisos(parsePermisosExtra(d.user.permisos_extra));
           setNombre(d.user.nombre || '');
         }
       })
@@ -71,6 +73,17 @@ export default function ControlApp() {
     const t = setInterval(cargarNotifs, 12000);
     return () => clearInterval(t);
   }, [cargarNotifs]);
+
+  // Los módulos visibles salen del permiso efectivo (nivel + excepciones por empleado),
+  // igual que las pestañas del panel admin. Las APIs de /api/control/* ya devuelven 403
+  // sin el área; sin este filtro el menú mostraba módulos que reventaban al abrirlos.
+  const navVisible = useMemo(() => NAV.filter(n => puede(nivel, n.key, permisos)), [nivel, permisos]);
+
+  // Sección efectiva DERIVADA (no un efecto que reescriba el estado): si el módulo
+  // abierto no está permitido, se cae al primero disponible. Así, cuando llegan los
+  // permisos reales desde /api/auth/me, la vista se corrige sola sin render intermedio.
+  const seccionActiva: Seccion | null =
+    navVisible.some(n => n.key === seccion) ? seccion : (navVisible[0]?.key ?? null);
 
   const noLeidas = notifs.filter(n => !n.leida).length;
   const marcarLeidas = async () => {
@@ -118,25 +131,31 @@ export default function ControlApp() {
       {/* Shell */}
       <div className="shell">
         <nav className="sidebar">
-          {NAV.map(n => (
-            <button key={n.key} className={`nav-item ${seccion === n.key ? 'active' : ''}`} onClick={() => setSeccion(n.key)}>
+          {navVisible.map(n => (
+            <button key={n.key} className={`nav-item ${seccionActiva === n.key ? 'active' : ''}`} onClick={() => setSeccion(n.key)}>
               <span className="nav-dot" />{n.label}{!n.listo && <span style={{ fontSize: 9, marginLeft: 'auto', opacity: .6 }}>pronto</span>}
             </button>
           ))}
         </nav>
 
         <main className="main">
-          {seccion === 'tareas' && <TareasBoard nivel={nivel} onEvento={cargarNotifs} pushToast={pushToast} />}
-          {seccion === 'calendario' && <CalendarioBoard nivel={nivel} onEvento={cargarNotifs} pushToast={pushToast} />}
-          {seccion === 'documentos' && <DocumentosBoard nivel={nivel} onEvento={cargarNotifs} pushToast={pushToast} />}
-          {seccion === 'panel' && <PanelHoy />}
-          {seccion === 'operaciones' && (
+          {seccionActiva === 'tareas' && <TareasBoard nivel={nivel} onEvento={cargarNotifs} pushToast={pushToast} />}
+          {seccionActiva === 'calendario' && <CalendarioBoard nivel={nivel} onEvento={cargarNotifs} pushToast={pushToast} />}
+          {seccionActiva === 'documentos' && <DocumentosBoard nivel={nivel} onEvento={cargarNotifs} pushToast={pushToast} />}
+          {seccionActiva === 'panel' && <PanelHoy />}
+          {seccionActiva === 'operaciones' && (
             <>
               <div className="section-head"><div><div className="section-title">Operaciones</div><div className="section-sub">Servicios asignados a mensajeros · checklist, fotos e inspección</div></div></div>
               <div className="op-embed"><OperacionesPanel /></div>
             </>
           )}
-          {seccion === 'tableros' && <TablerosBoard pushToast={pushToast} onEvento={cargarNotifs} />}
+          {seccionActiva === 'tableros' && <TablerosBoard pushToast={pushToast} onEvento={cargarNotifs} />}
+          {navVisible.length === 0 && (
+            <div className="section-head"><div>
+              <div className="section-title">Sin módulos asignados</div>
+              <div className="section-sub">Tu cuenta no tiene ninguna sección del panel de control habilitada. Pídele acceso al administrador principal.</div>
+            </div></div>
+          )}
         </main>
       </div>
 

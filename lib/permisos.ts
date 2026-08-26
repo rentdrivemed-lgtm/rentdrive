@@ -43,16 +43,140 @@ export const AREA_NIVELES: Record<string, AdminNivel[]> = {
   tableros:     ['principal', 'socio', 'secretaria'],
   // Acciones sensibles (gating fino, más allá de ver la sección)
   usuarios_gestion: ['principal'], // crear cuentas de equipo, cambiar nivel/estado, resetear clave
-  config_editar:    ['principal'], // guardar comisión / config
+  // `config_editar` se partió en dos casillas independientes (ver nota más abajo).
+  // `config_editar_operativo` conserva los mismos niveles base que tenía `config_editar`.
+  config_editar_operativo:  ['principal'], // admin_whatsapp, pico_placa
+  // `config_editar_financiero` toca dinero (comisión) y datos fiscales (NIT): nunca
+  // 'secretaria' por defecto, aunque sí es asignable por excepción como cualquier otra área.
+  config_editar_financiero: ['principal', 'socio'], // comisión, empresa/NIT, referidos
 };
 
-export function puede(nivel: AdminNivel, area: string): boolean {
+// ── Permisos por empleado (excepciones al nivel) ─────────────────────────────
+// El nivel sigue siendo la plantilla base. Encima, cada cuenta de admin puede
+// tener un mapa de excepciones explícitas: { "contabilidad": true, "vehiculos": false }.
+// Un usuario sin excepciones se comporta EXACTAMENTE igual que antes de esta función.
+export type PermisosExtra = Record<string, boolean>;
+
+// `usuarios_gestion` es la raíz de confianza del sistema: quien la tiene puede
+// repartir permisos y cambiar niveles. Si se pudiera otorgar por casilla, un socio
+// con esa casilla podría auto-asignarse todo y escalar a dueño. Por eso queda
+// atada al nivel `principal` y NUNCA es asignable por excepción.
+//
+// `config_editar_operativo` y `config_editar_financiero` SÍ son asignables: entre
+// las dos solo permiten guardar config del sistema (whatsapp, pico y placa, comisión,
+// datos fiscales, referidos); ninguna reparte permisos ni crea cuentas, así que no
+// habilitan escalada de privilegios. Se separaron en dos casillas para que dar acceso
+// a ajustar pico y placa (operativo) no implique dar acceso a la comisión de la
+// plataforma ni al NIT de la empresa (financiero) — ver PUT /api/config.
+export const AREA_NO_ASIGNABLE = 'usuarios_gestion';
+
+// Lista blanca: únicas claves que pueden aparecer en un mapa de excepciones.
+export const AREAS_ASIGNABLES: string[] = Object.keys(AREA_NIVELES).filter(a => a !== AREA_NO_ASIGNABLE);
+
+export function esAreaAsignable(area: string): boolean {
+  return area !== AREA_NO_ASIGNABLE && Object.prototype.hasOwnProperty.call(AREA_NIVELES, area);
+}
+
+// Etiquetas legibles: mismos nombres que muestran las pestañas del panel.
+export const AREA_LABEL: Record<string, string> = {
+  usuarios: 'Usuarios',
+  vehiculos: 'Vehículos',
+  reservas: 'Reservas',
+  contabilidad: 'Contabilidad',
+  mercado: 'Mercado',
+  calculadora: 'Calculadora',
+  leads: 'Leads',
+  soporte: 'Soporte',
+  nfc: 'Tarjetas NFC',
+  config: 'Configuración',
+  auditoria: 'Bitácora',
+  operaciones: 'Operaciones',
+  panel: 'Panel de hoy',
+  tareas: 'Tareas',
+  calendario: 'Calendario',
+  documentos: 'Documentos',
+  tableros: 'Tableros',
+  config_editar_operativo: 'Config. operativa (WhatsApp, pico y placa)',
+  config_editar_financiero: 'Config. financiera (comisión, NIT, referidos)',
+  usuarios_gestion: 'Gestión del equipo',
+};
+
+export function areaLabel(area: string): string {
+  return AREA_LABEL[area] || area;
+}
+
+// Agrupación para la interfaz de casillas. El último grupo recoge cualquier área
+// asignable que no se haya listado arriba, para que nunca quede una sección oculta
+// si se agrega una nueva a AREA_NIVELES.
+const GRUPOS_BASE: { titulo: string; areas: string[] }[] = [
+  { titulo: 'Panel de administración', areas: ['usuarios', 'vehiculos', 'reservas', 'contabilidad', 'mercado', 'calculadora', 'leads', 'soporte', 'nfc', 'config', 'auditoria'] },
+  { titulo: 'Panel de control del equipo', areas: ['panel', 'operaciones', 'tareas', 'calendario', 'documentos', 'tableros'] },
+  { titulo: 'Acciones sensibles', areas: ['config_editar_operativo', 'config_editar_financiero'] },
+];
+
+export const GRUPOS_AREAS: { titulo: string; areas: string[] }[] = (() => {
+  const listadas = new Set(GRUPOS_BASE.flatMap(g => g.areas));
+  const grupos = GRUPOS_BASE.map(g => ({ titulo: g.titulo, areas: g.areas.filter(esAreaAsignable) }));
+  const sueltas = AREAS_ASIGNABLES.filter(a => !listadas.has(a));
+  return sueltas.length ? [...grupos, { titulo: 'Otras', areas: sueltas }] : grupos;
+})();
+
+// Parseo tolerante: acepta el string JSON de la columna o un objeto ya parseado.
+// Cualquier cosa rara (JSON inválido, array, claves desconocidas, valores no
+// booleanos, `usuarios_gestion`) se descarta en silencio. Nunca lanza.
+export function parsePermisosExtra(raw: unknown): PermisosExtra {
+  let valor: unknown = raw;
+  if (typeof valor === 'string') {
+    const s = valor.trim();
+    if (!s) return {};
+    try { valor = JSON.parse(s); } catch { return {}; }
+  }
+  if (!valor || typeof valor !== 'object' || Array.isArray(valor)) return {};
+  const out: PermisosExtra = {};
+  for (const [clave, v] of Object.entries(valor as Record<string, unknown>)) {
+    if (!esAreaAsignable(clave)) continue;
+    if (typeof v !== 'boolean') continue;
+    out[clave] = v;
+  }
+  return out;
+}
+
+export function serializarPermisosExtra(p: PermisosExtra): string {
+  return JSON.stringify(parsePermisosExtra(p));
+}
+
+// Delta de permisos: solo las claves que el cliente cambió desde que abrió el panel
+// (no el mapa completo). `null` significa "quitar la excepción" (vuelve al nivel);
+// un booleano fija la excepción a ese valor. Se fusiona sobre el valor ACTUAL en BD
+// (releído en el momento de escribir) para no pisar cambios de otra sesión que haya
+// tocado otras claves del mismo empleado mientras tanto — ver PUT /api/admin/usuarios.
+export type PermisosExtraDelta = Record<string, boolean | null>;
+
+export function fusionarPermisosExtra(actual: PermisosExtra, delta: PermisosExtraDelta): PermisosExtra {
+  const out: PermisosExtra = { ...parsePermisosExtra(actual) };
+  for (const [clave, valor] of Object.entries(delta)) {
+    if (!esAreaAsignable(clave)) continue;
+    if (valor === null) delete out[clave];
+    else if (typeof valor === 'boolean') out[clave] = valor;
+  }
+  return out;
+}
+
+// Permiso efectivo. El tercer parámetro es OPCIONAL: sin él, el comportamiento es
+// idéntico al de siempre (solo la matriz por nivel).
+export function puede(nivel: AdminNivel, area: string, extra?: PermisosExtra | null): boolean {
   const permitidos = AREA_NIVELES[area];
-  return permitidos ? permitidos.includes(nivel) : false;
+  if (!permitidos) return false;
+  if (extra && esAreaAsignable(area)) {
+    const excepcion = extra[area];
+    if (typeof excepcion === 'boolean') return excepcion;
+  }
+  return permitidos.includes(nivel);
 }
 
 // ¿Es dueño o socio? Usado para el contenido marcado "solo socios" (tareas,
 // eventos y documentos restringidos que la secretaría no debe ver).
+// OJO: esto va atado al NIVEL a propósito — las casillas por empleado no lo tocan.
 export function esSocio(nivel: AdminNivel): boolean {
   return nivel === 'principal' || nivel === 'socio';
 }
@@ -62,6 +186,19 @@ type DB = Database.Database;
 export function nivelDe(db: DB, userId: number): AdminNivel {
   const r = db.prepare('SELECT admin_nivel FROM usuarios WHERE id = ?').get(userId) as { admin_nivel?: string } | undefined;
   return normalizarNivel(r?.admin_nivel);
+}
+
+// Nivel + excepciones en una sola consulta. Si la columna aún no existe (BD vieja),
+// cae al comportamiento anterior (solo nivel) en vez de tumbar la petición.
+export function permisosDe(db: DB, userId: number): { nivel: AdminNivel; extra: PermisosExtra } {
+  try {
+    const r = db.prepare('SELECT admin_nivel, permisos_extra FROM usuarios WHERE id = ?').get(userId) as
+      { admin_nivel?: string; permisos_extra?: string } | undefined;
+    return { nivel: normalizarNivel(r?.admin_nivel), extra: parsePermisosExtra(r?.permisos_extra) };
+  } catch (e) {
+    console.error('[permisos] no se pudo leer permisos_extra:', e instanceof Error ? e.message : e);
+    return { nivel: nivelDe(db, userId), extra: {} };
+  }
 }
 
 // Registro de auditoría (bitácora): quién hizo qué y a qué hora.

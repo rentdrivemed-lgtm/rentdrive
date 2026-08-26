@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
+import { adminTieneArea, sinPermisoArea } from '@/lib/guard';
 import { obtenerOCrearConversacion, cargarHistorialSoporte, responderMensajeSoporte } from '@/lib/soporte-agente';
 import { tieneClaveAnthropic } from '@/lib/anthropic';
 
@@ -14,7 +15,9 @@ export async function GET() {
 
   const db = getDb();
 
+  // Rama de administración (bandeja completa de soporte) -> exige la sección.
   if (user.rol === 'admin') {
+    if (!adminTieneArea(db, user.id, 'soporte')) return sinPermisoArea();
     const conversaciones = db.prepare(`
       SELECT c.*, u.nombre AS solicitante_nombre, u.correo AS solicitante_correo,
         (SELECT contenido FROM mensajes_soporte WHERE conversacion_id = c.id ORDER BY id DESC LIMIT 1) AS ultimo_mensaje,
@@ -60,6 +63,7 @@ export async function POST(req: NextRequest) {
 
   // Admin inicia (o retoma) una conversación con un propietario/usuario.
   if (user.rol === 'admin') {
+    if (!adminTieneArea(db, user.id, 'soporte')) return sinPermisoArea();
     const solicitanteId = Number(body.solicitante_id);
     if (!solicitanteId) return NextResponse.json({ error: 'Falta el destinatario.' }, { status: 400 });
     const destino = db.prepare("SELECT id, nombre, rol FROM usuarios WHERE id = ?").get(solicitanteId) as { id: number; nombre: string; rol: string } | undefined;

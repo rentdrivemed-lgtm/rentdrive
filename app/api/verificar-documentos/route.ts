@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
+import { adminTieneArea, sinPermisoArea } from '@/lib/guard';
 import { tieneClaveAnthropic } from '@/lib/anthropic';
 import { verificarDocumentos, decisionHibrida, type DocEntrada } from '@/lib/verificacion-docs';
 
@@ -40,7 +41,11 @@ export async function POST(req: NextRequest) {
     if (vehiculoId) {
       const v = db.prepare('SELECT * FROM vehiculos WHERE id = ?').get(Number(vehiculoId)) as Record<string, unknown> | undefined;
       if (!v) return NextResponse.json({ error: 'Vehículo no encontrado' }, { status: 404 });
-      if (user.rol !== 'admin' && Number(v.propietario_id) !== user.id) {
+      // Ruta compartida (propietario del carro / admin). Al admin se le exige la
+      // sección desde la que se dispara esta verificación: la ficha del vehículo.
+      if (user.rol === 'admin') {
+        if (!adminTieneArea(db, user.id, 'vehiculos')) return sinPermisoArea();
+      } else if (Number(v.propietario_id) !== user.id) {
         return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
       }
 
@@ -97,7 +102,11 @@ export async function POST(req: NextRequest) {
         FROM reservas r JOIN vehiculos v ON r.vehiculo_id = v.id WHERE r.id = ?
       `).get(Number(reservaId)) as { usuario_id: number; documento_id_url?: string; licencia_url?: string; propietario_id: number } | undefined;
       if (!r) return NextResponse.json({ error: 'Reserva no encontrada' }, { status: 404 });
-      if (user.rol !== 'admin' && r.propietario_id !== user.id) {
+      // Igual que arriba, pero los documentos del arrendatario se revisan desde la
+      // tarjeta de la reserva -> el admin necesita la sección "reservas".
+      if (user.rol === 'admin') {
+        if (!adminTieneArea(db, user.id, 'reservas')) return sinPermisoArea();
+      } else if (r.propietario_id !== user.id) {
         return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
       }
 

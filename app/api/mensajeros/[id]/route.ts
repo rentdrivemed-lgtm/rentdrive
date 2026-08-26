@@ -1,19 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { randomBytes } from 'crypto';
-import { getDb } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth';
+import { guardArea } from '@/lib/guard';
 
 export const dynamic = 'force-dynamic';
 
 function nuevoToken() { return randomBytes(16).toString('hex'); }
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser();
-  if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+  const g = await guardArea('operaciones');
+  if ('error' in g) return g.error;
+  const { db } = g;
 
   const { id } = await params;
   const body = await req.json().catch(() => ({}));
-  const db = getDb();
 
   const sets: string[] = [];
   const valores: unknown[] = [];
@@ -31,11 +30,11 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser();
-  if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+  const g = await guardArea('operaciones');
+  if ('error' in g) return g.error;
+  const { db } = g;
 
   const { id } = await params;
-  const db = getDb();
   // Si ya está asignado a alguna operación, lo desactivamos en vez de borrarlo (preserva historial).
   const enUso = db.prepare('SELECT COUNT(*) AS n FROM operaciones WHERE mensajero_id = ?').get(Number(id)) as { n: number };
   if (enUso.n > 0) {
