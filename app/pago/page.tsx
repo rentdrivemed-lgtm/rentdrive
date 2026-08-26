@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { IconArrowL, IconShield, IconPin } from '@/components/Icons';
 import DocUploadDoble from '@/components/DocUploadDoble';
 import { LUGAR_VACIO, calcularRecargo, lugarResumen, cargarLugares, type Lugar } from '@/lib/lugares';
-import { validarDireccion } from '@/lib/validacion';
+import { validarDireccion, validarCiudad, validarNombreContacto, validarTelefonoContacto } from '@/lib/validacion';
 
 type Vehiculo = {
   id: number; marca: string; modelo: string; anio: number;
@@ -55,8 +55,9 @@ function PagoContent() {
 
   // Step 1 — Documentos + datos de la operación
   // La dirección, la ciudad y el contacto de emergencia ya no se piden al crear la
-  // cuenta (el registro quedó corto a propósito): se piden aquí, y solo a quien
-  // todavía no los tenga guardados de una reserva anterior.
+  // cuenta (el registro quedó corto a propósito): se piden aquí, a quien no los tenga
+  // guardados de una reserva anterior o los tenga guardados pero ya no cumplan las
+  // reglas de validación actuales (datos legacy).
   const [faltanDatos, setFaltanDatos] = useState(false);
   const [direccion, setDireccion] = useState('');
   const [ciudad, setCiudad] = useState('');
@@ -93,7 +94,15 @@ function PagoContent() {
       const emN = (emergencia.nombre || '').trim();
       const emT = (emergencia.telefono || '').trim();
       setDireccion(dir); setCiudad(ciu); setEmNombre(emN); setEmTel(emT);
-      setFaltanDatos(!dir || !ciu || !emN || !emT);
+      // "Faltan" incluye tanto "nunca los llenó" como "los tiene guardados pero ya
+      // no cumplen las reglas actuales" (datos legacy) — en ambos casos el usuario
+      // necesita ver los campos para poder corregirlos.
+      setFaltanDatos(
+        validarDireccion(dir) !== null ||
+        validarCiudad(ciu) !== null ||
+        validarNombreContacto(emN) !== null ||
+        validarTelefonoContacto(emT) !== null
+      );
     }).catch(() => setErrorCarga('No pudimos verificar tu sesión. Revisa tu conexión.'));
     const { recogida: r, entrega: e } = cargarLugares();
     setRecogida(r);
@@ -376,13 +385,13 @@ function PagoContent() {
             <p className="text-xs text-ink/50">Formatos aceptados: JPG, PNG, WebP o PDF · Máximo 15 MB por archivo</p>
           </div>
 
-          {/* Datos de la operación — solo para quien todavía no los tiene guardados */}
+          {/* Datos de la operación — solo para quien no los tiene guardados o los tiene guardados pero inválidos (legacy) */}
           {faltanDatos && (
             <div className="bg-surface border border-border rounded-xl p-4 mb-5 space-y-3">
               <div>
                 <p className="text-sm font-bold text-ink">Un par de datos más</p>
                 <p className="text-xs text-ink/50 mt-0.5">
-                  Los necesitamos para el contrato y para saber a quién llamar si algo pasa en la vía. Solo te los pedimos esta vez.
+                  Los necesitamos para el contrato y para saber a quién llamar si algo pasa en la vía.
                 </p>
               </div>
 
@@ -431,9 +440,12 @@ function PagoContent() {
                   if (faltanDatos) {
                     const errDir = validarDireccion(direccion);
                     if (errDir) { setError(errDir); return; }
-                    if (ciudad.trim().length < 3) { setError('Indica tu ciudad de residencia.'); return; }
-                    if (emNombre.trim().length < 3) { setError('Indica el nombre de tu contacto de emergencia.'); return; }
-                    if (emTel.replace(/\D/g, '').length < 7) { setError('Indica un teléfono válido para tu contacto de emergencia.'); return; }
+                    const errCiu = validarCiudad(ciudad);
+                    if (errCiu) { setError(errCiu); return; }
+                    const errEmN = validarNombreContacto(emNombre);
+                    if (errEmN) { setError(errEmN); return; }
+                    const errEmT = validarTelefonoContacto(emTel);
+                    if (errEmT) { setError(errEmT); return; }
                   }
                   setError('');
                   setStep(2);
