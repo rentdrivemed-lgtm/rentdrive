@@ -5,12 +5,16 @@ import Link from 'next/link';
 import { IconArrowL, IconShield, IconPin } from '@/components/Icons';
 import DocUploadDoble from '@/components/DocUploadDoble';
 import { LUGAR_VACIO, calcularRecargo, lugarResumen, cargarLugares, type Lugar } from '@/lib/lugares';
+import { validarDireccion, validarCiudad, validarNombreContacto, validarTelefonoContacto } from '@/lib/validacion';
 
 type Vehiculo = {
   id: number; marca: string; modelo: string; anio: number;
   tipo: string; precio_dia: number; ubicacion: string;
 };
-type User = { id: number; nombre: string; rol: string; creditos_referido?: number };
+type User = {
+  id: number; nombre: string; rol: string; creditos_referido?: number;
+  direccion?: string; ciudad?: string; contacto_emergencia?: string;
+};
 
 function detectarTarjeta(num: string) {
   const n = num.replace(/\s/g, '');
@@ -49,7 +53,17 @@ function PagoContent() {
   const [recogida, setRecogida] = useState<Lugar>({ ...LUGAR_VACIO });
   const [entrega, setEntrega] = useState<Lugar>({ ...LUGAR_VACIO });
 
-  // Step 1 — Documentos
+  // Step 1 — Documentos + datos de la operación
+  // La dirección, la ciudad y el contacto de emergencia ya no se piden al crear la
+  // cuenta (el registro quedó corto a propósito): se piden aquí, a quien no los tenga
+  // guardados de una reserva anterior o los tenga guardados pero ya no cumplan las
+  // reglas de validación actuales (datos legacy).
+  const [faltanDatos, setFaltanDatos] = useState(false);
+  const [direccion, setDireccion] = useState('');
+  const [ciudad, setCiudad] = useState('');
+  const [emNombre, setEmNombre] = useState('');
+  const [emTel, setEmTel] = useState('');
+
   const [docIdUrl, setDocIdUrl] = useState('');
   const [docIdUrlDorso, setDocIdUrlDorso] = useState('');
   const [esPasaporte, setEsPasaporte] = useState(false);
@@ -73,6 +87,22 @@ function PagoContent() {
       if (!d.user) { router.push('/login'); return; }
       setUser(d.user);
       setFirmaNombre(d.user.nombre || '');
+      let emergencia: { nombre?: string; telefono?: string } = {};
+      try { emergencia = JSON.parse(d.user.contacto_emergencia || '{}') || {}; } catch { /* perfil viejo o vacío */ }
+      const dir = (d.user.direccion || '').trim();
+      const ciu = (d.user.ciudad || '').trim();
+      const emN = (emergencia.nombre || '').trim();
+      const emT = (emergencia.telefono || '').trim();
+      setDireccion(dir); setCiudad(ciu); setEmNombre(emN); setEmTel(emT);
+      // "Faltan" incluye tanto "nunca los llenó" como "los tiene guardados pero ya
+      // no cumplen las reglas actuales" (datos legacy) — en ambos casos el usuario
+      // necesita ver los campos para poder corregirlos.
+      setFaltanDatos(
+        validarDireccion(dir) !== null ||
+        validarCiudad(ciu) !== null ||
+        validarNombreContacto(emN) !== null ||
+        validarTelefonoContacto(emT) !== null
+      );
     }).catch(() => setErrorCarga('No pudimos verificar tu sesión. Revisa tu conexión.'));
     const { recogida: r, entrega: e } = cargarLugares();
     setRecogida(r);
@@ -106,6 +136,8 @@ function PagoContent() {
       </div>
     );
   }
+
+  const inputPagoCls = 'w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface-2 focus:outline-none focus:ring-2 focus:ring-accent/40';
 
   const dias = Math.max(0, Math.ceil(
     (new Date(fecha_fin).getTime() - new Date(fecha_inicio).getTime()) / 86400000
@@ -155,6 +187,10 @@ function PagoContent() {
           documento_es_pasaporte: esPasaporte,
           licencia_url: licenciaUrl,
           licencia_url_dorso: licenciaUrlDorso,
+          direccion,
+          ciudad,
+          emergencia_nombre: emNombre,
+          emergencia_tel: emTel,
           usar_creditos: usarCreditos,
           recogida,
           entrega,
@@ -345,9 +381,50 @@ function PagoContent() {
             />
           </div>
 
-          <div className="bg-surface border border-border rounded-xl px-4 py-3 mb-5">
+          <div className="bg-surface border border-border rounded-xl px-4 py-3 mb-4">
             <p className="text-xs text-ink/50">Formatos aceptados: JPG, PNG, WebP o PDF · Máximo 15 MB por archivo</p>
           </div>
+
+          {/* Datos de la operación — solo para quien no los tiene guardados o los tiene guardados pero inválidos (legacy) */}
+          {faltanDatos && (
+            <div className="bg-surface border border-border rounded-xl p-4 mb-5 space-y-3">
+              <div>
+                <p className="text-sm font-bold text-ink">Un par de datos más</p>
+                <p className="text-xs text-ink/50 mt-0.5">
+                  Los necesitamos para el contrato y para saber a quién llamar si algo pasa en la vía.
+                </p>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-ink/60 block mb-1 uppercase tracking-wide">Dirección de residencia</label>
+                <input type="text" autoComplete="street-address" placeholder="Calle 10 # 43A-15, Apto 301"
+                  value={direccion} onChange={e => setDireccion(e.target.value)}
+                  className={inputPagoCls} />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-ink/60 block mb-1 uppercase tracking-wide">Ciudad / Municipio</label>
+                <input type="text" autoComplete="address-level2" placeholder="Medellín"
+                  value={ciudad} onChange={e => setCiudad(e.target.value)}
+                  className={inputPagoCls} />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[11px] font-semibold text-ink/60 block mb-1 uppercase tracking-wide">Contacto de emergencia</label>
+                  <input type="text" placeholder="Familiar o amigo"
+                    value={emNombre} onChange={e => setEmNombre(e.target.value)}
+                    className={inputPagoCls} />
+                </div>
+                <div>
+                  <label className="text-[11px] font-semibold text-ink/60 block mb-1 uppercase tracking-wide">Su teléfono</label>
+                  <input type="tel" inputMode="numeric" placeholder="3001234567"
+                    value={emTel} onChange={e => setEmTel(e.target.value.replace(/\D/g, '').slice(0, 15))}
+                    className={inputPagoCls} />
+                </div>
+              </div>
+            </div>
+          )}
 
           {error && <p className="text-sm text-danger mb-3 text-center">{error}</p>}
 
@@ -360,6 +437,16 @@ function PagoContent() {
                   if (!docIdUrl) { setError('Debes subir tu documento de identidad.'); return; }
                   if (!esPasaporte && !docIdUrlDorso) { setError('Falta el dorso de tu documento de identidad.'); return; }
                   if (!licenciaUrl || !licenciaUrlDorso) { setError('Debes subir frente y dorso de tu licencia de conducción.'); return; }
+                  if (faltanDatos) {
+                    const errDir = validarDireccion(direccion);
+                    if (errDir) { setError(errDir); return; }
+                    const errCiu = validarCiudad(ciudad);
+                    if (errCiu) { setError(errCiu); return; }
+                    const errEmN = validarNombreContacto(emNombre);
+                    if (errEmN) { setError(errEmN); return; }
+                    const errEmT = validarTelefonoContacto(emTel);
+                    if (errEmT) { setError(errEmT); return; }
+                  }
                   setError('');
                   setStep(2);
                 }}

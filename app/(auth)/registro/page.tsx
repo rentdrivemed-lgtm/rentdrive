@@ -1,11 +1,11 @@
 'use client';
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { LogoMark } from '@/components/Logo';
-import { IconKey, IconCar, IconUser, IconArrowR, IconArrowL, IconShield } from '@/components/Icons';
+import { IconKey, IconCar, IconUser, IconArrowR, IconArrowL, IconShield, IconPhoto, IconCheck } from '@/components/Icons';
 import { tomarDestino } from '@/lib/lugares';
-import { validarCelular, validarDireccion, validarDocumentoIdentidad, PAIS_TEL_DEFAULT } from '@/lib/validacion';
+import { validarCelular, validarDocumentoIdentidad, PAIS_TEL_DEFAULT } from '@/lib/validacion';
 import TelefonoInput from '@/components/TelefonoInput';
 import GoogleAuthButton from '@/components/GoogleAuthButton';
 import { useSession } from '@/contexts/SessionContext';
@@ -33,6 +33,45 @@ function calcularEdad(fechaNac: string): number {
   return edad;
 }
 
+// Campos que el atajo de la foto puede autocompletar. Se marcan en pantalla para
+// que la persona sepa qué salió de la imagen y lo revise antes de enviar.
+type CampoIA = 'nombre' | 'tipo_documento' | 'documento_identidad' | 'fecha_nacimiento' | 'numero_licencia';
+
+type DatosDocumento = {
+  nombre: string | null;
+  tipo_documento: string | null;
+  documento_identidad: string | null;
+  fecha_nacimiento: string | null;
+  numero_licencia: string | null;
+  categoria_licencia: string | null;
+};
+
+/**
+ * Reduce la foto antes de mandarla: menos megas por la red del celular y menos
+ * costo de lectura. Si el navegador no puede decodificar el archivo (por ejemplo
+ * un HEIC de iPhone en un navegador que no lo soporta), se manda tal cual y el
+ * servidor responde con un mensaje claro.
+ */
+async function prepararImagen(file: File): Promise<Blob> {
+  try {
+    const bitmap = await createImageBitmap(file);
+    const LADO_MAX = 1600;
+    const escala = Math.min(1, LADO_MAX / Math.max(bitmap.width, bitmap.height));
+    const ancho = Math.max(1, Math.round(bitmap.width * escala));
+    const alto  = Math.max(1, Math.round(bitmap.height * escala));
+    const canvas = document.createElement('canvas');
+    canvas.width = ancho; canvas.height = alto;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return file;
+    ctx.drawImage(bitmap, 0, 0, ancho, alto);
+    bitmap.close?.();
+    const blob = await new Promise<Blob | null>(resolver => canvas.toBlob(resolver, 'image/jpeg', 0.85));
+    return blob || file;
+  } catch {
+    return file;
+  }
+}
+
 const hoy = new Date();
 const maxNacimiento = `${hoy.getFullYear() - 18}-${String(hoy.getMonth() + 1).padStart(2, '0')}-${String(hoy.getDate()).padStart(2, '0')}`;
 
@@ -49,18 +88,99 @@ function RegistroForm() {
     nombre: '', correo: '', password: '', confirmar: '',
   });
   const [codigoReferido, setCodigoReferido] = useState('');
+  // Registro corto: dirección, ciudad y contacto de emergencia se piden en la
+  // reserva (que es cuando se necesitan), no aquí.
   const [perfil, setPerfil] = useState({
     tipo_documento: 'cedula',
     documento_identidad: '',
     fecha_nacimiento: '',
     celular: '',
     celular_indicativo: PAIS_TEL_DEFAULT,
-    direccion: '',
-    ciudad: 'Medellín',
     numero_licencia: '',
-    emergencia_nombre: '',
-    emergencia_tel: '',
   });
+
+  /* ── Atajo opcional: leer la foto del documento ──
+     Es SIEMPRE opcional. Quien no tenga el documento a mano (o simplemente no
+     quiera subirlo) llena el formulario a mano exactamente como antes.
+     Y ojo: que la IA lea la cédula NO verifica la identidad de nadie — solo
+     transcribe para ahorrar tipeo. La verificación real ocurre después, con los
+     documentos de la reserva y la revisión del equipo. */
+  const [iaDisponible, setIaDisponible] = useState(false);
+  const [consiente, setConsiente] = useState(false);
+  const [leyendo, setLeyendo] = useState<'cedula' | 'licencia' | null>(null);
+  const [errorIA, setErrorIA] = useState('');
+  const [avisoIA, setAvisoIA] = useState('');
+  const [camposIA, setCamposIA] = useState<Set<CampoIA>>(new Set());
+  const inputCedulaRef = useRef<HTMLInputElement>(null);
+  const inputLicenciaRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let vivo = true;
+    fetch('/api/registro/extraer-documento')
+      .then(r => r.json())
+      .then(d => { if (vivo) setIaDisponible(!!d?.disponible); })
+      .catch(() => { /* sin atajo: el formulario manual funciona igual */ });
+    return () => { vivo = false; };
+  }, []);
+
+  const desmarcarCampo = (campo: CampoIA) => {
+    setCamposIA(prev => {
+      if (!prev.has(campo)) return prev;
+      const copia = new Set(prev);
+      copia.delete(campo);
+      return copia;
+    });
+  };
+
+  const leerDocumento = async (file: File, tipo: 'cedula' | 'licencia') => {
+    setErrorIA(''); setAvisoIA(''); setError('');
+    setLeyendo(tipo);
+    try {
+      const imagen = await prepararImagen(file);
+      const fd = new FormData();
+      fd.append('file', imagen, 'documento.jpg');
+      fd.append('tipo', tipo);
+      // El botón ya está deshabilitado sin la casilla marcada, pero el
+      // enforcement real vive en el servidor (ver route.ts): esto es lo que
+      // ese endpoint valida, no la deshabilitación del botón.
+      fd.append('consiente', String(consiente));
+      const res = await fetch('/api/registro/extraer-documento', { method: 'POST', body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setErrorIA(data.error || 'No pudimos leer la foto. Puedes escribir tus datos a mano.');
+        return;
+      }
+
+      const datos = (data.datos || {}) as DatosDocumento;
+      const marcados = new Set(camposIA);
+
+      if (datos.nombre) { setCuenta(c => ({ ...c, nombre: datos.nombre as string })); marcados.add('nombre'); }
+      setPerfil(f => {
+        const nuevo = { ...f };
+        if (datos.tipo_documento && DOC_TIPOS.some(t => t.value === datos.tipo_documento)) {
+          nuevo.tipo_documento = datos.tipo_documento; marcados.add('tipo_documento');
+        }
+        if (datos.documento_identidad) { nuevo.documento_identidad = datos.documento_identidad; marcados.add('documento_identidad'); }
+        if (datos.fecha_nacimiento)    { nuevo.fecha_nacimiento = datos.fecha_nacimiento;       marcados.add('fecha_nacimiento'); }
+        if (datos.numero_licencia)     { nuevo.numero_licencia = datos.numero_licencia;         marcados.add('numero_licencia'); }
+        return nuevo;
+      });
+      setCamposIA(marcados);
+
+      const noLeidos: string[] = Array.isArray(data.campos_no_leidos) ? data.campos_no_leidos : [];
+      const etiqueta = tipo === 'cedula' ? 'tu documento' : 'tu licencia';
+      let aviso = `Listo, leímos ${etiqueta}. Revisa los datos y corrige lo que haga falta.`;
+      if (noLeidos.length) aviso += ` No pudimos leer: ${noLeidos.join(', ')}.`;
+      if (data.confianza === 'baja') aviso += ' La foto quedó poco nítida, revisa con calma cada dato.';
+      setAvisoIA(aviso);
+    } catch {
+      setErrorIA('Sin conexión — revisa tu internet o escribe tus datos a mano.');
+    } finally {
+      setLeyendo(null);
+      if (inputCedulaRef.current) inputCedulaRef.current.value = '';
+      if (inputLicenciaRef.current) inputLicenciaRef.current.value = '';
+    }
+  };
 
   useEffect(() => {
     if (searchParams.get('rol') === 'propietario') setRol('propietario');
@@ -91,9 +211,6 @@ function RegistroForm() {
     if (calcularEdad(perfil.fecha_nacimiento) < 18) return 'Debes ser mayor de 18 años para registrarte.';
     const errCel = validarCelular(perfil.celular_indicativo, perfil.celular);
     if (errCel) return errCel;
-    const errDir = validarDireccion(perfil.direccion);
-    if (errDir) return errDir;
-    if (!perfil.ciudad.trim())              return 'Ingresa tu ciudad.';
     return '';
   };
 
@@ -142,6 +259,14 @@ function RegistroForm() {
   };
 
   const inputCls = "w-full border border-border rounded-xl px-4 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40";
+  // Un campo que vino de la foto se resalta y se etiqueta: la persona tiene que
+  // poder ver de un vistazo qué escribió la IA para revisarlo antes de enviar.
+  const clsCampo = (campo: CampoIA) => `${inputCls} ${camposIA.has(campo) ? 'border-accent/50 bg-accent-light/40' : ''}`;
+  const marcaIA = (campo: CampoIA) => camposIA.has(campo) ? (
+    <span className="ml-1.5 inline-flex items-center gap-1 text-[10px] font-semibold text-accent normal-case tracking-normal">
+      <IconCheck size={10} /> de tu foto
+    </span>
+  ) : null;
 
   return (
     <div className="min-h-[80vh] flex items-center justify-center px-4 py-8 bg-surface">
@@ -222,6 +347,78 @@ function RegistroForm() {
           {/* ── PASO 1: Cuenta ── */}
           {paso === 1 && (
             <div className="space-y-4">
+
+              {/* ── Atajo opcional: leer el documento con IA ──
+                  Nunca obligatorio: es un acelerador. Si no está disponible (sin
+                  clave de IA) simplemente no se muestra y el formulario manual
+                  sigue igual. */}
+              {iaDisponible && (
+                <div className="rounded-2xl border-2 border-dashed border-accent/40 bg-accent-light/50 p-4">
+                  <div className="flex items-start gap-2.5">
+                    <div className="w-9 h-9 rounded-xl bg-accent/15 text-accent flex items-center justify-center flex-shrink-0">
+                      <IconPhoto size={18} />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-bold text-ink text-sm">Regístrate en 30 segundos</p>
+                      <p className="text-xs text-ink/60 mt-0.5 leading-relaxed">
+                        Toma una foto de tu cédula{rol === 'usuario' ? ' y de tu licencia' : ''} y llenamos el formulario por ti.
+                        Después revisas los datos y corriges lo que haga falta.
+                      </p>
+                    </div>
+                  </div>
+
+                  <label className="flex items-start gap-2.5 mt-3 cursor-pointer select-none">
+                    <input type="checkbox" checked={consiente}
+                      onChange={e => setConsiente(e.target.checked)}
+                      className="mt-0.5 w-4 h-4 accent-accent flex-shrink-0" />
+                    <span className="text-[11px] text-ink/60 leading-relaxed">
+                      Autorizo a DrivePass a leer la foto de mi documento con un servicio de inteligencia artificial,
+                      con el único fin de llenar este formulario. La imagen no se guarda: se usa para leer los datos y
+                      se descarta. Esto no verifica mi identidad ni reemplaza los documentos que se piden al reservar.
+                      Puedo registrarme sin subir ninguna foto, escribiendo mis datos a mano.
+                      (Tratamiento de datos personales — Ley 1581 de 2012).
+                    </span>
+                  </label>
+
+                  <input ref={inputCedulaRef} type="file" accept="image/*" className="hidden"
+                    onChange={e => { const f = e.target.files?.[0]; if (f) leerDocumento(f, 'cedula'); }} />
+                  <input ref={inputLicenciaRef} type="file" accept="image/*" className="hidden"
+                    onChange={e => { const f = e.target.files?.[0]; if (f) leerDocumento(f, 'licencia'); }} />
+
+                  <div className={`grid gap-2 mt-3 ${rol === 'usuario' ? 'sm:grid-cols-2' : ''}`}>
+                    <button type="button"
+                      onClick={() => inputCedulaRef.current?.click()}
+                      disabled={!consiente || leyendo !== null}
+                      className="flex items-center justify-center gap-2 bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold py-2.5 px-3 rounded-xl transition">
+                      {leyendo === 'cedula' ? 'Leyendo tu documento…' : 'Foto de mi cédula'}
+                    </button>
+                    {rol === 'usuario' && (
+                      <button type="button"
+                        onClick={() => inputLicenciaRef.current?.click()}
+                        disabled={!consiente || leyendo !== null}
+                        className="flex items-center justify-center gap-2 border border-accent/40 text-accent hover:bg-accent/10 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-semibold py-2.5 px-3 rounded-xl transition bg-surface-2">
+                        {leyendo === 'licencia' ? 'Leyendo tu licencia…' : 'Foto de mi licencia'}
+                      </button>
+                    )}
+                  </div>
+
+                  {!consiente && (
+                    <p className="text-[11px] text-ink/45 mt-2">Marca la casilla para poder subir la foto.</p>
+                  )}
+                  {avisoIA && (
+                    <p className="text-[11px] text-success mt-2 flex items-start gap-1.5">
+                      <IconCheck size={12} className="flex-shrink-0 mt-0.5" /> <span>{avisoIA}</span>
+                    </p>
+                  )}
+                  {errorIA && (
+                    <p className="text-[11px] text-danger mt-2">{errorIA}</p>
+                  )}
+                  <p className="text-[11px] text-ink/45 mt-2">
+                    ¿Prefieres escribirlo tú? Llena el formulario de abajo, es igual de válido.
+                  </p>
+                </div>
+              )}
+
               {GOOGLE_ENABLED && (
                 <>
                   <GoogleAuthButton
@@ -238,10 +435,12 @@ function RegistroForm() {
                 </>
               )}
               <div>
-                <label className="block text-xs font-semibold text-ink/60 mb-1.5 uppercase tracking-wide">Nombre completo</label>
+                <label className="block text-xs font-semibold text-ink/60 mb-1.5 uppercase tracking-wide">
+                  Nombre completo {marcaIA('nombre')}
+                </label>
                 <input type="text" required autoComplete="name" placeholder="Como aparece en tu documento"
-                  className={inputCls} value={cuenta.nombre}
-                  onChange={e => setCuenta(f => ({ ...f, nombre: e.target.value }))} />
+                  className={clsCampo('nombre')} value={cuenta.nombre}
+                  onChange={e => { desmarcarCampo('nombre'); setCuenta(f => ({ ...f, nombre: e.target.value })); }} />
               </div>
               <div>
                 <label className="block text-xs font-semibold text-ink/60 mb-1.5 uppercase tracking-wide">Correo electrónico</label>
@@ -291,18 +490,23 @@ function RegistroForm() {
               {/* Documento */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-ink/60 mb-1.5 uppercase tracking-wide">Tipo de documento</label>
-                  <select className={inputCls} value={perfil.tipo_documento}
-                    onChange={e => setPerfil(f => ({ ...f, tipo_documento: e.target.value }))}>
+                  <label className="block text-xs font-semibold text-ink/60 mb-1.5 uppercase tracking-wide">
+                    Tipo de documento {marcaIA('tipo_documento')}
+                  </label>
+                  <select className={clsCampo('tipo_documento')} value={perfil.tipo_documento}
+                    onChange={e => { desmarcarCampo('tipo_documento'); setPerfil(f => ({ ...f, tipo_documento: e.target.value })); }}>
                     {DOC_TIPOS.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-ink/60 mb-1.5 uppercase tracking-wide">Número</label>
+                  <label className="block text-xs font-semibold text-ink/60 mb-1.5 uppercase tracking-wide">
+                    Número {marcaIA('documento_identidad')}
+                  </label>
                   <input type="text" required
                     placeholder={perfil.tipo_documento === 'pasaporte' ? 'AB1234567' : '1234567890'}
-                    className={inputCls} value={perfil.documento_identidad}
+                    className={clsCampo('documento_identidad')} value={perfil.documento_identidad}
                     onChange={e => {
+                      desmarcarCampo('documento_identidad');
                       // La cédula colombiana es solo dígitos; pasaporte/cédula de extranjería sí pueden traer letras.
                       const limpio = perfil.tipo_documento === 'cedula'
                         ? e.target.value.replace(/\D/g, '')
@@ -315,10 +519,12 @@ function RegistroForm() {
               {/* Nacimiento + celular */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-ink/60 mb-1.5 uppercase tracking-wide">Fecha de nacimiento</label>
+                  <label className="block text-xs font-semibold text-ink/60 mb-1.5 uppercase tracking-wide">
+                    Fecha de nacimiento {marcaIA('fecha_nacimiento')}
+                  </label>
                   <input type="date" required max={maxNacimiento}
-                    className={inputCls} value={perfil.fecha_nacimiento}
-                    onChange={e => setPerfil(f => ({ ...f, fecha_nacimiento: e.target.value }))} />
+                    className={clsCampo('fecha_nacimiento')} value={perfil.fecha_nacimiento}
+                    onChange={e => { desmarcarCampo('fecha_nacimiento'); setPerfil(f => ({ ...f, fecha_nacimiento: e.target.value })); }} />
                   {perfil.fecha_nacimiento && (
                     <p className="text-[11px] text-ink/50 mt-1">{calcularEdad(perfil.fecha_nacimiento)} años</p>
                   )}
@@ -334,56 +540,22 @@ function RegistroForm() {
                 </div>
               </div>
 
-              {/* Dirección */}
-              <div>
-                <label className="block text-xs font-semibold text-ink/60 mb-1.5 uppercase tracking-wide">Dirección residencial</label>
-                <input type="text" required placeholder="Calle 10 # 43A-15, Apto 301"
-                  className={inputCls} value={perfil.direccion}
-                  onChange={e => setPerfil(f => ({ ...f, direccion: e.target.value }))} />
-              </div>
-
-              {/* Ciudad */}
-              <div>
-                <label className="block text-xs font-semibold text-ink/60 mb-1.5 uppercase tracking-wide">Ciudad / Municipio</label>
-                <input type="text" required placeholder="Medellín"
-                  className={inputCls} value={perfil.ciudad}
-                  onChange={e => setPerfil(f => ({ ...f, ciudad: e.target.value }))} />
-              </div>
-
               {/* Licencia — requerida para arrendatarios */}
               <div>
                 <label className="block text-xs font-semibold text-ink/60 mb-1.5 uppercase tracking-wide">
                   Número de licencia de conducción
                   {rol === 'usuario' && <span className="text-accent ml-1">*</span>}
                   {rol === 'propietario' && <span className="font-normal text-ink/40 ml-1">(opcional)</span>}
+                  {marcaIA('numero_licencia')}
                 </label>
                 <input type="text" required={rol === 'usuario'} placeholder="Ej: 80123456"
-                  className={inputCls} value={perfil.numero_licencia}
-                  onChange={e => setPerfil(f => ({ ...f, numero_licencia: e.target.value }))} />
+                  className={clsCampo('numero_licencia')} value={perfil.numero_licencia}
+                  onChange={e => { desmarcarCampo('numero_licencia'); setPerfil(f => ({ ...f, numero_licencia: e.target.value })); }} />
                 <p className="text-[11px] text-ink/50 mt-1">
                   {rol === 'usuario'
                     ? 'Requerido para poder realizar reservas de vehículos.'
                     : 'Solo si también deseas alquilar vehículos de otros propietarios.'}
                 </p>
-              </div>
-
-              {/* Contacto de emergencia */}
-              <div className="bg-surface rounded-xl p-3 border border-border space-y-3">
-                <p className="text-xs font-bold text-ink/60 uppercase tracking-wide">Contacto de emergencia</p>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[11px] font-semibold text-ink/50 mb-1">Nombre</label>
-                    <input type="text" placeholder="Familiar o amigo"
-                      className={inputCls} value={perfil.emergencia_nombre}
-                      onChange={e => setPerfil(f => ({ ...f, emergencia_nombre: e.target.value }))} />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-semibold text-ink/50 mb-1">Teléfono</label>
-                    <input type="tel" placeholder="3001234567"
-                      className={inputCls} value={perfil.emergencia_tel}
-                      onChange={e => setPerfil(f => ({ ...f, emergencia_tel: e.target.value.replace(/\D/g, '').slice(0, 10) }))} />
-                  </div>
-                </div>
               </div>
 
               {/* Botones */}

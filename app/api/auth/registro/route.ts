@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { signToken, UserPayload } from '@/lib/auth';
 import { enviarCorreo } from '@/lib/email';
-import { validarCelular, validarDireccion, validarDocumentoIdentidad, PAIS_TEL_DEFAULT } from '@/lib/validacion';
+import { validarCelular, validarDocumentoIdentidad, PAIS_TEL_DEFAULT } from '@/lib/validacion';
 import { asignarCodigoReferido, vincularReferido } from '@/lib/referidos';
 import { bloqueadoPorCsrf } from '@/lib/csrf';
 import bcrypt from 'bcryptjs';
@@ -22,11 +22,15 @@ export async function POST(req: NextRequest) {
   const csrfError = bloqueadoPorCsrf(req);
   if (csrfError) return csrfError;
 
+  // Registro corto a propósito: aquí solo se piden los datos indispensables para
+  // crear la cuenta. La dirección, la ciudad y el contacto de emergencia se piden
+  // más adelante, en el flujo de reserva (app/api/reservas), que es cuando de
+  // verdad se necesitan para la operación.
   const {
     nombre, correo, password, rol,
     tipo_documento, documento_identidad, fecha_nacimiento,
-    celular, celular_indicativo, direccion, ciudad, numero_licencia,
-    emergencia_nombre, emergencia_tel, codigo_referido,
+    celular, celular_indicativo, numero_licencia,
+    codigo_referido,
   } = await req.json();
 
   if (!nombre || !correo || !password) {
@@ -41,9 +45,7 @@ export async function POST(req: NextRequest) {
   const errCel = validarCelular(celular_indicativo || PAIS_TEL_DEFAULT, celular || '');
   if (errCel) return NextResponse.json({ error: errCel }, { status: 400 });
 
-  const errDir = validarDireccion(direccion || '');
-  if (errDir) return NextResponse.json({ error: errDir }, { status: 400 });
-
+  // La mayoría de edad NO se relaja: es requisito real para alquilar un vehículo.
   if (!fecha_nacimiento || calcularEdad(fecha_nacimiento) < 18) {
     return NextResponse.json({ error: 'Debes ser mayor de 18 años para registrarte.' }, { status: 400 });
   }
@@ -57,11 +59,10 @@ export async function POST(req: NextRequest) {
   }
 
   const hash = bcrypt.hashSync(password, 10);
-  const contacto_emergencia = JSON.stringify({
-    nombre: emergencia_nombre || '',
-    telefono: emergencia_tel || '',
-  });
 
+  // direccion, ciudad y contacto_emergencia quedan vacíos a propósito: el flujo de
+  // reserva los detecta vacíos y los pide ahí. Ojo si alguien piensa en poner
+  // 'Medellín' por defecto en ciudad — eso haría que nunca se le pregunte.
   const result = await db.prepare(`
     INSERT INTO usuarios
       (nombre, correo, password, rol,
@@ -75,10 +76,10 @@ export async function POST(req: NextRequest) {
     fecha_nacimiento || '',
     celular || '',
     celular_indicativo || PAIS_TEL_DEFAULT,
-    direccion || '',
-    ciudad || 'Medellín',
+    '',
+    '',
     numero_licencia || '',
-    contacto_emergencia,
+    '{}',
   );
 
   const nuevoId = Number(result.lastInsertRowid);

@@ -7,6 +7,7 @@ import { enviarCorreo } from '@/lib/email';
 import { generarCotizacion } from '@/lib/contabilidad';
 import { consumirCreditos } from '@/lib/referidos';
 import { MIN_NOCHES_RESERVA } from '@/lib/disponibilidad-reglas';
+import { validarDireccion, validarCiudad, validarNombreContacto, validarTelefonoContacto } from '@/lib/validacion';
 
 export const dynamic = 'force-dynamic';
 
@@ -98,6 +99,7 @@ export async function POST(req: NextRequest) {
     documento_id_url, documento_id_url_dorso, documento_es_pasaporte,
     licencia_url, licencia_url_dorso,
     firma_contrato, recogida, entrega, usar_creditos,
+    direccion, ciudad, emergencia_nombre, emergencia_tel,
   } = await req.json();
   if (!vehiculo_id || !fecha_inicio || !fecha_fin) {
     return NextResponse.json({ error: 'Faltan datos' }, { status: 400 });
@@ -111,12 +113,56 @@ export async function POST(req: NextRequest) {
   if (!licencia_url || !licencia_url_dorso) return NextResponse.json({ error: 'Debes subir frente y dorso de tu licencia de conducción.' }, { status: 400 });
   if (!firma_contrato) return NextResponse.json({ error: 'Debes aceptar el contrato.' }, { status: 400 });
 
+  const db = getDb();
+
+  // ── Datos de la operación que antes se pedían en el registro ──────────────
+  // Se movieron acá para que crear la cuenta sea rápido: la dirección, la ciudad
+  // y el contacto de emergencia solo hacen falta cuando de verdad hay un alquiler.
+  // Solo se le piden a quien todavía no los tiene guardados (p. ej. de una reserva
+  // anterior); si ya están en su perfil, se usan esos y no se vuelve a preguntar.
+  const perfil = db.prepare(
+    'SELECT direccion, ciudad, contacto_emergencia FROM usuarios WHERE id = ?'
+  ).get(user.id) as { direccion: string | null; ciudad: string | null; contacto_emergencia: string | null } | undefined;
+
+  let emergenciaGuardada: { nombre?: string; telefono?: string } = {};
+  try { emergenciaGuardada = JSON.parse(perfil?.contacto_emergencia || '{}') || {}; } catch { emergenciaGuardada = {}; }
+
+  const txt = (v: unknown) => String(v ?? '').trim();
+
+  // Usuarios legacy (registro viejo, casi sin validación) pueden tener guardado
+  // un valor que las reglas ACTUALES rechazarían (p. ej. ciudad "a", teléfono
+  // "300"). Priorizar "¿ya lo tiene guardado?" solo por truthiness los dejaría
+  // atascados para siempre: nunca se les volvería a pedir el dato y no tienen
+  // dónde corregirlo. Por eso se revalida el valor guardado con las MISMAS
+  // reglas que se le exigirían hoy a un dato nuevo; si no pasa, se trata como si
+  // no existiera (se pide al cliente y se puede sobrescribir con uno válido).
+  const direccionGuardada = txt(perfil?.direccion);
+  const direccionFinal = validarDireccion(direccionGuardada) === null ? direccionGuardada : txt(direccion);
+
+  const ciudadGuardada = txt(perfil?.ciudad);
+  const ciudadFinal = validarCiudad(ciudadGuardada) === null ? ciudadGuardada : txt(ciudad);
+
+  const emNombreGuardado = txt(emergenciaGuardada.nombre);
+  const emNombreFinal = validarNombreContacto(emNombreGuardado) === null ? emNombreGuardado : txt(emergencia_nombre);
+
+  const emTelGuardado = txt(emergenciaGuardada.telefono).replace(/\D/g, '');
+  const emTelEnviado = txt(emergencia_tel).replace(/\D/g, '');
+  const emTelFinal = validarTelefonoContacto(emTelGuardado) === null ? emTelGuardado : emTelEnviado;
+
+  const errDireccion = validarDireccion(direccionFinal);
+  if (errDireccion) return NextResponse.json({ error: errDireccion }, { status: 400 });
+  const errCiudad = validarCiudad(ciudadFinal);
+  if (errCiudad) return NextResponse.json({ error: errCiudad }, { status: 400 });
+  const errEmNombre = validarNombreContacto(emNombreFinal);
+  if (errEmNombre) return NextResponse.json({ error: errEmNombre }, { status: 400 });
+  const errEmTel = validarTelefonoContacto(emTelFinal);
+  if (errEmTel) return NextResponse.json({ error: errEmTel }, { status: 400 });
+
   const recogidaL = recogida as Lugar | undefined;
   const entregaL  = entrega  as Lugar | undefined;
   if (!lugarValido(recogidaL)) return NextResponse.json({ error: 'Indica el lugar y la hora de recogida.' }, { status: 400 });
   if (!lugarValido(entregaL))  return NextResponse.json({ error: 'Indica el lugar y la hora de entrega.' }, { status: 400 });
 
-  const db = getDb();
   const vehiculo = db.prepare('SELECT * FROM vehiculos WHERE id = ? AND disponible = 1').get(Number(vehiculo_id)) as Record<string, unknown> | undefined;
   if (!vehiculo) return NextResponse.json({ error: 'Vehículo no disponible' }, { status: 400 });
 
@@ -143,6 +189,10 @@ export async function POST(req: NextRequest) {
       cur.setDate(cur.getDate() + 1);
     }
   }
+
+  // Se guardan en el perfil para no volver a pedirlos en la próxima reserva.
+  db.prepare('UPDATE usuarios SET direccion = ?, ciudad = ?, contacto_emergencia = ? WHERE id = ?')
+    .run(direccionFinal, ciudadFinal, JSON.stringify({ nombre: emNombreFinal, telefono: emTelFinal }), user.id);
 
   const dias = Math.ceil((new Date(fecha_fin).getTime() - new Date(fecha_inicio).getTime()) / (1000 * 60 * 60 * 24));
   const recargo = calcularRecargo(recogidaL, entregaL); // autoritativo: server-side
