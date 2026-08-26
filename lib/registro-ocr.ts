@@ -112,7 +112,9 @@ function normalizar(raw: Record<string, unknown>, tipoPedido: TipoDocumentoRegis
     }
   }
 
-  const nombre = texto(raw.nombre);
+  // Igual que en app/api/admin/usuarios/route.ts: tope defensivo de longitud,
+  // la IA no debería devolver algo tan largo pero no cuesta nada acotarlo.
+  const nombre = texto(raw.nombre)?.slice(0, 120) || null;
   const nacimiento = fechaNacimientoValida(raw.fecha_nacimiento);
   if (!nombre) noLeidos.add('nombre');
   if (!nacimiento && raw.fecha_nacimiento) noLeidos.add('fecha de nacimiento');
