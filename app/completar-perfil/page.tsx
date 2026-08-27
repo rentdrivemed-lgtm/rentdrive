@@ -71,6 +71,15 @@ function destinoPorRol(rol: string): string {
   return '/dashboard/usuario';
 }
 
+// El parámetro ?next= viene de la URL (potencialmente controlada por un
+// atacante en un enlace compartido): solo se acepta si es una ruta interna
+// (empieza por "/" y no por "//", que sería una protocol-relative URL hacia
+// otro host) para evitar un open redirect tras autenticar/completar perfil.
+function destinoSeguro(next: string | null, rol: string): string {
+  if (next && next.startsWith('/') && !next.startsWith('//')) return next;
+  return destinoPorRol(rol);
+}
+
 function CompletarPerfilForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -107,8 +116,7 @@ function CompletarPerfilForm() {
         const u = d?.user as MeUser | null;
         if (!u) { router.replace('/login'); return; }
         if (u.rol === 'admin' || u.perfil_completo) {
-          const next = searchParams.get('next');
-          router.replace(next || destinoPorRol(u.rol));
+          router.replace(destinoSeguro(searchParams.get('next'), u.rol));
           return;
         }
         setUser(u);
@@ -205,8 +213,7 @@ function CompletarPerfilForm() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setError(data.error || 'No pudimos guardar tu perfil. Intenta de nuevo.'); return; }
       refetch();
-      const next = searchParams.get('next');
-      router.push(next || destinoPorRol(user?.rol || 'usuario'));
+      router.push(destinoSeguro(searchParams.get('next'), user?.rol || 'usuario'));
     } catch {
       setError('Sin conexión — revisa tu internet e intenta de nuevo.');
     } finally {
