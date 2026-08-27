@@ -79,7 +79,7 @@ type ReservaPendiente = {
 type LiquidacionFila = {
   reserva_id: number; bruto: number; comision_pct: number; comision_valor: number; neto: number;
   marca: string; modelo: string; anio: number; fecha_inicio: string; fecha_fin: string; usuario_nombre: string;
-  remision_numero: string; propietario_documento: string; placa: string;
+  remision_numero: string; propietario_documento: string; placa: string; firmada_en: string;
   comprobante: string; comprobante_url: string; pagado_en: string;
 };
 type LiquidacionGrupo = {
@@ -536,14 +536,24 @@ export default function ContabilidadPanel() {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reserva_ids: reservaIds, comprobante, comprobante_url: comprobanteUrl }),
       });
+      const d = await res.json().catch(() => ({})) as {
+        error?: string; actualizados?: number;
+        omitidos?: Array<{ reserva_id: number; marca: string; modelo: string; motivo: string }>;
+      };
+      const omitidos = d.omitidos || [];
       if (res.ok) {
-        setLiqMsg('✓ Pago registrado y propietario notificado.');
+        const detalleOmitidos = omitidos.length > 0
+          ? ` ⚠ ${omitidos.length} quedaron sin pagar: ${omitidos.map(o => `${o.marca} ${o.modelo} (${o.motivo})`).join('; ')}`
+          : '';
+        setLiqMsg(`✓ ${d.actualizados ?? reservaIds.length} pago(s) registrado(s) y propietario notificado.${detalleOmitidos}`);
         setComprobante(''); setComprobanteUrl('');
         cargarLiquidaciones();
-        setTimeout(() => setLiqMsg(''), 4000);
+        if (omitidos.length === 0) setTimeout(() => setLiqMsg(''), 4000);
       } else {
-        const d = await res.json().catch(() => ({}));
-        setLiqMsg((d as { error?: string }).error || 'Error al registrar el pago.');
+        const detalleOmitidos = omitidos.length > 0
+          ? ` (${omitidos.map(o => `${o.marca} ${o.modelo}: ${o.motivo}`).join('; ')})`
+          : '';
+        setLiqMsg(`${d.error || 'Error al registrar el pago.'}${detalleOmitidos}`);
       }
     } catch {
       setLiqMsg('Sin conexión al registrar el pago.');
@@ -1681,6 +1691,7 @@ export default function ContabilidadPanel() {
               {liquidaciones.map(grupo => {
                 const ids = grupo.liquidaciones.map(l => l.reserva_id);
                 const cargando = ids.some(id => pagandoIds.has(id));
+                const sinFirmar = grupo.liquidaciones.filter(l => !l.firmada_en).length;
                 return (
                   <div key={grupo.propietario_id} className="bg-surface-2 rounded-2xl border border-border p-5">
                     <div className="flex items-start justify-between flex-wrap gap-3 mb-4">
@@ -1700,10 +1711,15 @@ export default function ContabilidadPanel() {
                         <p className="text-xs text-ink/50 mb-1">Total neto</p>
                         <p className="text-xl font-black text-success">{cop(grupo.total_neto)}</p>
                         {estadoLiq === 'pendiente' && (
-                          <button onClick={() => marcarLiquidacionPagada(ids)} disabled={cargando}
-                            className="mt-2 flex items-center gap-2 bg-success hover:bg-success/80 text-white text-sm font-bold px-4 py-2 rounded-xl transition disabled:opacity-60">
-                            <IconCheck size={14} /> {cargando ? 'Procesando…' : `Marcar todo pagado (${grupo.liquidaciones.length})`}
-                          </button>
+                          <>
+                            <button onClick={() => marcarLiquidacionPagada(ids)} disabled={cargando || sinFirmar === grupo.liquidaciones.length}
+                              className="mt-2 flex items-center gap-2 bg-success hover:bg-success/80 text-white text-sm font-bold px-4 py-2 rounded-xl transition disabled:opacity-60">
+                              <IconCheck size={14} /> {cargando ? 'Procesando…' : `Marcar todo pagado (${grupo.liquidaciones.length})`}
+                            </button>
+                            {sinFirmar > 0 && (
+                              <p className="text-[11px] text-warning mt-1">⚠ {sinFirmar} sin firmar — se pagarán solo las firmadas</p>
+                            )}
+                          </>
                         )}
                       </div>
                     </div>
@@ -1716,6 +1732,11 @@ export default function ContabilidadPanel() {
                               <p className="text-sm font-semibold text-ink truncate">{l.marca} {l.modelo} {l.anio}{l.placa ? ` · ${l.placa}` : ''}</p>
                               <p className="text-xs text-ink/50">{l.fecha_inicio} → {l.fecha_fin} · {l.usuario_nombre}</p>
                               <p className="text-[11px] text-ink/40">Bruto {cop(l.bruto)} − comisión {(l.comision_pct * 100).toFixed(0)}% ({cop(l.comision_valor)})</p>
+                              {estadoLiq === 'pendiente' && (
+                                l.firmada_en
+                                  ? <p className="text-[11px] text-success/80">✓ Cuenta de cobro firmada {l.firmada_en.slice(0, 10)}</p>
+                                  : <p className="text-[11px] text-warning">⚠ Falta la firma del propietario — no se puede pagar todavía</p>
+                              )}
                               {estadoLiq === 'pagado' && (l.pagado_en || l.comprobante) && (
                                 <p className="text-[11px] text-success/80">✓ Pagado{l.pagado_en ? ` ${l.pagado_en.slice(0, 10)}` : ''}{l.comprobante ? ` · ref: ${l.comprobante}` : ''}</p>
                               )}
@@ -1740,7 +1761,8 @@ export default function ContabilidadPanel() {
                                 </a>
                               )}
                               {estadoLiq === 'pendiente' && (
-                                <button onClick={() => marcarLiquidacionPagada([l.reserva_id])} disabled={enCurso}
+                                <button onClick={() => marcarLiquidacionPagada([l.reserva_id])} disabled={enCurso || !l.firmada_en}
+                                  title={!l.firmada_en ? 'El propietario todavía no ha firmado su cuenta de cobro' : undefined}
                                   className="text-xs border border-success/40 text-success px-2.5 py-1.5 rounded-xl hover:bg-success/10 transition disabled:opacity-50 font-medium">
                                   {enCurso ? '…' : '✓ Pagar'}
                                 </button>
