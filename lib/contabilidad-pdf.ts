@@ -49,24 +49,37 @@ function documentoBase(tipo: string, numero: string, fecha: string, empresa: Emp
   return doc;
 }
 
-export function descargarCotizacionPDF(empresa: Empresa, cot: {
+export type CotizacionPDFDatos = {
   numero: string; created_at: string; cliente_nombre: string; cliente_correo?: string;
   vehiculo_descripcion: string; dias: number; precio_dia: number; recargo: number; total: number;
-}) {
+};
+
+// Construye el documento (reutilizable en cliente y servidor — jsPDF corre en Node sin DOM).
+// Separado de la descarga para poder generar el mismo PDF desde el navegador (botón "PDF")
+// o desde el servidor (adjunto de correo) sin duplicar el armado del documento.
+export function construirCotizacionPDF(empresa: Empresa, cot: CotizacionPDFDatos) {
   const items: Item[] = [{ descripcion: `Alquiler ${cot.vehiculo_descripcion} (${cot.dias} día${cot.dias !== 1 ? 's' : ''})`, cantidad: 1, valorUnitario: cot.total - cot.recargo }];
   if (cot.recargo > 0) items.push({ descripcion: 'Recargo por lugar de entrega/recogida', cantidad: 1, valorUnitario: cot.recargo });
 
-  const doc = documentoBase('COTIZACIÓN', cot.numero, cot.created_at.slice(0, 10), empresa,
+  return documentoBase('COTIZACIÓN', cot.numero, cot.created_at.slice(0, 10), empresa,
     { nombre: cot.cliente_nombre, correo: cot.cliente_correo }, items, cot.total,
     'Esta cotización no tiene validez tributaria — es una referencia del valor del alquiler.');
+}
+
+export function descargarCotizacionPDF(empresa: Empresa, cot: CotizacionPDFDatos) {
+  const doc = construirCotizacionPDF(empresa, cot);
   doc.save(`${cot.numero}.pdf`);
 }
 
-export function descargarFacturaPDF(empresa: Empresa, fac: {
+export type FacturaPDFDatos = {
   numero: string; created_at: string; estado: string; cliente_nombre: string; cliente_documento?: string; cliente_correo?: string;
   subtotal: number; total: number; marca: string; modelo: string; anio: number; fecha_inicio: string; fecha_fin: string;
   dataico_cufe?: string;
-}) {
+};
+
+// Igual que construirCotizacionPDF: la parte de armado del documento (usable server-side
+// para adjuntar el PDF al correo de la factura) queda separada de `.save()` (solo navegador).
+export function construirFacturaPDF(empresa: Empresa, fac: FacturaPDFDatos) {
   const items: Item[] = [{ descripcion: `Alquiler ${fac.marca} ${fac.modelo} ${fac.anio} (${fac.fecha_inicio} a ${fac.fecha_fin})`, cantidad: 1, valorUnitario: fac.total }];
   const nota = fac.estado === 'emitida' && fac.dataico_cufe
     ? `CUFE: ${fac.dataico_cufe}`
@@ -74,8 +87,12 @@ export function descargarFacturaPDF(empresa: Empresa, fac: {
       ? 'BORRADOR — todavía sin validez DIAN. Se emitirá oficialmente cuando esté configurada la facturación electrónica.'
       : undefined;
 
-  const doc = documentoBase(fac.estado === 'emitida' ? 'FACTURA ELECTRÓNICA' : 'FACTURA (BORRADOR)', fac.numero, fac.created_at.slice(0, 10), empresa,
+  return documentoBase(fac.estado === 'emitida' ? 'FACTURA ELECTRÓNICA' : 'FACTURA (BORRADOR)', fac.numero, fac.created_at.slice(0, 10), empresa,
     { nombre: fac.cliente_nombre, documento: fac.cliente_documento, correo: fac.cliente_correo }, items, fac.total, nota);
+}
+
+export function descargarFacturaPDF(empresa: Empresa, fac: FacturaPDFDatos) {
+  const doc = construirFacturaPDF(empresa, fac);
   doc.save(`${fac.numero || 'factura'}.pdf`);
 }
 

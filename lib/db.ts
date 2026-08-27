@@ -196,11 +196,22 @@ function initDb(db: Database.Database) {
 
     CREATE TABLE IF NOT EXISTS cotizaciones (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      reserva_id INTEGER NOT NULL REFERENCES reservas(id),
+      -- reserva_id es NULLABLE: una cotización puede ser "suelta" (prospecto que aún no
+      -- reservó nada, herramienta de venta) o ligada a una reserva real ya creada.
+      reserva_id INTEGER REFERENCES reservas(id),
       numero TEXT NOT NULL,
       cliente_nombre TEXT DEFAULT '',
       cliente_correo TEXT DEFAULT '',
+      cliente_celular TEXT DEFAULT '',
+      -- vehiculo_id: solo se llena si la cotización suelta referencia un carro real del
+      -- inventario (para tomar su precio/día vigente); si no aplica queda NULL y se usa
+      -- vehiculo_descripcion como texto libre.
+      vehiculo_id INTEGER REFERENCES vehiculos(id),
       vehiculo_descripcion TEXT DEFAULT '',
+      -- fecha_inicio/fecha_fin: las cotizaciones ligadas a una reserva sacan las fechas del
+      -- JOIN con reservas; las sueltas las necesitan guardadas aquí porque no hay reserva.
+      fecha_inicio TEXT DEFAULT '',
+      fecha_fin TEXT DEFAULT '',
       dias INTEGER DEFAULT 0,
       precio_dia REAL DEFAULT 0,
       recargo REAL DEFAULT 0,
@@ -522,6 +533,14 @@ function initDb(db: Database.Database) {
   try { db.exec("ALTER TABLE operaciones ADD COLUMN inspeccion_ia TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE operaciones ADD COLUMN inspeccion_estado TEXT DEFAULT 'pendiente'"); } catch { /* ya existe */ }
 
+  // Cotizaciones sueltas (cotizador de venta, sin reserva ni cuenta de usuario): columnas
+  // nuevas para bases ya existentes (una base creada desde cero ya las trae en el CREATE TABLE).
+  try { db.exec("ALTER TABLE cotizaciones ADD COLUMN cliente_celular TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE cotizaciones ADD COLUMN vehiculo_id INTEGER REFERENCES vehiculos(id)"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE cotizaciones ADD COLUMN fecha_inicio TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE cotizaciones ADD COLUMN fecha_fin TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  migrarCotizacionesReservaOpcional(db);
+
   const adminExists = db.prepare("SELECT id FROM usuarios WHERE rol='admin' LIMIT 1").get();
   if (!adminExists) {
     const hash = bcrypt.hashSync('admin123', 10);
@@ -597,5 +616,66 @@ function initDb(db: Database.Database) {
     if (!tieneExotica && !vacio) continue; // respeta fotos reales subidas por el propietario
     const nueva = FOTOS_POR_MODELO[normModelo(v.marca, v.modelo)] || PLACEHOLDER_FOTO;
     setFoto.run(JSON.stringify([nueva]), v.id);
+  }
+}
+
+// SQLite no permite quitar un NOT NULL con ALTER TABLE directo (a diferencia de agregar
+// columnas). Para bases ya existentes donde `cotizaciones.reserva_id` todavía es NOT NULL
+// (de antes del cotizador de venta), hay que reconstruir la tabla: crear una nueva con el
+// schema correcto (reserva_id nullable), copiar los datos, borrar la vieja y renombrar.
+// Es un no-op seguro en bases nuevas (creadas ya con el CREATE TABLE de arriba) porque el
+// PRAGMA nunca encontrará notnull=1 ahí.
+function migrarCotizacionesReservaOpcional(db: Database.Database) {
+  const fkEstabaActivo = !!db.pragma('foreign_keys', { simple: true });
+  try {
+    const cols = db.prepare("PRAGMA table_info(cotizaciones)").all() as Array<{ name: string; notnull: number }>;
+    const reservaCol = cols.find(c => c.name === 'reserva_id');
+    if (!reservaCol || reservaCol.notnull !== 1) return; // ya es nullable (o la tabla no existe todavía)
+
+    // Patrón oficial de SQLite para reconstruir una tabla con foreign keys de por medio:
+    // las FK se desactivan ANTES de abrir la transacción (un PRAGMA foreign_keys dentro de
+    // una transacción es un no-op hasta que termina) y se reactivan después.
+    if (fkEstabaActivo) db.pragma('foreign_keys = OFF');
+    db.exec(`
+      BEGIN TRANSACTION;
+
+      CREATE TABLE cotizaciones_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        reserva_id INTEGER REFERENCES reservas(id),
+        numero TEXT NOT NULL,
+        cliente_nombre TEXT DEFAULT '',
+        cliente_correo TEXT DEFAULT '',
+        cliente_celular TEXT DEFAULT '',
+        vehiculo_id INTEGER REFERENCES vehiculos(id),
+        vehiculo_descripcion TEXT DEFAULT '',
+        fecha_inicio TEXT DEFAULT '',
+        fecha_fin TEXT DEFAULT '',
+        dias INTEGER DEFAULT 0,
+        precio_dia REAL DEFAULT 0,
+        recargo REAL DEFAULT 0,
+        total REAL DEFAULT 0,
+        estado TEXT DEFAULT 'enviada' CHECK(estado IN ('enviada','aceptada','vencida','cancelada')),
+        enviada_en TEXT DEFAULT '',
+        created_at TEXT DEFAULT (datetime('now', 'localtime'))
+      );
+
+      INSERT INTO cotizaciones_new (
+        id, reserva_id, numero, cliente_nombre, cliente_correo,
+        vehiculo_descripcion, dias, precio_dia, recargo, total, estado, enviada_en, created_at
+      )
+      SELECT id, reserva_id, numero, cliente_nombre, cliente_correo,
+             vehiculo_descripcion, dias, precio_dia, recargo, total, estado, enviada_en, created_at
+      FROM cotizaciones;
+
+      DROP TABLE cotizaciones;
+      ALTER TABLE cotizaciones_new RENAME TO cotizaciones;
+
+      COMMIT;
+    `);
+    console.log('[db] Migración: cotizaciones.reserva_id ahora es opcional (cotizador de venta).');
+  } catch (e) {
+    console.error('[db] Migración cotizaciones.reserva_id nullable falló:', e instanceof Error ? e.message : e);
+  } finally {
+    if (fkEstabaActivo) db.pragma('foreign_keys = ON');
   }
 }

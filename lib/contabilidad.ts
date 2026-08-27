@@ -8,6 +8,8 @@ import type Database from 'better-sqlite3';
 import { getConfig } from './operaciones';
 import { emitirFacturaDataico, dataicoHabilitado } from './dataico';
 import { enviarCorreo } from './email';
+import { calcularDiasAlquiler, calcularTotalAlquiler } from './lugares';
+import { construirFacturaPDF } from './contabilidad-pdf';
 
 type DB = Database.Database;
 
@@ -71,6 +73,27 @@ function cargarContexto(db: DB, reservaId: number): ReservaContexto | null {
 }
 
 // ── Cotizaciones ─────────────────────────────────────────────────────────────
+// Texto del correo compartido entre la cotización automática (ligada a una reserva real)
+// y la cotización manual del cotizador de venta (prospecto sin reserva) — para no tener
+// dos redacciones que se desincronicen con el tiempo.
+async function enviarCotizacionPorCorreo(
+  correo: string, nombreCliente: string, num: string, vehiculoDescripcion: string,
+  fechaInicio: string, fechaFin: string, dias: number, precioDia: number, recargo: number, total: number,
+): Promise<void> {
+  if (!correo) return;
+  try {
+    await enviarCorreo(correo, `Cotización ${num} — DrivePass`,
+      `Hola ${nombreCliente.split(' ')[0] || nombreCliente}, esta es tu cotización:\n\n` +
+      `Vehículo: ${vehiculoDescripcion}\n` +
+      `Del ${fechaInicio} al ${fechaFin} (${dias} día${dias !== 1 ? 's' : ''})\n` +
+      `Tarifa: $${precioDia.toLocaleString('es-CO')}/día` +
+      (recargo > 0 ? `\nRecargo por lugar de entrega/recogida: $${recargo.toLocaleString('es-CO')}` : '') +
+      `\nTotal: $${total.toLocaleString('es-CO')}\n\nCotización ${num}.`);
+  } catch (e) {
+    console.error('[contabilidad] No se pudo enviar la cotización por correo:', e instanceof Error ? e.message : e);
+  }
+}
+
 export async function generarCotizacion(db: DB, reservaId: number, enviarCorreoCliente = true) {
   const existente = db.prepare('SELECT id FROM cotizaciones WHERE reserva_id = ?').get(reservaId) as { id: number } | undefined;
   if (existente) return existente;
@@ -78,31 +101,81 @@ export async function generarCotizacion(db: DB, reservaId: number, enviarCorreoC
   const ctx = cargarContexto(db, reservaId);
   if (!ctx) return null;
 
-  const dias = Math.max(1, Math.ceil((new Date(ctx.fecha_fin).getTime() - new Date(ctx.fecha_inicio).getTime()) / 86400000));
+  const dias = calcularDiasAlquiler(ctx.fecha_inicio, ctx.fecha_fin);
+  const vehiculoDescripcion = `${ctx.marca} ${ctx.modelo} ${ctx.anio}`;
   const result = db.prepare(`
-    INSERT INTO cotizaciones (reserva_id, numero, cliente_nombre, cliente_correo, vehiculo_descripcion, dias, precio_dia, recargo, total, enviada_en)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'))
+    INSERT INTO cotizaciones (reserva_id, numero, cliente_nombre, cliente_correo, vehiculo_id, vehiculo_descripcion, fecha_inicio, fecha_fin, dias, precio_dia, recargo, total, enviada_en)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'))
   `).run(
     reservaId, '', ctx.usuario_nombre, ctx.usuario_correo,
-    `${ctx.marca} ${ctx.modelo} ${ctx.anio}`, dias, ctx.precio_dia, ctx.recargo, ctx.total,
+    ctx.vehiculo_id, vehiculoDescripcion, ctx.fecha_inicio, ctx.fecha_fin, dias, ctx.precio_dia, ctx.recargo, ctx.total,
   );
   const id = Number(result.lastInsertRowid);
   const num = numero('COT', id);
   db.prepare('UPDATE cotizaciones SET numero = ? WHERE id = ?').run(num, id);
 
-  if (enviarCorreoCliente && ctx.usuario_correo) {
-    try {
-      await enviarCorreo(ctx.usuario_correo, `Cotización ${num} — DrivePass`,
-        `Hola ${ctx.usuario_nombre.split(' ')[0]}, esta es la cotización de tu reserva:\n\n` +
-        `Vehículo: ${ctx.marca} ${ctx.modelo} ${ctx.anio}\n` +
-        `Del ${ctx.fecha_inicio} al ${ctx.fecha_fin} (${dias} día${dias !== 1 ? 's' : ''})\n` +
-        `Tarifa: $${ctx.precio_dia.toLocaleString('es-CO')}/día` +
-        (ctx.recargo > 0 ? `\nRecargo por lugar de entrega/recogida: $${ctx.recargo.toLocaleString('es-CO')}` : '') +
-        `\nTotal: $${ctx.total.toLocaleString('es-CO')}\n\nCotización ${num}.`);
-    } catch (e) {
-      console.error('[contabilidad] No se pudo enviar la cotización por correo:', e instanceof Error ? e.message : e);
+  if (enviarCorreoCliente) {
+    await enviarCotizacionPorCorreo(ctx.usuario_correo, ctx.usuario_nombre, num, vehiculoDescripcion, ctx.fecha_inicio, ctx.fecha_fin, dias, ctx.precio_dia, ctx.recargo, ctx.total);
+  }
+
+  return { id, numero: num };
+}
+
+// Cotización "suelta" del cotizador de venta: para un prospecto que todavía NO tiene
+// cuenta ni reserva (no hay fila en `reservas` de la cual sacar fechas/vehículo/precio).
+// Reutiliza calcularDiasAlquiler/calcularTotalAlquiler — la MISMA fórmula del flujo real
+// de reserva (app/api/reservas/route.ts) — para que el precio nunca se desincronice.
+export type CotizacionManualInput = {
+  clienteNombre: string;
+  clienteCorreo?: string;
+  clienteCelular?: string;
+  vehiculoId?: number | null;
+  vehiculoDescripcion?: string; // texto libre si no hay vehiculoId (o no se encontró)
+  fechaInicio: string;
+  fechaFin: string;
+  recargo?: number;
+  totalOverride?: number | null; // ajuste manual del admin/contadora (descuento, etc.)
+};
+
+export async function generarCotizacionManual(db: DB, input: CotizacionManualInput) {
+  const dias = calcularDiasAlquiler(input.fechaInicio, input.fechaFin);
+
+  let precioDia = 0;
+  let vehiculoId: number | null = null;
+  let vehiculoDescripcion = (input.vehiculoDescripcion || '').trim();
+
+  if (input.vehiculoId) {
+    const veh = db.prepare('SELECT id, marca, modelo, anio, precio_dia FROM vehiculos WHERE id = ?').get(input.vehiculoId) as
+      { id: number; marca: string; modelo: string; anio: number; precio_dia: number } | undefined;
+    if (veh) {
+      vehiculoId = veh.id;
+      precioDia = veh.precio_dia;
+      vehiculoDescripcion = `${veh.marca} ${veh.modelo} ${veh.anio}`;
     }
   }
+  if (!vehiculoDescripcion) vehiculoDescripcion = 'Vehículo por definir';
+
+  const recargo = Number(input.recargo) || 0;
+  const totalCalculado = calcularTotalAlquiler(dias, precioDia, recargo);
+  const total = (input.totalOverride !== null && input.totalOverride !== undefined && Number.isFinite(input.totalOverride))
+    ? Number(input.totalOverride)
+    : totalCalculado;
+
+  const clienteCorreo = (input.clienteCorreo || '').trim();
+  const clienteCelular = (input.clienteCelular || '').trim();
+
+  const result = db.prepare(`
+    INSERT INTO cotizaciones (reserva_id, numero, cliente_nombre, cliente_correo, cliente_celular, vehiculo_id, vehiculo_descripcion, fecha_inicio, fecha_fin, dias, precio_dia, recargo, total, enviada_en)
+    VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'))
+  `).run(
+    '', input.clienteNombre, clienteCorreo, clienteCelular,
+    vehiculoId, vehiculoDescripcion, input.fechaInicio, input.fechaFin, dias, precioDia, recargo, total,
+  );
+  const id = Number(result.lastInsertRowid);
+  const num = numero('COT', id);
+  db.prepare('UPDATE cotizaciones SET numero = ? WHERE id = ?').run(num, id);
+
+  await enviarCotizacionPorCorreo(clienteCorreo, input.clienteNombre, num, vehiculoDescripcion, input.fechaInicio, input.fechaFin, dias, precioDia, recargo, total);
 
   return { id, numero: num };
 }
@@ -147,7 +220,7 @@ export function generarRemision(db: DB, reservaId: number) {
   const bruto = ctx.total;
   const comisionValor = Math.round(bruto * pct);
   const neto = bruto - comisionValor;
-  const dias = Math.max(1, Math.ceil((new Date(ctx.fecha_fin).getTime() - new Date(ctx.fecha_inicio).getTime()) / 86400000));
+  const dias = calcularDiasAlquiler(ctx.fecha_inicio, ctx.fecha_fin);
 
   const result = db.prepare(`
     INSERT INTO remisiones (reserva_id, propietario_id, numero, propietario_nombre, propietario_documento,
@@ -164,6 +237,14 @@ export function generarRemision(db: DB, reservaId: number) {
 }
 
 // ── Facturas (DataICO o borrador local si no hay credenciales) ──────────────
+type FacturaRow = {
+  id: number; reserva_id: number; numero: string;
+  cliente_nombre: string; cliente_documento: string; cliente_correo: string;
+  subtotal: number; iva: number; total: number; estado: 'borrador' | 'emitida' | 'anulada' | 'error';
+  dataico_cufe: string; dataico_pdf_url: string; dataico_error: string;
+  emitida_en: string; created_at: string;
+};
+
 export async function emitirFactura(db: DB, reservaId: number) {
   const existente = db.prepare('SELECT * FROM facturas WHERE reserva_id = ?').get(reservaId);
   if (existente) return existente;
@@ -171,7 +252,7 @@ export async function emitirFactura(db: DB, reservaId: number) {
   const ctx = cargarContexto(db, reservaId);
   if (!ctx) return null;
 
-  const dias = Math.max(1, Math.ceil((new Date(ctx.fecha_fin).getTime() - new Date(ctx.fecha_inicio).getTime()) / 86400000));
+  const dias = calcularDiasAlquiler(ctx.fecha_inicio, ctx.fecha_fin);
   const items = [{ descripcion: `Alquiler ${ctx.marca} ${ctx.modelo} ${ctx.anio} (${dias} día${dias !== 1 ? 's' : ''})`, cantidad: 1, valorUnitario: ctx.total - ctx.recargo }];
   if (ctx.recargo > 0) items.push({ descripcion: 'Recargo por lugar de entrega/recogida', cantidad: 1, valorUnitario: ctx.recargo });
 
@@ -187,14 +268,21 @@ export async function emitirFactura(db: DB, reservaId: number) {
         VALUES (?, ?, ?, ?, ?, ?, 0, ?, 'emitida', ?, ?, datetime('now','localtime'))
       `).run(reservaId, resultado.numero || `DP-${reservaId}`, ctx.usuario_nombre, ctx.usuario_documento, ctx.usuario_correo, ctx.total, ctx.total, resultado.cufe, resultado.pdfUrl);
     } else {
-      const id = insertarBorrador(db, ctx, 'error', resultado.error);
-      return db.prepare('SELECT * FROM facturas WHERE id = ?').get(id);
+      insertarBorrador(db, ctx, 'error', resultado.error);
     }
   } else {
     insertarBorrador(db, ctx, 'borrador', 'DataICO no configurado — factura en borrador local, sin validez DIAN todavía.');
   }
 
-  return db.prepare('SELECT * FROM facturas WHERE reserva_id = ?').get(reservaId);
+  const factura = db.prepare('SELECT * FROM facturas WHERE reserva_id = ?').get(reservaId) as FacturaRow | undefined;
+
+  // El correo con el PDF adjunto solo aplica a facturas realmente emitidas/en borrador
+  // (no a 'error': ahí no hay nada válido que mandarle al cliente, el equipo debe reintentar).
+  if (factura && factura.estado !== 'error') {
+    await enviarFacturaPorCorreoConAdjunto(db, ctx, factura, dias);
+  }
+
+  return factura ?? null;
 }
 
 function insertarBorrador(db: DB, ctx: ReservaContexto, estado: 'borrador' | 'error', nota: string): number {
@@ -205,6 +293,49 @@ function insertarBorrador(db: DB, ctx: ReservaContexto, estado: 'borrador' | 'er
   const id = Number(result.lastInsertRowid);
   db.prepare('UPDATE facturas SET numero = ? WHERE id = ?').run(numero('DP', id), id);
   return id;
+}
+
+// Envía la factura por correo con el PDF adjunto. Si la factura se emitió de verdad vía
+// DataICO (con PDF oficial ante la DIAN), se intenta adjuntar ESE PDF descargándolo de
+// `dataico_pdf_url`; si no hay DataICO (borrador local) o la descarga falla, se genera el
+// PDF en el servidor con jsPDF (misma construcción que usa el botón "PDF" del admin,
+// lib/contabilidad-pdf.ts) — jsPDF no necesita DOM/Canvas, corre igual en Node.
+// Nunca revienta la emisión de la factura: cualquier fallo de correo queda solo en logs
+// (mismo patrón defensivo que generarCotizacion).
+async function enviarFacturaPorCorreoConAdjunto(db: DB, ctx: ReservaContexto, factura: FacturaRow, dias: number): Promise<void> {
+  if (!ctx.usuario_correo) return;
+  try {
+    const empresa = datosEmpresa(db);
+    let adjunto: { filename: string; content: Buffer } | null = null;
+
+    if (factura.estado === 'emitida' && factura.dataico_pdf_url) {
+      try {
+        const res = await fetch(factura.dataico_pdf_url, { signal: AbortSignal.timeout(15000) });
+        if (res.ok) adjunto = { filename: `${factura.numero || 'factura'}.pdf`, content: Buffer.from(await res.arrayBuffer()) };
+      } catch (e) {
+        console.error('[contabilidad] No se pudo descargar el PDF oficial de DataICO, se genera uno local:', e instanceof Error ? e.message : e);
+      }
+    }
+
+    if (!adjunto) {
+      const doc = construirFacturaPDF(empresa, {
+        numero: factura.numero, created_at: factura.created_at, estado: factura.estado,
+        cliente_nombre: factura.cliente_nombre, cliente_documento: factura.cliente_documento, cliente_correo: factura.cliente_correo,
+        subtotal: factura.subtotal, total: factura.total,
+        marca: ctx.marca, modelo: ctx.modelo, anio: ctx.anio, fecha_inicio: ctx.fecha_inicio, fecha_fin: ctx.fecha_fin,
+        dataico_cufe: factura.dataico_cufe,
+      });
+      adjunto = { filename: `${factura.numero || 'factura'}.pdf`, content: Buffer.from(doc.output('arraybuffer')) };
+    }
+
+    await enviarCorreo(ctx.usuario_correo, `Factura ${factura.numero || ''} — DrivePass`,
+      `Hola ${ctx.usuario_nombre.split(' ')[0]}, adjuntamos la factura de tu alquiler ${ctx.marca} ${ctx.modelo} ${ctx.anio} ` +
+      `(${ctx.fecha_inicio} a ${ctx.fecha_fin}, ${dias} día${dias !== 1 ? 's' : ''}) por $${factura.total.toLocaleString('es-CO')}.` +
+      (factura.estado === 'borrador' ? '\n\nEsta es una factura en borrador — se emitirá oficialmente ante la DIAN en cuanto esté activa la facturación electrónica.' : ''),
+      [adjunto]);
+  } catch (e) {
+    console.error('[contabilidad] No se pudo enviar la factura por correo:', e instanceof Error ? e.message : e);
+  }
 }
 
 // ── Orquestador: se llama cuando una reserva pasa a pago_estado = 'pagado' ──

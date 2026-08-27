@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { IconCar, IconSearch, IconCalendar, IconX } from '@/components/Icons';
 import { fechaHoraRecogida, calcularPoliticaCancelacion } from '@/lib/cancelacion';
 import ReferidosCard from '@/components/ReferidosCard';
+import { descargarFacturaPDF, type FacturaPDFDatos } from '@/lib/contabilidad-pdf';
 
 type Reserva = {
   id: number; vehiculo_id: number; marca: string; modelo: string; anio: number;
@@ -32,6 +33,7 @@ export default function DashboardUsuario() {
   const [modal, setModal] = useState<{ reserva: Reserva; pct: number; motivo: string } | null>(null);
   const [cancelando, setCancelando] = useState(false);
   const [error, setError] = useState('');
+  const [facturas, setFacturas] = useState<Record<number, { factura: FacturaPDFDatos | null; empresa: { nombre: string; nit: string } | null }>>({});
   const router = useRouter();
 
   const cargarReservas = () =>
@@ -44,6 +46,22 @@ export default function DashboardUsuario() {
     }).catch(() => router.push('/login'));
     cargarReservas();
   }, [router]);
+
+  // Consulta si ya existe factura para cada reserva pagada (una sola vez por reserva) — así
+  // el botón "Descargar factura" solo aparece cuando de verdad hay algo que descargar, sin
+  // mostrar un botón roto si el enganche automático todavía no la generó.
+  useEffect(() => {
+    const pendientes = reservas.filter(r => r.pago_estado === 'pagado' && !(r.id in facturas));
+    if (pendientes.length === 0) return;
+    pendientes.forEach(r => {
+      fetch(`/api/reservas/${r.id}/factura`).then(res => res.json()).then(d => {
+        setFacturas(prev => ({ ...prev, [r.id]: { factura: d.factura || null, empresa: d.empresa || null } }));
+      }).catch(() => {
+        setFacturas(prev => ({ ...prev, [r.id]: { factura: null, empresa: null } }));
+      });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reservas]);
 
   const abrirConfirmacion = (r: Reserva) => {
     let recogida: { hora?: string } = {};
@@ -175,6 +193,16 @@ export default function DashboardUsuario() {
                   className="text-xs font-semibold px-3.5 py-2 rounded-xl border border-border-strong text-ink bg-surface hover:bg-surface-3 transition">
                   Ver detalle
                 </Link>
+                {r.pago_estado === 'pagado' && (
+                  facturas[r.id]?.factura && facturas[r.id]?.empresa ? (
+                    <button onClick={() => descargarFacturaPDF(facturas[r.id].empresa!, facturas[r.id].factura!)}
+                      className="text-xs font-semibold px-3.5 py-2 rounded-xl border border-accent/30 text-accent hover:bg-accent-light transition">
+                      Descargar factura
+                    </button>
+                  ) : (r.id in facturas) ? (
+                    <span className="text-xs text-ink/40 px-1">Factura en proceso</span>
+                  ) : null
+                )}
                 {(r.estado === 'confirmada' || r.estado === 'pendiente') && (
                   <button onClick={() => abrirConfirmacion(r)}
                     className="text-xs font-semibold px-3.5 py-2 rounded-xl text-danger hover:bg-danger/10 transition">

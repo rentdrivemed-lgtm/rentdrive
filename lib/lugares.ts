@@ -6,6 +6,14 @@ export function esAeropuerto(municipioId: string): boolean { return municipioId 
 export function calcularRecargo(recogida?: Lugar | null, entrega?: Lugar | null): number { let r = 0; if (recogida && esAeropuerto(recogida.municipio)) r += RECARGO_AEROPUERTO; if (entrega && esAeropuerto(entrega.municipio)) r += RECARGO_AEROPUERTO; return r; }
 export function lugarValido(l?: Lugar | null): boolean { if (!l || !l.municipio || !l.hora) return false; if (esAeropuerto(l.municipio)) return true; return !!l.barrio && !!l.direccion.trim(); }
 export function lugarResumen(l?: Lugar | null): string { if (!l || !l.municipio) return '—'; return l.municipio; }
+
+// Cálculo del total de un alquiler — la MISMA fórmula la usa la reserva real (app/api/reservas/route.ts) y el cotizador de venta (sin reserva, lib/contabilidad.ts), para que nunca se desincronicen.
+export function calcularDiasAlquiler(fechaInicio: string, fechaFin: string): number {
+  return Math.max(1, Math.ceil((new Date(fechaFin).getTime() - new Date(fechaInicio).getTime()) / 86400000));
+}
+export function calcularTotalAlquiler(dias: number, precioDia: number, recargo: number): number {
+  return dias * precioDia + recargo;
+}
 export function guardarLugares(recogida: Lugar, entrega: Lugar): void { if (typeof window === 'undefined') return; try { sessionStorage.setItem('drivepass_lugares', JSON.stringify({ recogida, entrega })); } catch {} }
 export function cargarLugares(): { recogida: Lugar; entrega: Lugar } { return { recogida: { ...LUGAR_VACIO }, entrega: { ...LUGAR_VACIO} }; }
 export function guardarDestino(url: string): void { if (typeof window === 'undefined') return; try { sessionStorage.setItem('drivepass_next', url); } catch {} }

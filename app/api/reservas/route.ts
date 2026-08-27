@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
 import { adminTieneArea, sinPermisoArea } from '@/lib/guard';
-import { calcularRecargo, lugarValido, type Lugar } from '@/lib/lugares';
+import { calcularRecargo, calcularDiasAlquiler, calcularTotalAlquiler, lugarValido, type Lugar } from '@/lib/lugares';
 import { enviarCorreo } from '@/lib/email';
 import { generarCotizacion } from '@/lib/contabilidad';
 import { consumirCreditos } from '@/lib/referidos';
@@ -194,9 +194,9 @@ export async function POST(req: NextRequest) {
   db.prepare('UPDATE usuarios SET direccion = ?, ciudad = ?, contacto_emergencia = ? WHERE id = ?')
     .run(direccionFinal, ciudadFinal, JSON.stringify({ nombre: emNombreFinal, telefono: emTelFinal }), user.id);
 
-  const dias = Math.ceil((new Date(fecha_fin).getTime() - new Date(fecha_inicio).getTime()) / (1000 * 60 * 60 * 24));
+  const dias = calcularDiasAlquiler(fecha_inicio, fecha_fin);
   const recargo = calcularRecargo(recogidaL, entregaL); // autoritativo: server-side
-  const totalBruto = dias * Number(vehiculo.precio_dia) + recargo;
+  const totalBruto = calcularTotalAlquiler(dias, Number(vehiculo.precio_dia), recargo);
 
   // Créditos de referidos: se descuentan del servidor (nunca se confía en un monto
   // que mande el cliente), y solo hasta el saldo real disponible.
