@@ -69,6 +69,19 @@ export async function POST(req: NextRequest) {
     if (totalOverride !== null && !Number.isFinite(totalOverride)) {
       return NextResponse.json({ error: 'El precio ajustado no es un número válido' }, { status: 400 });
     }
+    if (totalOverride !== null && totalOverride < 0) {
+      return NextResponse.json({ error: 'El precio ajustado no puede ser negativo' }, { status: 400 });
+    }
+
+    const recargoRaw = body.recargo;
+    const recargoPresente = recargoRaw !== undefined && recargoRaw !== null && recargoRaw !== '';
+    const recargo = recargoPresente ? Number(recargoRaw) : 0;
+    if (recargoPresente && !Number.isFinite(recargo)) {
+      return NextResponse.json({ error: 'El recargo no es un número válido' }, { status: 400 });
+    }
+    if (recargo < 0) {
+      return NextResponse.json({ error: 'El recargo no puede ser negativo' }, { status: 400 });
+    }
 
     const cot = await generarCotizacionManual(db, {
       clienteNombre,
@@ -78,7 +91,7 @@ export async function POST(req: NextRequest) {
       vehiculoDescripcion,
       fechaInicio,
       fechaFin,
-      recargo: Number(body.recargo) || 0,
+      recargo,
       totalOverride,
     });
     return NextResponse.json({ ok: true, cotizacion: cot }, { status: 201 });

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { IconCoin, IconCheck, IconExport, IconUpload, IconPhoto, IconX } from '@/components/Icons';
 import { descargarCotizacionPDF, descargarFacturaPDF, descargarRemisionPDF, descargarGastoPDF } from '@/lib/contabilidad-pdf';
 import { descargarGastosExcel } from '@/lib/contabilidad-excel';
+import { calcularDiasAlquiler, calcularTotalAlquiler } from '@/lib/lugares';
 
 type SubTab = 'resumen' | 'gastos' | 'cotizaciones' | 'facturas' | 'liquidaciones' | 'config';
 
@@ -459,11 +460,11 @@ export default function ContabilidadPanel() {
   // manualmente en "Precio final" antes de guardar (ej. descuento comercial).
   const cotManualPreview = (() => {
     if (!cotManual.fecha_inicio || !cotManual.fecha_fin) return null;
-    const dias = Math.max(1, Math.ceil((new Date(cotManual.fecha_fin).getTime() - new Date(cotManual.fecha_inicio).getTime()) / 86400000));
+    const dias = calcularDiasAlquiler(cotManual.fecha_inicio, cotManual.fecha_fin);
     const veh = vehiculosInventario.find(v => String(v.id) === cotManual.vehiculo_id);
     const precioDia = veh?.precio_dia || 0;
     const recargo = Number(cotManual.recargo) || 0;
-    return { dias, precioDia, recargo, total: dias * precioDia + recargo };
+    return { dias, precioDia, recargo, total: calcularTotalAlquiler(dias, precioDia, recargo) };
   })();
 
   const guardarCotizacionManual = async () => {

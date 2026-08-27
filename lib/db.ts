@@ -651,42 +651,50 @@ function migrarCotizacionesReservaOpcional(db: Database.Database) {
     // las FK se desactivan ANTES de abrir la transacción (un PRAGMA foreign_keys dentro de
     // una transacción es un no-op hasta que termina) y se reactivan después.
     if (fkEstabaActivo) db.pragma('foreign_keys = OFF');
-    db.exec(`
-      BEGIN TRANSACTION;
 
-      CREATE TABLE cotizaciones_new (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        reserva_id INTEGER REFERENCES reservas(id),
-        numero TEXT NOT NULL,
-        cliente_nombre TEXT DEFAULT '',
-        cliente_correo TEXT DEFAULT '',
-        cliente_celular TEXT DEFAULT '',
-        vehiculo_id INTEGER REFERENCES vehiculos(id),
-        vehiculo_descripcion TEXT DEFAULT '',
-        fecha_inicio TEXT DEFAULT '',
-        fecha_fin TEXT DEFAULT '',
-        dias INTEGER DEFAULT 0,
-        precio_dia REAL DEFAULT 0,
-        recargo REAL DEFAULT 0,
-        total REAL DEFAULT 0,
-        estado TEXT DEFAULT 'enviada' CHECK(estado IN ('enviada','aceptada','vencida','cancelada')),
-        enviada_en TEXT DEFAULT '',
-        created_at TEXT DEFAULT (datetime('now', 'localtime'))
-      );
+    // db.transaction() (no BEGIN/COMMIT manual): better-sqlite3 hace ROLLBACK automático
+    // si el callback lanza una excepción a mitad de camino. Con el patrón manual anterior,
+    // un fallo dejaba `db.inTransaction` en true de forma PERMANENTE (getDb() es un
+    // singleton) y cualquier escritura posterior de la app quedaba metida silenciosamente
+    // en esa transacción nunca confirmada. Verificado que SQLite permite DDL (CREATE/DROP/
+    // ALTER TABLE) dentro de una transacción explícita, así que este patrón aplica limpio.
+    const reconstruir = db.transaction(() => {
+      db.exec(`
+        CREATE TABLE cotizaciones_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          reserva_id INTEGER REFERENCES reservas(id),
+          numero TEXT NOT NULL,
+          cliente_nombre TEXT DEFAULT '',
+          cliente_correo TEXT DEFAULT '',
+          cliente_celular TEXT DEFAULT '',
+          vehiculo_id INTEGER REFERENCES vehiculos(id),
+          vehiculo_descripcion TEXT DEFAULT '',
+          fecha_inicio TEXT DEFAULT '',
+          fecha_fin TEXT DEFAULT '',
+          dias INTEGER DEFAULT 0,
+          precio_dia REAL DEFAULT 0,
+          recargo REAL DEFAULT 0,
+          total REAL DEFAULT 0,
+          estado TEXT DEFAULT 'enviada' CHECK(estado IN ('enviada','aceptada','vencida','cancelada')),
+          enviada_en TEXT DEFAULT '',
+          created_at TEXT DEFAULT (datetime('now', 'localtime'))
+        );
 
-      INSERT INTO cotizaciones_new (
-        id, reserva_id, numero, cliente_nombre, cliente_correo,
-        vehiculo_descripcion, dias, precio_dia, recargo, total, estado, enviada_en, created_at
-      )
-      SELECT id, reserva_id, numero, cliente_nombre, cliente_correo,
-             vehiculo_descripcion, dias, precio_dia, recargo, total, estado, enviada_en, created_at
-      FROM cotizaciones;
+        INSERT INTO cotizaciones_new (
+          id, reserva_id, numero, cliente_nombre, cliente_correo, cliente_celular,
+          vehiculo_id, vehiculo_descripcion, fecha_inicio, fecha_fin, dias, precio_dia,
+          recargo, total, estado, enviada_en, created_at
+        )
+        SELECT id, reserva_id, numero, cliente_nombre, cliente_correo, cliente_celular,
+               vehiculo_id, vehiculo_descripcion, fecha_inicio, fecha_fin, dias, precio_dia,
+               recargo, total, estado, enviada_en, created_at
+        FROM cotizaciones;
 
-      DROP TABLE cotizaciones;
-      ALTER TABLE cotizaciones_new RENAME TO cotizaciones;
-
-      COMMIT;
-    `);
+        DROP TABLE cotizaciones;
+        ALTER TABLE cotizaciones_new RENAME TO cotizaciones;
+      `);
+    });
+    reconstruir();
     console.log('[db] Migración: cotizaciones.reserva_id ahora es opcional (cotizador de venta).');
   } catch (e) {
     console.error('[db] Migración cotizaciones.reserva_id nullable falló:', e instanceof Error ? e.message : e);
