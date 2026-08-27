@@ -214,3 +214,95 @@ export function descargarRemisionPDF(empresa: Empresa, rem: {
 
   doc.save(`${rem.numero || 'remision'}.pdf`);
 }
+
+// La cuenta de cobro que firma el propietario para autorizar el pago (firma electrónica
+// simple, ver PROYECTO.md). Mismo desglose que la remisión, pero con el bloque de firma
+// (o "PENDIENTE DE FIRMA" bien visible si todavía no se ha firmado — nunca un espacio en
+// blanco que pueda confundirse con un documento válido sin firmar).
+export function descargarCuentaCobroPDF(empresa: Empresa, rem: {
+  numero: string; created_at?: string; propietario_nombre: string; propietario_documento?: string;
+  vehiculo_descripcion: string; placa?: string; fecha_inicio: string; fecha_fin: string; dias: number;
+  bruto: number; comision_pct: number; comision_valor: number; neto: number;
+  firmada_en?: string; firma_imagen?: string; firma_nombre_confirmado?: string; firma_ip?: string;
+}) {
+  const doc = new jsPDF();
+
+  doc.setFontSize(18); doc.setFont('helvetica', 'bold');
+  doc.text(empresa.nombre || 'DrivePass', 14, 20);
+  doc.setFontSize(10); doc.setFont('helvetica', 'normal');
+  if (empresa.nit) doc.text(`NIT: ${empresa.nit}`, 14, 26);
+
+  doc.setFontSize(14); doc.setFont('helvetica', 'bold');
+  doc.text('CUENTA DE COBRO', 196, 20, { align: 'right' });
+  doc.setFontSize(10); doc.setFont('helvetica', 'normal');
+  doc.text(`No. ${rem.numero}`, 196, 26, { align: 'right' });
+  doc.text(`Fecha: ${(rem.created_at || '').slice(0, 10)}`, 196, 31, { align: 'right' });
+
+  doc.setDrawColor(200); doc.line(14, 36, 196, 36);
+
+  doc.setFontSize(10); doc.setFont('helvetica', 'bold');
+  doc.text('Propietario del vehículo', 14, 44);
+  doc.setFont('helvetica', 'normal');
+  doc.text(rem.propietario_nombre || '—', 14, 50);
+  if (rem.propietario_documento) doc.text(`Documento: ${rem.propietario_documento}`, 14, 55);
+
+  doc.setFont('helvetica', 'bold');
+  doc.text('Vehículo', 120, 44);
+  doc.setFont('helvetica', 'normal');
+  doc.text(rem.vehiculo_descripcion || '—', 120, 50);
+  if (rem.placa) doc.text(`Placa: ${rem.placa}`, 120, 55);
+  doc.text(`Período: ${rem.fecha_inicio} a ${rem.fecha_fin}`, 120, 60);
+
+  autoTable(doc, {
+    startY: 70,
+    head: [['Concepto', 'Valor']],
+    body: [
+      [`Alquiler ${rem.vehiculo_descripcion} (${rem.dias} día${rem.dias !== 1 ? 's' : ''})`, cop(rem.bruto)],
+      [`Comisión ${empresa.nombre || 'DrivePass'} (${(rem.comision_pct * 100).toFixed(0)}%)`, `- ${cop(rem.comision_valor)}`],
+    ],
+    foot: [['Neto a pagar al propietario', cop(rem.neto)]],
+    theme: 'grid',
+    headStyles: { fillColor: [199, 74, 33] },
+    footStyles: { fillColor: [27, 51, 86], textColor: 255, fontStyle: 'bold' },
+  });
+
+  let y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY || 100;
+
+  if (rem.firmada_en) {
+    y += 14;
+    doc.setFontSize(10); doc.setTextColor(0); doc.setFont('helvetica', 'bold');
+    doc.text('Autorización del propietario', 14, y);
+    y += 6;
+    if (rem.firma_imagen) {
+      try {
+        doc.addImage(rem.firma_imagen, 'PNG', 14, y, 70, 30);
+        y += 34;
+      } catch {
+        // Si el data URI no es válido (dato corrupto/incompleto) no tumba la generación del PDF.
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
+        doc.text('(No se pudo mostrar la imagen de la firma)', 14, y);
+        y += 8;
+      }
+    }
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(40);
+    if (rem.firma_nombre_confirmado) doc.text(`Firmado por: ${rem.firma_nombre_confirmado}`, 14, y);
+    doc.setFontSize(8); doc.setTextColor(120);
+    doc.text(
+      `Firmado electrónicamente el ${rem.firmada_en.slice(0, 16).replace('T', ' ')}${rem.firma_ip ? ` desde IP ${rem.firma_ip}` : ''}.`,
+      14, y + 6, { maxWidth: 182 },
+    );
+    y += 14;
+  } else {
+    y += 14;
+    doc.setFontSize(12); doc.setFont('helvetica', 'bold'); doc.setTextColor(199, 74, 33);
+    doc.text('PENDIENTE DE FIRMA', 14, y);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(120);
+    doc.text('Esta cuenta de cobro todavía no ha sido firmada por el propietario. No autoriza ningún pago.', 14, y + 7, { maxWidth: 182 });
+    y += 14;
+  }
+
+  doc.setFontSize(9); doc.setTextColor(120);
+  doc.text('Cuenta de cobro — documento de autorización de pago al propietario. No constituye factura.', 14, y + 8, { maxWidth: 182 });
+
+  doc.save(`${rem.numero || 'cuenta-cobro'}.pdf`);
+}

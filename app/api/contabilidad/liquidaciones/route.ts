@@ -10,7 +10,7 @@ type LiquidacionRow = {
   bruto: number; comision_pct: number; comision_valor: number; neto: number;
   estado: string; pagado_en: string; comprobante: string; comprobante_url: string;
   propietario_nombre: string; propietario_correo: string; propietario_documento: string;
-  banco: string; numero_cuenta: string; placa: string; remision_numero: string;
+  banco: string; numero_cuenta: string; placa: string; remision_numero: string; firmada_en: string;
   marca: string; modelo: string; anio: number; fecha_inicio: string; fecha_fin: string; usuario_nombre: string;
 };
 
@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
     SELECT l.*, p.nombre AS propietario_nombre, p.correo AS propietario_correo,
            COALESCE(p.documento_identidad,'') AS propietario_documento,
            COALESCE(p.banco,'') AS banco, COALESCE(p.numero_cuenta,'') AS numero_cuenta,
-           COALESCE(v.placa,'') AS placa, COALESCE(rem.numero,'') AS remision_numero,
+           COALESCE(v.placa,'') AS placa, COALESCE(rem.numero,'') AS remision_numero, COALESCE(rem.firmada_en,'') AS firmada_en,
            v.marca, v.modelo, v.anio, r.fecha_inicio, r.fecha_fin, u.nombre AS usuario_nombre
     FROM liquidaciones l
     JOIN usuarios p ON l.propietario_id = p.id
@@ -79,27 +79,52 @@ export async function PUT(req: NextRequest) {
   const ids: number[] = body.reserva_ids || (body.reserva_id ? [body.reserva_id] : []);
   if (ids.length === 0) return NextResponse.json({ error: 'Se requiere al menos un reserva_id' }, { status: 400 });
 
-  type Fila = { reserva_id: number; propietario_id: number; neto: number; marca: string; modelo: string; fecha_inicio: string; fecha_fin: string };
+  type Fila = {
+    reserva_id: number; propietario_id: number; neto: number; marca: string; modelo: string;
+    fecha_inicio: string; fecha_fin: string; firmada_en: string;
+  };
   const rows = db.prepare(`
-    SELECT l.reserva_id, l.propietario_id, l.neto, v.marca, v.modelo, r.fecha_inicio, r.fecha_fin
-    FROM liquidaciones l JOIN reservas r ON l.reserva_id = r.id JOIN vehiculos v ON r.vehiculo_id = v.id
+    SELECT l.reserva_id, l.propietario_id, l.neto, v.marca, v.modelo, r.fecha_inicio, r.fecha_fin,
+           COALESCE(rem.firmada_en, '') AS firmada_en
+    FROM liquidaciones l
+    JOIN reservas r ON l.reserva_id = r.id
+    JOIN vehiculos v ON r.vehiculo_id = v.id
+    LEFT JOIN remisiones rem ON rem.reserva_id = l.reserva_id
     WHERE l.reserva_id IN (${ids.map(() => '?').join(',')}) AND l.estado = 'pendiente'
   `).all(...ids) as Fila[];
 
   if (rows.length === 0) return NextResponse.json({ error: 'No hay liquidaciones pendientes con esos IDs' }, { status: 400 });
 
+  // Requisito previo al pago: el propietario tiene que haber firmado su cuenta de cobro
+  // (remisión) autorizando el monto exacto. Las que no estén firmadas se excluyen del
+  // pago (no se rechazan las demás) y se informan al llamador.
+  const firmadas = rows.filter(r => !!r.firmada_en);
+  const sinFirmar = rows.filter(r => !r.firmada_en);
+  const omitidos = sinFirmar.map(r => ({
+    reserva_id: r.reserva_id, marca: r.marca, modelo: r.modelo,
+    motivo: 'El propietario todavía no ha firmado su cuenta de cobro.',
+  }));
+
+  if (firmadas.length === 0) {
+    return NextResponse.json({
+      error: 'No se pudo pagar ninguna: falta la firma del propietario en su cuenta de cobro.',
+      omitidos,
+    }, { status: 409 });
+  }
+
   const comprobante = body.comprobante || '';
   const comprobanteUrl = body.comprobante_url || '';
-  marcarLiquidacionesPagadas(db, rows.map(r => r.reserva_id), comprobante, comprobanteUrl);
+  marcarLiquidacionesPagadas(db, firmadas.map(r => r.reserva_id), comprobante, comprobanteUrl);
 
-  const totalPagadoGlobal = rows.reduce((s, r) => s + r.neto, 0);
+  const totalPagadoGlobal = firmadas.reduce((s, r) => s + r.neto, 0);
   registrarAuditoria(db, { ...user, nivel }, {
     area: 'contabilidad', accion: 'pagar_liquidacion', entidad: 'liquidacion',
-    detalle: `Pagó ${rows.length} liquidación(es) a propietarios · neto $${totalPagadoGlobal.toLocaleString('es-CO')}${comprobante ? ` · ref: ${comprobante}` : ''}`,
+    detalle: `Pagó ${firmadas.length} liquidación(es) a propietarios · neto $${totalPagadoGlobal.toLocaleString('es-CO')}${comprobante ? ` · ref: ${comprobante}` : ''}`
+      + (sinFirmar.length > 0 ? ` · ${sinFirmar.length} omitida(s) por falta de firma` : ''),
   });
 
   const propGrupos: Record<number, Fila[]> = {};
-  for (const r of rows) {
+  for (const r of firmadas) {
     if (!propGrupos[r.propietario_id]) propGrupos[r.propietario_id] = [];
     propGrupos[r.propietario_id].push(r);
   }
@@ -120,5 +145,5 @@ export async function PUT(req: NextRequest) {
     insNotif.run(pid, 'pago_realizado', titulo, mensaje, filas[0].reserva_id, 'reserva');
   }
 
-  return NextResponse.json({ ok: true, actualizados: rows.length });
+  return NextResponse.json({ ok: true, actualizados: firmadas.length, omitidos });
 }
