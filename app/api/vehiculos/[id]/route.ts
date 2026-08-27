@@ -3,6 +3,8 @@ import { getDb } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
 import { adminTieneArea, sinPermisoArea } from '@/lib/guard';
 import { precioMercadoSugerido, segmentoValido } from '@/lib/precioMercado';
+import { eliminarVehiculoInteligente } from '@/lib/eliminar';
+import { registrarAuditoria } from '@/lib/permisos';
 
 const DOC_KEYS = ['soat', 'tecno', 'tarjeta', 'todo_riesgo'] as const;
 const DOC_LABELS: Record<string, string> = {
@@ -128,8 +130,19 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   // más abajo (recalcula desde categoría + valor comercial) o el override manual del admin.
   const ownFields = ['marca', 'modelo', 'anio', 'tipo', 'ubicacion', 'valor_comercial', 'precio_ajuste_pct',
     'descripcion', 'disponible', 'dias_disponibles', 'fotos_detalle', 'fotos', 'placa', 'documentos'];
-  const adminOnlyFields = ['documentos_estado', 'documentos_nota', 'en_vitrina', 'precio_manual'];
+  // `archivado`: solo el admin lo toca (ni siquiera el propietario dueño), y solo para
+  // DESARCHIVAR (0) — la vía normal para ENTRAR a archivado es DELETE (eliminar inteligente,
+  // ver más abajo), que decide solo cuándo corresponde según el historial real del vehículo.
+  const adminOnlyFields = ['documentos_estado', 'documentos_nota', 'en_vitrina', 'precio_manual', 'archivado'];
   const allowed = isAdmin ? [...ownFields, ...adminOnlyFields] : ownFields;
+
+  if (isAdmin && body.archivado !== undefined) {
+    registrarAuditoria(db, user, {
+      area: 'vehiculos', accion: Number(body.archivado) ? 'archivar_vehiculo' : 'desarchivar_vehiculo',
+      entidad: 'vehiculo', entidad_id: Number(id),
+      detalle: `${Number(body.archivado) ? 'Archivó' : 'Desarchivó'} ${vehiculo.marca} ${vehiculo.modelo} ${vehiculo.anio}`,
+    });
+  }
 
   const pairs: string[] = [];
   const values: unknown[] = [];
@@ -201,6 +214,22 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
     return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
   }
 
-  db.prepare('DELETE FROM vehiculos WHERE id = ?').run(Number(id));
-  return NextResponse.json({ ok: true });
+  // "Eliminar inteligente" (ver lib/eliminar.ts): antes esto era un DELETE sin ninguna
+  // validación de historial, capaz de tumbar reservas/remisiones/liquidaciones ya
+  // existentes por la FK NOT NULL de esas tablas hacia vehiculos(id). Ahora, si el
+  // vehículo tiene reservas (historial de negocio real) se ARCHIVA en vez de borrarse
+  // (reversible, ver PUT { archivado: 0 } más arriba); si nunca tuvo reservas, se borra
+  // de verdad.
+  const resultado = eliminarVehiculoInteligente(db, Number(id));
+
+  registrarAuditoria(db, user, {
+    area: 'vehiculos',
+    accion: resultado === 'borrado' ? 'eliminar_vehiculo' : 'archivar_vehiculo',
+    entidad: 'vehiculo', entidad_id: Number(id),
+    detalle: resultado === 'borrado'
+      ? `Eliminó (borrado real) ${vehiculo.marca} ${vehiculo.modelo} ${vehiculo.anio} — sin historial de negocio`
+      : `Archivó ${vehiculo.marca} ${vehiculo.modelo} ${vehiculo.anio} — tiene reservas, se conserva reversible`,
+  });
+
+  return NextResponse.json({ ok: true, resultado });
 }

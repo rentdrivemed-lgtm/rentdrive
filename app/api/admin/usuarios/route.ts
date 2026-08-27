@@ -7,6 +7,7 @@ import {
   parsePermisosExtra, serializarPermisosExtra, fusionarPermisosExtra,
   type PermisosExtraDelta,
 } from '@/lib/permisos';
+import { eliminarUsuarioInteligente } from '@/lib/eliminar';
 
 export async function GET() {
   const g = await guardArea('usuarios');
@@ -61,13 +62,29 @@ export async function PUT(req: NextRequest) {
   if ('error' in g) return g.error;
   const { db, user, nivel } = g;
 
-  const body = await req.json() as { id?: number; estado_cuenta?: string; nueva_contrasena?: string; admin_nivel?: string; permisos_extra?: unknown };
-  const { id, estado_cuenta, nueva_contrasena, admin_nivel } = body;
+  const body = await req.json() as { id?: number; estado_cuenta?: string; nueva_contrasena?: string; admin_nivel?: string; permisos_extra?: unknown; accion?: string };
+  const { id, estado_cuenta, nueva_contrasena, admin_nivel, accion } = body;
   if (!id) return NextResponse.json({ error: 'Falta id' }, { status: 400 });
 
-  const objetivo = db.prepare('SELECT id, nombre, correo, rol, admin_nivel, permisos_extra FROM usuarios WHERE id = ?').get(id) as
-    { id: number; nombre: string; correo: string; rol: string; admin_nivel: string; permisos_extra?: string } | undefined;
+  const objetivo = db.prepare('SELECT id, nombre, correo, rol, admin_nivel, permisos_extra, estado_cuenta FROM usuarios WHERE id = ?').get(id) as
+    { id: number; nombre: string; correo: string; rol: string; admin_nivel: string; permisos_extra?: string; estado_cuenta: string } | undefined;
   if (!objetivo) return NextResponse.json({ error: 'Usuario no encontrado' }, { status: 404 });
+
+  // ── Desarchivar ── (única forma de sacar una cuenta de 'archivada'; ver DELETE más abajo
+  // para cómo entra a ese estado). Vuelve a 'inactiva' —NO directo a 'activa'— para que quien
+  // gestiona el equipo decida conscientemente reactivar el acceso después, en vez de reabrir
+  // sesión automáticamente para alguien que en su momento se decidió sacar del sistema.
+  if (accion === 'desarchivar') {
+    if (objetivo.estado_cuenta !== 'archivada') {
+      return NextResponse.json({ error: 'Esta cuenta no está archivada.' }, { status: 400 });
+    }
+    db.prepare("UPDATE usuarios SET estado_cuenta = 'inactiva' WHERE id = ?").run(id);
+    registrarAuditoria(db, { ...user, nivel }, {
+      area: 'usuarios', accion: 'desarchivar_cuenta', entidad: 'usuario', entidad_id: id,
+      detalle: `Desarchivó a ${objetivo.nombre} (${objetivo.correo}) — queda inactiva, pendiente de reactivar`,
+    });
+    return NextResponse.json({ ok: true, estado_cuenta: 'inactiva' });
+  }
 
   if (nueva_contrasena) {
     if (nueva_contrasena.length < 6) {
@@ -160,6 +177,12 @@ export async function PUT(req: NextRequest) {
   }
 
   if (estado_cuenta) {
+    // 'archivada' NO se puede fijar por esta vía manual: solo es un resultado automático
+    // de DELETE (eliminar inteligente, ver más abajo) o se revierte con accion:'desarchivar'.
+    // Así el flujo de archivado queda siempre atado a la decisión "tiene historial de negocio".
+    if (estado_cuenta !== 'activa' && estado_cuenta !== 'inactiva') {
+      return NextResponse.json({ error: 'Estado inválido.' }, { status: 400 });
+    }
     if (objetivo.id === user.id && estado_cuenta === 'inactiva') {
       return NextResponse.json({ error: 'No puedes desactivar tu propia cuenta.' }, { status: 400 });
     }
@@ -172,4 +195,39 @@ export async function PUT(req: NextRequest) {
   }
 
   return NextResponse.json({ error: 'Nada que actualizar' }, { status: 400 });
+}
+
+// Eliminar una cuenta (borrado inteligente): si nunca tuvo actividad de negocio real
+// (reservas, vehículos, pagos, chat, soporte, referidos, tarjetas NFC…) se borra de
+// verdad; si sí la tuvo, queda archivada (reversible con PUT { accion: 'desarchivar' }).
+// Exclusivo de `usuarios_gestion` — misma raíz de confianza que crear cuentas y cambiar
+// niveles — sin excepción posible, y nadie puede eliminarse/archivarse a sí mismo.
+export async function DELETE(req: NextRequest) {
+  const g = await guardArea('usuarios_gestion');
+  if ('error' in g) return g.error;
+  const { db, user, nivel } = g;
+
+  const id = Number(new URL(req.url).searchParams.get('id'));
+  if (!id) return NextResponse.json({ error: 'Falta id' }, { status: 400 });
+
+  if (id === user.id) {
+    return NextResponse.json({ error: 'No puedes eliminar tu propia cuenta.' }, { status: 400 });
+  }
+
+  const objetivo = db.prepare('SELECT id, nombre, correo, estado_cuenta FROM usuarios WHERE id = ?').get(id) as
+    { id: number; nombre: string; correo: string; estado_cuenta: string } | undefined;
+  if (!objetivo) return NextResponse.json({ error: 'Usuario no encontrado' }, { status: 404 });
+
+  const resultado = eliminarUsuarioInteligente(db, id);
+
+  registrarAuditoria(db, { ...user, nivel }, {
+    area: 'usuarios',
+    accion: resultado === 'borrado' ? 'eliminar_cuenta' : 'archivar_cuenta',
+    entidad: 'usuario', entidad_id: id,
+    detalle: resultado === 'borrado'
+      ? `Eliminó (borrado real) a ${objetivo.nombre} (${objetivo.correo}) — sin historial de negocio`
+      : `Archivó a ${objetivo.nombre} (${objetivo.correo}) — tiene historial de negocio, se conserva reversible`,
+  });
+
+  return NextResponse.json({ ok: true, resultado });
 }

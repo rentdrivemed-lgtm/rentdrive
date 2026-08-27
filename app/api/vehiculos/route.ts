@@ -4,6 +4,7 @@ import { getCurrentUser } from '@/lib/auth';
 import { enviarCorreo } from '@/lib/email';
 import { tieneAltaDisponibilidadEsteMes } from '@/lib/disponibilidad-reglas';
 import { precioMercadoSugerido, segmentoValido } from '@/lib/precioMercado';
+import { adminTieneArea, sinPermisoArea } from '@/lib/guard';
 
 function datesInRange(start: string, end: string): string[] {
   const dates: string[] = [];
@@ -26,6 +27,14 @@ export async function GET(req: NextRequest) {
   const fechaInicio  = searchParams.get('fechaInicio');
   const fechaFin     = searchParams.get('fechaFin');
   const vitrina      = searchParams.get('vitrina');
+  const archivados   = searchParams.get('archivados') === '1';
+
+  // Vista de archivados: exclusiva del admin con la sección "vehiculos" (ver lib/eliminar.ts).
+  // Esta ruta es pública para el resto de casos, así que aquí sí hay que exigir sesión + permiso.
+  if (archivados) {
+    const user = await getCurrentUser();
+    if (!user || user.rol !== 'admin' || !adminTieneArea(db, user.id, 'vehiculos')) return sinPermisoArea();
+  }
 
   let query = `
     SELECT v.*, u.nombre as propietario_nombre
@@ -35,13 +44,24 @@ export async function GET(req: NextRequest) {
   `;
   const params: unknown[] = [];
 
+  if (archivados) {
+    query += ' AND v.archivado = 1';
+  } else {
+    // Un vehículo archivado (tenía historial de negocio real al "eliminarlo") nunca debe
+    // aparecer en ningún listado normal: ni público, ni panel de administración, ni el
+    // propio dashboard del propietario. Solo la vista `archivados=1` de arriba lo muestra.
+    query += ' AND v.archivado = 0';
+  }
+
   if (tipo)         { query += ' AND v.tipo = ?';            params.push(tipo); }
   if (ubicacion)    { query += ' AND v.ubicacion LIKE ?';    params.push(`%${ubicacion}%`); }
   if (precioMax)    { query += ' AND v.precio_dia <= ?';     params.push(Number(precioMax)); }
   if (propietarioId){ query += ' AND v.propietario_id = ?';  params.push(Number(propietarioId)); }
-  if (vitrina)      { query += ' AND v.en_vitrina = 1';      query += ' AND v.disponible = 1'; }
-  // Listado público: ocultar vehículos inactivos. El propietario sí ve los suyos (filtra por propietarioId).
-  else if (!propietarioId) query += ' AND v.disponible = 1';
+  if (!archivados) {
+    if (vitrina)      { query += ' AND v.en_vitrina = 1';      query += ' AND v.disponible = 1'; }
+    // Listado público: ocultar vehículos inactivos. El propietario sí ve los suyos (filtra por propietarioId).
+    else if (!propietarioId) query += ' AND v.disponible = 1';
+  }
 
   let vehiculos = db.prepare(query).all(...params) as Record<string, unknown>[];
 

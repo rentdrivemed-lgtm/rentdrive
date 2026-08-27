@@ -21,7 +21,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Credenciales inválidas' }, { status: 401 });
   }
 
-  if (user.estado_cuenta === 'inactiva') {
+  // Cualquier estado que no sea 'activa' bloquea el login (inactiva o archivada —
+  // esta última es el resultado de "eliminar" una cuenta con historial de negocio real).
+  if (user.estado_cuenta !== 'activa') {
     return NextResponse.json({ error: 'Cuenta inactiva' }, { status: 403 });
   }
 

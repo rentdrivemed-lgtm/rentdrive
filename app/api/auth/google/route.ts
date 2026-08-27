@@ -19,7 +19,8 @@ const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
 // Mensaje genérico a propósito: uno distinto para "es admin" filtraría esa
 // información a quien solo controle el correo.
 function accesoGoogleBloqueado(u: Record<string, unknown>): NextResponse | null {
-  if (u.rol === 'admin' || u.estado_cuenta === 'inactiva') {
+  // Cualquier estado distinto de 'activa' (inactiva o archivada) bloquea el acceso.
+  if (u.rol === 'admin' || u.estado_cuenta !== 'activa') {
     return NextResponse.json({ error: 'No pudimos iniciar sesión con Google.' }, { status: 403 });
   }
   return null;
