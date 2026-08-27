@@ -22,7 +22,8 @@
 //
 //  1) HISTORIAL DE NEGOCIO REAL (bloquea el borrado, fuerza archivar): reservas,
 //     vehículos publicados, remisiones/liquidaciones (dinero real), conversaciones/
-//     mensajes de chat (evidencia de la relación propietario↔cliente), soporte,
+//     mensajes de chat (evidencia de la relación propietario↔cliente, incluyendo los
+//     mensajes de sistema que un admin envía al aprobar/rechazar una reserva), soporte,
 //     referidos (créditos/recompensas reales), tarjetas NFC (activo ya producido con
 //     visitas), avisos de WhatsApp enviados. Es la evidencia que un cliente,
 //     propietario o el negocio podrían necesitar después.
@@ -70,6 +71,13 @@ export function tieneHistorialUsuario(db: DB, usuarioId: number): boolean {
     existe(db, 'SELECT 1 FROM remisiones WHERE propietario_id = ?', id) ||
     existe(db, 'SELECT 1 FROM liquidaciones WHERE propietario_id = ?', id) ||
     existe(db, 'SELECT 1 FROM conversaciones WHERE propietario_id = ? OR usuario_id = ?', id, id) ||
+    // mensajes.remitente_id es NOT NULL (no se puede desvincular a NULL, a diferencia de las
+    // FKs administrativas de más abajo): incluye tanto los mensajes de un cliente/propietario en
+    // el chat como los mensajes de sistema que un ADMIN envía al aprobar/rechazar una reserva (ver
+    // app/api/reservas/[id]/route.ts). En ambos casos es evidencia real de una relación/operación,
+    // así que cuenta como historial explícitamente en vez de depender solo del catch de defensa en
+    // profundidad (el DELETE fallaría igual por esta FK, pero declararlo aquí es más preciso).
+    existe(db, 'SELECT 1 FROM mensajes WHERE remitente_id = ?', id) ||
     existe(db, 'SELECT 1 FROM referidos WHERE referrer_id = ? OR referido_id = ?', id, id) ||
     existe(db, 'SELECT 1 FROM conversaciones_soporte WHERE solicitante_id = ?', id) ||
     existe(db, 'SELECT 1 FROM nfc_cards WHERE usuario_id = ?', id) ||
@@ -126,7 +134,9 @@ function archivarUsuarioYVehiculosSiPropietario(db: DB, usuarioId: number) {
     db.prepare("UPDATE usuarios SET estado_cuenta = 'archivada' WHERE id = ?").run(usuarioId);
     if (objetivo?.rol === 'propietario') {
       // No filtra por si ya estaba archivado a mano: da igual, queda en 1 de todos modos.
-      db.prepare('UPDATE vehiculos SET archivado = 1 WHERE propietario_id = ?').run(usuarioId);
+      // `disponible = 0` en la misma UPDATE: un vehículo archivado nunca debe seguir
+      // siendo reservable (ver también eliminarVehiculoInteligente, mismo criterio).
+      db.prepare('UPDATE vehiculos SET archivado = 1, disponible = 0 WHERE propietario_id = ?').run(usuarioId);
     }
   });
   archivar();
@@ -186,7 +196,9 @@ function desvincularMetadataAdministrativaVehiculo(db: DB, vehiculoId: number) {
  */
 export function eliminarVehiculoInteligente(db: DB, vehiculoId: number): ResultadoEliminar {
   if (tieneHistorialVehiculo(db, vehiculoId)) {
-    db.prepare('UPDATE vehiculos SET archivado = 1 WHERE id = ?').run(vehiculoId);
+    // `disponible = 0` en la misma UPDATE: un vehículo archivado nunca debe seguir
+    // siendo reservable (mismo criterio que archivarUsuarioYVehiculosSiPropietario).
+    db.prepare('UPDATE vehiculos SET archivado = 1, disponible = 0 WHERE id = ?').run(vehiculoId);
     return 'archivado';
   }
 
@@ -199,7 +211,7 @@ export function eliminarVehiculoInteligente(db: DB, vehiculoId: number): Resulta
     return 'borrado';
   } catch (e) {
     console.error('[eliminar] DELETE de vehículo falló, se archiva en su lugar:', e instanceof Error ? e.message : e);
-    db.prepare('UPDATE vehiculos SET archivado = 1 WHERE id = ?').run(vehiculoId);
+    db.prepare('UPDATE vehiculos SET archivado = 1, disponible = 0 WHERE id = ?').run(vehiculoId);
     return 'archivado';
   }
 }

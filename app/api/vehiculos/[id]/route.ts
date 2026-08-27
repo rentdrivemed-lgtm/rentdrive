@@ -39,10 +39,14 @@ function* rangoDias(a: string, b: string): Generator<string> {
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const db = getDb();
+  // Ruta pública (detalle de vehículo + página de pago): igual que el listado
+  // (ver GET /api/vehiculos), un vehículo archivado nunca debe ser visible/accesible
+  // por URL directa. El admin no usa esta ruta para ver archivados — usa
+  // GET /api/vehiculos?archivados=1 (lista completa, con guard de sesión+permiso).
   const vehiculo = db.prepare(`
     SELECT v.*, u.nombre as propietario_nombre
     FROM vehiculos v JOIN usuarios u ON v.propietario_id = u.id
-    WHERE v.id = ?
+    WHERE v.id = ? AND v.archivado = 0
   `).get(Number(id));
 
   if (!vehiculo) return NextResponse.json({ error: 'No encontrado' }, { status: 404 });

@@ -19,7 +19,13 @@ export async function guardArea(area: string): Promise<GuardOk | { error: NextRe
   }
   const db = getDb();
   const { nivel, extra } = permisosDe(db, user.id);
-  if (!puede(nivel, area, extra)) {
+  // `nivel === null` = la fila de este usuario ya no existe o no está `activa` (ver
+  // lib/permisos.ts): el JWT puede seguir siendo válido hasta 7 días aunque la cuenta
+  // se haya borrado o desactivado de verdad, así que esta es la revalidación real
+  // contra el estado actual en BD. `puede()` ya deniega con `nivel: null`, pero el
+  // chequeo explícito aquí también sirve para que TypeScript descarte `null` del tipo
+  // de `nivel` en el `return` de abajo (que debe cumplir `GuardOk.nivel: AdminNivel`).
+  if (nivel === null || !puede(nivel, area, extra)) {
     return { error: NextResponse.json({ error: 'No tienes permiso para esta sección.' }, { status: 403 }) };
   }
   return { user, nivel, db, permisos: extra };
@@ -36,6 +42,8 @@ export async function guardArea(area: string): Promise<GuardOk | { error: NextRe
 // Así, revocar una casilla cierra de verdad la puerta del admin sin tocar a nadie más.
 export function adminTieneArea(db: Database.Database, userId: number, area: string): boolean {
   const { nivel, extra } = permisosDe(db, userId);
+  // Igual que en `guardArea`: si `permisosDe` devolvió `nivel: null` (fila borrada o
+  // no `activa`), `puede()` deniega sin excepción — no hace falta chequeo aparte aquí.
   return puede(nivel, area, extra);
 }
 

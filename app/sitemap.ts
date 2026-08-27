@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic';
 export default function sitemap(): MetadataRoute.Sitemap {
   const db = getDb();
   const vehiculos = db
-    .prepare('SELECT id FROM vehiculos WHERE disponible = 1')
+    .prepare('SELECT id FROM vehiculos WHERE disponible = 1 AND archivado = 0')
     .all() as { id: number }[];
 
   return [
