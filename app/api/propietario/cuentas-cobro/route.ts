@@ -5,7 +5,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
-import { firmarCuentaCobro, datosEmpresa, type RemisionRow } from '@/lib/contabilidad';
+import { firmarCuentaCobro, datosEmpresa, FIRMA_IMAGEN_MAX_CHARS_TOTAL, type RemisionRow } from '@/lib/contabilidad';
 import { registrarAuditoria } from '@/lib/permisos';
 import { ipCliente } from '@/lib/limite-tasa';
 
@@ -49,10 +49,17 @@ export async function POST(req: NextRequest) {
   if (!remisionId) return NextResponse.json({ error: 'Falta remision_id' }, { status: 400 });
   const nombreConfirmado = (body.nombre_confirmado || '').trim();
   if (!nombreConfirmado) return NextResponse.json({ error: 'Debes escribir tu nombre completo para confirmar la firma.' }, { status: 400 });
+  // Defensa en profundidad: la validación real (forma de imagen, prefijo exacto, tamaño
+  // máximo) vive en firmarCuentaCobro (fuente de verdad); esto solo evita un round-trip
+  // innecesario a la DB cuando ni siquiera llegó algo con pinta de firma, o cuando es
+  // obviamente descomunal (rechazo barato por longitud de cadena, sin decodificar nada).
+  const firmaImagen = (body.firma_imagen || '').trim();
+  if (!firmaImagen) return NextResponse.json({ error: 'Falta el trazo de la firma.' }, { status: 400 });
+  if (firmaImagen.length > FIRMA_IMAGEN_MAX_CHARS_TOTAL) return NextResponse.json({ error: 'La imagen de la firma es demasiado pesada.' }, { status: 400 });
 
   const db = getDb();
   const resultado = firmarCuentaCobro(db, remisionId, user.id, {
-    firmaImagen: body.firma_imagen || '',
+    firmaImagen,
     nombreConfirmado,
     ip: ipCliente(req),
     userAgent: req.headers.get('user-agent') || '',

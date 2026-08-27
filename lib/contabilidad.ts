@@ -215,6 +215,25 @@ export function calcularHashRemision(r: {
 export type FirmarCuentaCobroOk = { ok: true; remision: RemisionRow };
 export type FirmarCuentaCobroError = { ok: false; status: number; error: string };
 
+// Prefijo real que produce `canvas.toDataURL('image/png')` en components/FirmaCanvas.tsx.
+// Se valida como forma mínima de "es una imagen de verdad" (no una cadena vacía o basura).
+const FIRMA_IMAGEN_PREFIJO = 'data:image/png;base64,';
+
+// Techo de tamaño para la imagen de la firma, YA decodificada de base64. 200KB es de sobra
+// para un trazo simple (canvas de 40px de alto en el frontend) — un propietario legítimo
+// no necesita más, y sin este límite un `firma_imagen` de decenas de MB (basura o un ataque)
+// queda guardado tal cual en la BD para siempre (no se puede refirmar/sobrescribir).
+const FIRMA_IMAGEN_MAX_BYTES = 200 * 1024;
+// Máximo de caracteres base64 equivalente al límite de arriba (base64 infla ~4/3 los bytes
+// originales). Se revisa ANTES de decodificar para no gastar tiempo/memoria decodificando
+// cadenas absurdamente grandes solo para descartarlas.
+const FIRMA_IMAGEN_MAX_BASE64_CHARS = Math.ceil((FIRMA_IMAGEN_MAX_BYTES / 3) * 4) + 8;
+
+// Exportado para que la capa de API pueda hacer un rechazo barato (por longitud total de
+// la cadena, prefijo incluido) antes de siquiera llamar a firmarCuentaCobro — misma cota,
+// una sola fuente de verdad para el número.
+export const FIRMA_IMAGEN_MAX_CHARS_TOTAL = FIRMA_IMAGEN_PREFIJO.length + FIRMA_IMAGEN_MAX_BASE64_CHARS;
+
 // Firma electrónica simple de la cuenta de cobro (remisión) por su propietario.
 // Es la autorización previa al pago: mientras no esté firmada, el admin no puede
 // marcar la liquidación asociada como pagada (ver liquidaciones/route.ts → PUT).
@@ -231,13 +250,30 @@ export function firmarCuentaCobro(
   const nombreConfirmado = (opts.nombreConfirmado || '').trim();
   if (!nombreConfirmado) return { ok: false, status: 400, error: 'Debes escribir tu nombre completo para confirmar la firma.' };
 
+  // Fuente de verdad del requisito: sin trazo real de firma, no hay autorización de pago.
+  // El botón del frontend ya evita enviar sin trazo, pero eso es cosmético — esto es lo
+  // que de verdad lo hace obligatorio ante una llamada directa a la API.
+  const firmaImagen = (opts.firmaImagen || '').trim();
+  if (!firmaImagen || !firmaImagen.startsWith(FIRMA_IMAGEN_PREFIJO) || firmaImagen.length <= FIRMA_IMAGEN_PREFIJO.length) {
+    return { ok: false, status: 400, error: 'Falta el trazo de la firma.' };
+  }
+  const base64Payload = firmaImagen.slice(FIRMA_IMAGEN_PREFIJO.length);
+  if (base64Payload.length > FIRMA_IMAGEN_MAX_BASE64_CHARS) {
+    return { ok: false, status: 400, error: 'La imagen de la firma es demasiado pesada.' };
+  }
+  // Chequeo exacto sobre los bytes ya decodificados (el de arriba es solo un filtro rápido
+  // por longitud de cadena, antes de gastar en decodificar algo claramente fuera de rango).
+  if (Buffer.from(base64Payload, 'base64').length > FIRMA_IMAGEN_MAX_BYTES) {
+    return { ok: false, status: 400, error: 'La imagen de la firma es demasiado pesada.' };
+  }
+
   const hash = calcularHashRemision(rem);
   db.prepare(`
     UPDATE remisiones SET
       firmada_en = datetime('now','localtime'),
       firma_ip = ?, firma_user_agent = ?, firma_imagen = ?, firma_nombre_confirmado = ?, firma_hash = ?
     WHERE id = ?
-  `).run(opts.ip || '', opts.userAgent || '', opts.firmaImagen || '', nombreConfirmado, hash, remisionId);
+  `).run(opts.ip || '', opts.userAgent || '', firmaImagen, nombreConfirmado, hash, remisionId);
 
   const actualizada = db.prepare('SELECT * FROM remisiones WHERE id = ?').get(remisionId) as RemisionRow;
   return { ok: true, remision: actualizada };
