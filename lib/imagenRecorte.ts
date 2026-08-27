@@ -2,7 +2,7 @@
 // a partir de lo que reporta react-easy-crop (croppedAreaPixels).
 export type PixelCrop = { x: number; y: number; width: number; height: number };
 
-function crearImagen(url: string): Promise<HTMLImageElement> {
+export function crearImagen(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.addEventListener('load', () => resolve(img));
@@ -16,7 +16,7 @@ function radianes(grados: number) {
   return (grados * Math.PI) / 180;
 }
 
-function tamanioRotado(width: number, height: number, rotacion: number) {
+export function tamanioRotado(width: number, height: number, rotacion: number) {
   const r = radianes(rotacion);
   return {
     width: Math.abs(Math.cos(r) * width) + Math.abs(Math.sin(r) * height),

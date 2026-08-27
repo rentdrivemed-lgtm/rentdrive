@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
 import { uploadFile } from '@/lib/storage';
-import { detectarYDifuminarPlaca } from '@/lib/blur-placas';
+import { detectarYDifuminarPlaca, normalizarOrientacion } from '@/lib/blur-placas';
 
 export const runtime = 'nodejs';
 
@@ -38,12 +38,19 @@ export async function POST(req: NextRequest) {
     Buffer.from(arrayBuf).copy(rawBuffer);
     let difuminada = false;
 
-    // Difuminar placa si la foto es de un vehículo y la API key está disponible
-    if (blurPlaca && imagenTypes.includes(file.type)) {
-      const mediaType = file.type as 'image/jpeg' | 'image/png' | 'image/webp';
-      const resultado = await detectarYDifuminarPlaca(rawBuffer, mediaType);
-      rawBuffer   = resultado.buffer;
-      difuminada  = resultado.difuminada;
+    if (imagenTypes.includes(file.type)) {
+      if (blurPlaca) {
+        // Difuminar placa si la foto es de un vehículo y la API key está disponible.
+        // detectarYDifuminarPlaca ya normaliza la orientación EXIF internamente.
+        const mediaType = file.type as 'image/jpeg' | 'image/png' | 'image/webp';
+        const resultado = await detectarYDifuminarPlaca(rawBuffer, mediaType);
+        rawBuffer   = resultado.buffer;
+        difuminada  = resultado.difuminada;
+      } else {
+        // Aunque no se pida difuminar placa, normalizamos la orientación EXIF
+        // para que la foto no quede "de lado" en la galería (fotos de celular).
+        rawBuffer = await normalizarOrientacion(rawBuffer, file.type as 'image/jpeg' | 'image/png' | 'image/webp');
+      }
     }
 
     const { url } = await uploadFile(nombre, file.type, rawBuffer);
