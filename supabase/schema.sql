@@ -109,6 +109,51 @@ CREATE TABLE IF NOT EXISTS remisiones (
 --   ALTER TABLE remisiones ADD COLUMN IF NOT EXISTS firma_nombre_confirmado TEXT DEFAULT '';
 --   ALTER TABLE remisiones ADD COLUMN IF NOT EXISTS firma_hash TEXT DEFAULT '';
 
+-- ─────────────── cotizaciones ───────────────
+-- reserva_id es NULLABLE a propósito: una cotización puede ser "suelta" (cotizador de
+-- venta, prospecto sin cuenta ni reserva) o ligada a una reserva real ya creada. Las
+-- sueltas guardan fecha_inicio/fecha_fin/vehiculo_id/cliente_celular propios porque no
+-- hay fila de `reservas` de la cual sacarlos (ver lib/contabilidad.ts, generarCotizacionManual).
+CREATE TABLE IF NOT EXISTS cotizaciones (
+  id                    SERIAL PRIMARY KEY,
+  reserva_id            INTEGER REFERENCES reservas(id),
+  numero                TEXT NOT NULL DEFAULT '',
+  cliente_nombre        TEXT DEFAULT '',
+  cliente_correo        TEXT DEFAULT '',
+  cliente_celular       TEXT DEFAULT '',
+  vehiculo_id           INTEGER REFERENCES vehiculos(id),
+  vehiculo_descripcion  TEXT DEFAULT '',
+  fecha_inicio          TEXT DEFAULT '',
+  fecha_fin             TEXT DEFAULT '',
+  dias                  INTEGER DEFAULT 0,
+  precio_dia            REAL DEFAULT 0,
+  recargo               REAL DEFAULT 0,
+  total                 REAL DEFAULT 0,
+  estado                TEXT DEFAULT 'enviada' CHECK (estado IN ('enviada','aceptada','vencida','cancelada')),
+  enviada_en            TEXT DEFAULT '',
+  created_at            TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+);
+
+-- ─────────────── facturas (DataICO o borrador local sin credenciales) ───────────────
+CREATE TABLE IF NOT EXISTS facturas (
+  id                 SERIAL PRIMARY KEY,
+  reserva_id         INTEGER NOT NULL REFERENCES reservas(id),
+  numero             TEXT NOT NULL DEFAULT '',
+  cliente_nombre     TEXT DEFAULT '',
+  cliente_documento  TEXT DEFAULT '',
+  cliente_correo     TEXT DEFAULT '',
+  subtotal           REAL DEFAULT 0,
+  iva                REAL DEFAULT 0,
+  total              REAL DEFAULT 0,
+  estado             TEXT DEFAULT 'borrador' CHECK (estado IN ('borrador','emitida','anulada','error')),
+  dataico_id         TEXT DEFAULT '',
+  dataico_cufe       TEXT DEFAULT '',
+  dataico_pdf_url    TEXT DEFAULT '',
+  dataico_error      TEXT DEFAULT '',
+  emitida_en         TEXT DEFAULT '',
+  created_at         TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+);
+
 -- ─────────────── auditoría (bitácora: quién hizo qué y a qué hora) ───────────────
 -- El nivel de admin va en usuarios.admin_nivel ('principal' | 'socio' | 'secretaria').
 -- Las excepciones por empleado van en usuarios.permisos_extra (JSON { area: boolean });

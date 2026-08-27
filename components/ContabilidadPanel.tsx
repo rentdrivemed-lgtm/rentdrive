@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { IconCoin, IconCheck, IconExport, IconUpload, IconPhoto, IconX } from '@/components/Icons';
 import { descargarCotizacionPDF, descargarFacturaPDF, descargarRemisionPDF, descargarGastoPDF } from '@/lib/contabilidad-pdf';
 import { descargarGastosExcel } from '@/lib/contabilidad-excel';
+import { calcularDiasAlquiler, calcularTotalAlquiler } from '@/lib/lugares';
 
 type SubTab = 'resumen' | 'gastos' | 'cotizaciones' | 'facturas' | 'liquidaciones' | 'config';
 
@@ -42,9 +43,26 @@ type GastoForm = {
 };
 
 type Cotizacion = {
-  id: number; reserva_id: number; numero: string; cliente_nombre: string; cliente_correo: string;
-  vehiculo_descripcion: string; dias: number; precio_dia: number; recargo: number; total: number;
-  estado: string; reserva_estado: string; pago_estado: string; created_at: string;
+  id: number; reserva_id: number | null; numero: string; cliente_nombre: string; cliente_correo: string;
+  cliente_celular?: string; vehiculo_id?: number | null;
+  vehiculo_descripcion: string; fecha_inicio?: string; fecha_fin?: string;
+  dias: number; precio_dia: number; recargo: number; total: number;
+  estado: string; reserva_estado: string | null; pago_estado: string | null; created_at: string;
+};
+
+// Vehículo del inventario, para el selector del cotizador de venta (usa /api/vehiculos,
+// el mismo listado público que ya usa la vitrina — mismo precio/día vigente).
+type VehiculoInventario = { id: number; marca: string; modelo: string; anio: number; precio_dia: number };
+
+type CotizacionManualForm = {
+  cliente_nombre: string; cliente_correo: string; cliente_celular: string;
+  vehiculo_id: string; vehiculo_descripcion: string;
+  fecha_inicio: string; fecha_fin: string; recargo: string; total_override: string;
+};
+const COT_MANUAL_INICIAL: CotizacionManualForm = {
+  cliente_nombre: '', cliente_correo: '', cliente_celular: '',
+  vehiculo_id: '', vehiculo_descripcion: '',
+  fecha_inicio: '', fecha_fin: '', recargo: '', total_override: '',
 };
 
 type Factura = {
@@ -140,6 +158,12 @@ export default function ContabilidadPanel() {
   const [cargandoCot, setCargandoCot] = useState(false);
   const [errorCot, setErrorCot] = useState('');
   const [reenviandoId, setReenviandoId] = useState<number | null>(null);
+  // Cotizador de venta (cotización manual, sin reserva ni cuenta del prospecto)
+  const [vehiculosInventario, setVehiculosInventario] = useState<VehiculoInventario[]>([]);
+  const [mostrarCotManual, setMostrarCotManual] = useState(false);
+  const [cotManual, setCotManual] = useState<CotizacionManualForm>(COT_MANUAL_INICIAL);
+  const [guardandoCotManual, setGuardandoCotManual] = useState(false);
+  const [cotManualMsg, setCotManualMsg] = useState('');
 
   // Facturas
   const [facturas, setFacturas] = useState<Factura[]>([]);
@@ -240,6 +264,18 @@ export default function ContabilidadPanel() {
     } finally {
       setCargandoCot(false);
     }
+  };
+
+  // Vehículos del inventario (listado público, mismo que usa la vitrina) — para elegir un
+  // carro real en el cotizador de venta y tomar su precio/día vigente automáticamente.
+  const cargarVehiculosInventario = async () => {
+    try {
+      const res = await fetch('/api/vehiculos', { cache: 'no-store' });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) setVehiculosInventario((d.vehiculos || []).map((v: Record<string, unknown>) => ({
+        id: v.id, marca: v.marca, modelo: v.modelo, anio: v.anio, precio_dia: v.precio_dia,
+      })));
+    } catch { /* el selector simplemente queda vacío; se puede describir el carro a mano */ }
   };
 
   const cargarFacturas = async () => {
@@ -390,6 +426,7 @@ export default function ContabilidadPanel() {
   useEffect(() => { cargarResumen(); cargarConfig(); cargarProveedores(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (subTab === 'cotizaciones' && cotizaciones.length === 0) cargarCotizaciones();
+    if (subTab === 'cotizaciones' && vehiculosInventario.length === 0) cargarVehiculosInventario();
     if (subTab === 'facturas' && facturas.length === 0) cargarFacturas();
     if (subTab === 'liquidaciones') cargarLiquidaciones();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -416,6 +453,52 @@ export default function ContabilidadPanel() {
       if (res.ok) cargarCotizaciones();
     } catch { /* el usuario puede reintentar el clic */ }
     finally { setReenviandoId(null); }
+  };
+
+  // Total estimado en vivo mientras se llena el formulario (misma fórmula que el servidor:
+  // días × precio/día del vehículo elegido + recargo) — el admin puede seguir ajustándolo
+  // manualmente en "Precio final" antes de guardar (ej. descuento comercial).
+  const cotManualPreview = (() => {
+    if (!cotManual.fecha_inicio || !cotManual.fecha_fin) return null;
+    const dias = calcularDiasAlquiler(cotManual.fecha_inicio, cotManual.fecha_fin);
+    const veh = vehiculosInventario.find(v => String(v.id) === cotManual.vehiculo_id);
+    const precioDia = veh?.precio_dia || 0;
+    const recargo = Number(cotManual.recargo) || 0;
+    return { dias, precioDia, recargo, total: calcularTotalAlquiler(dias, precioDia, recargo) };
+  })();
+
+  const guardarCotizacionManual = async () => {
+    setCotManualMsg('');
+    if (!cotManual.cliente_nombre.trim()) { setCotManualMsg('Falta el nombre del cliente/prospecto.'); return; }
+    if (!cotManual.fecha_inicio || !cotManual.fecha_fin) { setCotManualMsg('Faltan las fechas del alquiler.'); return; }
+    if (!cotManual.vehiculo_id && !cotManual.vehiculo_descripcion.trim()) { setCotManualMsg('Elige un vehículo del inventario o descríbelo.'); return; }
+
+    setGuardandoCotManual(true);
+    try {
+      const res = await fetch('/api/contabilidad/cotizaciones', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cliente_nombre: cotManual.cliente_nombre.trim(),
+          cliente_correo: cotManual.cliente_correo.trim(),
+          cliente_celular: cotManual.cliente_celular.trim(),
+          vehiculo_id: cotManual.vehiculo_id || undefined,
+          vehiculo_descripcion: cotManual.vehiculo_descripcion.trim(),
+          fecha_inicio: cotManual.fecha_inicio,
+          fecha_fin: cotManual.fecha_fin,
+          recargo: cotManual.recargo,
+          total_override: cotManual.total_override,
+        }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { setCotManualMsg(d.error || 'No se pudo crear la cotización.'); return; }
+      setMostrarCotManual(false);
+      setCotManual(COT_MANUAL_INICIAL);
+      cargarCotizaciones();
+    } catch {
+      setCotManualMsg('Sin conexión — intenta de nuevo.');
+    } finally {
+      setGuardandoCotManual(false);
+    }
   };
 
   const emitirFacturaClick = async (reservaId: number) => {
@@ -1318,6 +1401,14 @@ export default function ContabilidadPanel() {
       {/* ── COTIZACIONES ── */}
       {subTab === 'cotizaciones' && (
         <div className="space-y-3">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <p className="text-xs text-ink/50">Cotizaciones automáticas (de una reserva real) y manuales (prospectos que aún no reservan).</p>
+            <button onClick={() => { setCotManual(COT_MANUAL_INICIAL); setCotManualMsg(''); setMostrarCotManual(true); }}
+              className="text-sm font-semibold bg-accent hover:bg-accent-hover text-white px-4 py-2.5 rounded-xl transition flex-shrink-0">
+              + Nueva cotización
+            </button>
+          </div>
+
           {!errorCot && !cargandoCot && reservasSinCotizacion.length > 0 && (
             <div className="bg-warning/10 border border-warning/25 rounded-2xl p-4 space-y-2">
               <p className="text-xs font-bold text-warning uppercase tracking-wide">Reservas sin cotización ({reservasSinCotizacion.length})</p>
@@ -1355,7 +1446,8 @@ export default function ContabilidadPanel() {
                 <div key={c.id} className="bg-surface-2 rounded-xl border border-border p-3.5 flex items-center justify-between gap-3 flex-wrap">
                   <div className="min-w-0">
                     <p className="text-sm font-semibold text-ink">{c.numero} · {c.cliente_nombre}</p>
-                    <p className="text-xs text-ink/50">{c.vehiculo_descripcion} · {c.dias} día{c.dias !== 1 ? 's' : ''} · {cop(c.total)}</p>
+                    <p className="text-xs text-ink/50">{c.vehiculo_descripcion} · {c.dias} día{c.dias !== 1 ? 's' : ''} · {cop(c.total)}
+                      {!c.reserva_id && <span className="ml-1.5 text-accent">· cotización directa (sin reserva)</span>}</p>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
                     <span className={`text-xs px-2 py-0.5 rounded-full border ${ESTADO_BADGE[c.estado] || ''}`}>{c.estado}</span>
@@ -1363,13 +1455,108 @@ export default function ContabilidadPanel() {
                       className="text-xs border border-border text-ink/70 px-2.5 py-1.5 rounded-xl hover:bg-surface transition font-medium flex items-center gap-1">
                       <IconExport size={12} /> PDF
                     </button>
-                    <button onClick={() => reenviarCotizacion(c.reserva_id)} disabled={reenviandoId === c.reserva_id}
-                      className="text-xs border border-accent/30 text-accent px-2.5 py-1.5 rounded-xl hover:bg-accent-light transition font-medium disabled:opacity-50">
-                      {reenviandoId === c.reserva_id ? 'Enviando…' : 'Reenviar'}
-                    </button>
+                    {c.reserva_id && (
+                      <button onClick={() => reenviarCotizacion(c.reserva_id!)} disabled={reenviandoId === c.reserva_id}
+                        className="text-xs border border-accent/30 text-accent px-2.5 py-1.5 rounded-xl hover:bg-accent-light transition font-medium disabled:opacity-50">
+                        {reenviandoId === c.reserva_id ? 'Enviando…' : 'Reenviar'}
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Modal: cotizador de venta (prospecto sin cuenta ni reserva) */}
+          {mostrarCotManual && (
+            <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => !guardandoCotManual && setMostrarCotManual(false)}>
+              <div className="bg-surface rounded-2xl border border-border max-w-lg w-full max-h-[90vh] overflow-y-auto p-5 space-y-4" onClick={e => e.stopPropagation()}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-base font-bold text-ink">Nueva cotización</p>
+                    <p className="text-xs text-ink/50">Para un prospecto que todavía no tiene cuenta ni reserva — herramienta de venta.</p>
+                  </div>
+                  <button onClick={() => setMostrarCotManual(false)} className="text-ink/40 hover:text-ink"><IconX size={18} /></button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="sm:col-span-2">
+                    <label className="text-[11px] text-ink/50 block mb-1">Nombre del cliente/prospecto *</label>
+                    <input value={cotManual.cliente_nombre} onChange={e => setCotManual(f => ({ ...f, cliente_nombre: e.target.value }))}
+                      placeholder="Ej. Juan Pérez" className="w-full bg-surface-2 border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-ink/50 block mb-1">Correo (opcional)</label>
+                    <input type="email" value={cotManual.cliente_correo} onChange={e => setCotManual(f => ({ ...f, cliente_correo: e.target.value }))}
+                      placeholder="cliente@correo.com" className="w-full bg-surface-2 border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                    <p className="text-[10px] text-ink/40 mt-0.5">Si lo dejas vacío, no se envía correo — igual queda guardada y descargable en PDF.</p>
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-ink/50 block mb-1">Celular (opcional)</label>
+                    <input value={cotManual.cliente_celular} onChange={e => setCotManual(f => ({ ...f, cliente_celular: e.target.value }))}
+                      placeholder="300 000 0000" className="w-full bg-surface-2 border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="text-[11px] text-ink/50 block mb-1">Vehículo del inventario</label>
+                    <select value={cotManual.vehiculo_id} onChange={e => setCotManual(f => ({ ...f, vehiculo_id: e.target.value }))}
+                      className="w-full bg-surface-2 border border-border rounded-xl px-3 py-2 text-sm text-ink">
+                      <option value="">— Describir a mano (no es del inventario) —</option>
+                      {vehiculosInventario.map(v => (
+                        <option key={v.id} value={v.id}>{v.marca} {v.modelo} {v.anio} · {cop(v.precio_dia)}/día</option>
+                      ))}
+                    </select>
+                  </div>
+                  {!cotManual.vehiculo_id && (
+                    <div className="sm:col-span-2">
+                      <label className="text-[11px] text-ink/50 block mb-1">Descripción del vehículo</label>
+                      <input value={cotManual.vehiculo_descripcion} onChange={e => setCotManual(f => ({ ...f, vehiculo_descripcion: e.target.value }))}
+                        placeholder="Ej. Camioneta 4x4 automática (fuera de inventario)" className="w-full bg-surface-2 border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                    </div>
+                  )}
+                  <div>
+                    <label className="text-[11px] text-ink/50 block mb-1">Fecha inicio</label>
+                    <input type="date" value={cotManual.fecha_inicio} onChange={e => setCotManual(f => ({ ...f, fecha_inicio: e.target.value }))}
+                      className="w-full bg-surface-2 border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-ink/50 block mb-1">Fecha fin</label>
+                    <input type="date" value={cotManual.fecha_fin} onChange={e => setCotManual(f => ({ ...f, fecha_fin: e.target.value }))}
+                      className="w-full bg-surface-2 border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-ink/50 block mb-1">Recargo (opcional)</label>
+                    <input value={cotManual.recargo} onChange={e => setCotManual(f => ({ ...f, recargo: e.target.value.replace(/[^0-9]/g, '') }))}
+                      placeholder="0" className="w-full bg-surface-2 border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-ink/50 block mb-1">Precio final (ajustable)</label>
+                    <input value={cotManual.total_override} onChange={e => setCotManual(f => ({ ...f, total_override: e.target.value.replace(/[^0-9]/g, '') }))}
+                      placeholder={cotManualPreview ? String(cotManualPreview.total) : '0'} className="w-full bg-surface-2 border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                    <p className="text-[10px] text-ink/40 mt-0.5">Déjalo vacío para usar el calculado. Escribe un valor para descuento/ajuste manual.</p>
+                  </div>
+                </div>
+
+                {cotManualPreview && (
+                  <div className="bg-surface-2 border border-border rounded-xl px-4 py-3 text-sm space-y-0.5">
+                    <p className="text-ink/60">{cotManualPreview.dias} día{cotManualPreview.dias !== 1 ? 's' : ''} × {cop(cotManualPreview.precioDia)}/día
+                      {cotManualPreview.recargo > 0 ? ` + ${cop(cotManualPreview.recargo)} recargo` : ''}</p>
+                    <p className="font-bold text-ink">Total calculado: {cop(cotManualPreview.total)}
+                      {cotManual.total_override && Number(cotManual.total_override) !== cotManualPreview.total && (
+                        <span className="text-accent"> → ajustado a {cop(Number(cotManual.total_override))}</span>
+                      )}</p>
+                  </div>
+                )}
+
+                {cotManualMsg && <p className="text-xs text-danger font-medium">{cotManualMsg}</p>}
+
+                <div className="flex items-center gap-2 justify-end pt-2 border-t border-border">
+                  <button onClick={() => setMostrarCotManual(false)} disabled={guardandoCotManual} className="text-sm text-ink/60 hover:text-ink px-3 py-2">Cancelar</button>
+                  <button onClick={guardarCotizacionManual} disabled={guardandoCotManual}
+                    className="text-sm font-semibold bg-accent hover:bg-accent-hover text-white px-4 py-2.5 rounded-xl transition disabled:opacity-60">
+                    {guardandoCotManual ? 'Guardando…' : 'Crear cotización'}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </div>
