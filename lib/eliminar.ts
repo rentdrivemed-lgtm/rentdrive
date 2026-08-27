@@ -9,6 +9,12 @@
 //     liquidaciones y cuentas de cobro YA FIRMADAS —remisiones.firmada_en— siguen
 //     siendo consultables sin romper ningún JOIN). Es reversible.
 //
+// Cascada propietario -> vehículos (confirmado con Victor): si el usuario archivado
+// es un propietario, sus vehículos se archivan CON él en la misma transacción (ver
+// `archivarUsuarioYVehiculosSiPropietario`), para que no queden carros visibles de un
+// dueño archivado. Es de un solo sentido: desarchivar la cuenta NO desarchiva sus
+// vehículos — se reactivan uno por uno, a propósito (ver esa función para el detalle).
+//
 // ── Criterio: qué cuenta como "historial" ───────────────────────────────────
 // Se clasificó cada tabla que tiene una FK hacia usuarios(id) / vehiculos(id)
 // (`grep REFERENCES usuarios(id)` / `REFERENCES vehiculos(id)` en lib/db.ts) en dos
@@ -100,13 +106,40 @@ function desvincularMetadataAdministrativaUsuario(db: DB, usuarioId: number) {
 }
 
 /**
+ * Archiva la cuenta y, si es un propietario, archiva TODOS sus vehículos con él —
+ * atómico (misma transacción). Así un propietario archivado deja de aparecer en
+ * cualquier listado normal (público, admin, su propio dashboard) junto con sus
+ * carros, en vez de dejar vehículos "huérfanos" visibles de un dueño archivado
+ * (confirmado con Victor). Se usa tanto en el camino directo (tiene historial)
+ * como en el fallback de defensa en profundidad (el DELETE real falló).
+ *
+ * INTENCIONAL — la dirección inversa NO es automática: desarchivar la cuenta
+ * (vuelve a 'inactiva', ver PUT { accion: 'desarchivar' } en el endpoint) NO
+ * desarchiva sus vehículos. Mismo criterio conservador que "desarchivar cuenta
+ * → inactiva, no activa": reactivar cada vehículo es una decisión consciente
+ * aparte (PUT /api/vehiculos/:id { archivado: 0 }, uno por uno), no un efecto
+ * secundario automático de reactivar al propietario.
+ */
+function archivarUsuarioYVehiculosSiPropietario(db: DB, usuarioId: number) {
+  const archivar = db.transaction(() => {
+    const objetivo = db.prepare('SELECT rol FROM usuarios WHERE id = ?').get(usuarioId) as { rol: string } | undefined;
+    db.prepare("UPDATE usuarios SET estado_cuenta = 'archivada' WHERE id = ?").run(usuarioId);
+    if (objetivo?.rol === 'propietario') {
+      // No filtra por si ya estaba archivado a mano: da igual, queda en 1 de todos modos.
+      db.prepare('UPDATE vehiculos SET archivado = 1 WHERE propietario_id = ?').run(usuarioId);
+    }
+  });
+  archivar();
+}
+
+/**
  * Elimina o archiva un usuario según tenga o no historial de negocio real.
  * Devuelve 'borrado' o 'archivado'. NO valida permisos/auth ni "no te elimines a ti
  * mismo" — eso es responsabilidad del endpoint que llama a esta función.
  */
 export function eliminarUsuarioInteligente(db: DB, usuarioId: number): ResultadoEliminar {
   if (tieneHistorialUsuario(db, usuarioId)) {
-    db.prepare("UPDATE usuarios SET estado_cuenta = 'archivada' WHERE id = ?").run(usuarioId);
+    archivarUsuarioYVehiculosSiPropietario(db, usuarioId);
     return 'archivado';
   }
 
@@ -121,7 +154,7 @@ export function eliminarUsuarioInteligente(db: DB, usuarioId: number): Resultado
     // Defensa en profundidad: si SQLite rechazó el DELETE por una FK que no
     // anticipamos (`foreign_keys = ON`), no tumbamos la petición — se archiva.
     console.error('[eliminar] DELETE de usuario falló, se archiva en su lugar:', e instanceof Error ? e.message : e);
-    db.prepare("UPDATE usuarios SET estado_cuenta = 'archivada' WHERE id = ?").run(usuarioId);
+    archivarUsuarioYVehiculosSiPropietario(db, usuarioId);
     return 'archivado';
   }
 }
