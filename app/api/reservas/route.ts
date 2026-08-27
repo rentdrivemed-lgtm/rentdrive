@@ -8,6 +8,7 @@ import { generarCotizacion } from '@/lib/contabilidad';
 import { consumirCreditos } from '@/lib/referidos';
 import { MIN_NOCHES_RESERVA } from '@/lib/disponibilidad-reglas';
 import { validarDireccion, validarCiudad, validarNombreContacto, validarTelefonoContacto } from '@/lib/validacion';
+import { perfilIncompleto, CODIGO_PERFIL_INCOMPLETO } from '@/lib/perfil';
 
 export const dynamic = 'force-dynamic';
 
@@ -92,6 +93,17 @@ export async function POST(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user || user.rol !== 'usuario') {
     return NextResponse.json({ error: 'Solo usuarios pueden reservar' }, { status: 403 });
+  }
+
+  // Gate real (server-side) de perfil completo — cierra el hueco que deja el login
+  // con Google (sin contraseña ni documento/fecha de nacimiento). Ver lib/perfil.ts.
+  // codigo:'perfil_incompleto' es lo que el frontend usa para redirigir a
+  // /completar-perfil en vez de solo mostrar un error genérico.
+  if (perfilIncompleto(user.id)) {
+    return NextResponse.json(
+      { error: 'Completa tu perfil antes de reservar un vehículo.', codigo: CODIGO_PERFIL_INCOMPLETO },
+      { status: 403 },
+    );
   }
 
   const {

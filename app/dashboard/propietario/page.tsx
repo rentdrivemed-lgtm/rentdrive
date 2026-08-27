@@ -11,7 +11,7 @@ import CalendarioDisponibilidad from '@/components/CalendarioDisponibilidad';
 import DisponibilidadReglas from '@/components/DisponibilidadReglas';
 import ReferidosCard from '@/components/ReferidosCard';
 import CalendarioReservas, { type ReservaCalendario } from '@/components/CalendarioReservas';
-import { IconCar, IconCalendar, IconChat, IconCheck, IconArrowL, IconExport } from '@/components/Icons';
+import { IconCar, IconCalendar, IconChat, IconCheck, IconArrowL, IconExport, IconPhoto } from '@/components/Icons';
 import { TIPO_VEHICULO_LABELS, type TipoVehiculo } from '@/lib/rentabilidad';
 import { precioMercadoSugerido, segmentoValido } from '@/lib/precioMercado';
 import FirmaCanvas from '@/components/FirmaCanvas';
@@ -129,6 +129,17 @@ export default function DashboardPropietario() {
   const [diasDisponibles, setDiasDisponibles] = useState<string[]>([]);
   const [msg, setMsg] = useState('');
   const [publicando, setPublicando] = useState(false);
+
+  // Atajo opcional: leer marca/modelo/año/placa/tipo de la tarjeta de propiedad
+  // con IA, para no tener que escribirlos a mano. Siempre opcional — el
+  // formulario manual de abajo sigue funcionando igual sin usarlo.
+  const [tarjetaIADisponible, setTarjetaIADisponible] = useState(false);
+  const [tarjetaFrente, setTarjetaFrente] = useState<File | null>(null);
+  const [tarjetaReverso, setTarjetaReverso] = useState<File | null>(null);
+  const [leyendoTarjeta, setLeyendoTarjeta] = useState(false);
+  const [errorTarjetaIA, setErrorTarjetaIA] = useState('');
+  const [avisoTarjetaIA, setAvisoTarjetaIA] = useState('');
+  const [camposTarjetaIA, setCamposTarjetaIA] = useState<Set<'marca' | 'modelo' | 'anio' | 'placa' | 'tipo'>>(new Set());
 
   // Editar vehículo existente
   const [vehiculoEditandoId, setVehiculoEditandoId] = useState<number | null>(null);
@@ -294,6 +305,88 @@ export default function DashboardPropietario() {
     if (tab === 'cuentas_cobro') cargarCuentasCobro();
   }, [tab]);
 
+  useEffect(() => {
+    fetch('/api/vehiculos/extraer-matricula')
+      .then(r => r.json())
+      .then(d => setTarjetaIADisponible(!!d?.disponible))
+      .catch(() => { /* sin atajo: el formulario manual funciona igual */ });
+  }, []);
+
+  // Reduce la foto antes de mandarla (mismo criterio que el atajo de /registro):
+  // menos megas por la red del celular y menos costo de lectura.
+  const prepararImagenVehiculo = async (file: File): Promise<Blob> => {
+    try {
+      const bitmap = await createImageBitmap(file);
+      const LADO_MAX = 1600;
+      const escala = Math.min(1, LADO_MAX / Math.max(bitmap.width, bitmap.height));
+      const ancho = Math.max(1, Math.round(bitmap.width * escala));
+      const alto  = Math.max(1, Math.round(bitmap.height * escala));
+      const canvas = document.createElement('canvas');
+      canvas.width = ancho; canvas.height = alto;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return file;
+      ctx.drawImage(bitmap, 0, 0, ancho, alto);
+      bitmap.close?.();
+      const blob = await new Promise<Blob | null>(resolver => canvas.toBlob(resolver, 'image/jpeg', 0.85));
+      return blob || file;
+    } catch {
+      return file;
+    }
+  };
+
+  const desmarcarCampoTarjeta = (campo: 'marca' | 'modelo' | 'anio' | 'placa' | 'tipo') => {
+    setCamposTarjetaIA(prev => {
+      if (!prev.has(campo)) return prev;
+      const copia = new Set(prev);
+      copia.delete(campo);
+      return copia;
+    });
+  };
+
+  const leerTarjetaPropiedad = async () => {
+    if (!tarjetaFrente || !tarjetaReverso) return;
+    setErrorTarjetaIA(''); setAvisoTarjetaIA('');
+    setLeyendoTarjeta(true);
+    try {
+      const [frenteImg, reversoImg] = await Promise.all([
+        prepararImagenVehiculo(tarjetaFrente),
+        prepararImagenVehiculo(tarjetaReverso),
+      ]);
+      const fd = new FormData();
+      fd.append('frente', frenteImg, 'frente.jpg');
+      fd.append('reverso', reversoImg, 'reverso.jpg');
+      const res = await fetch('/api/vehiculos/extraer-matricula', { method: 'POST', body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setErrorTarjetaIA((data as { error?: string }).error || 'No pudimos leer la tarjeta. Puedes llenar el formulario a mano.');
+        return;
+      }
+
+      const datos = (data.datos || {}) as { placa: string | null; marca: string | null; modelo: string | null; anio: number | null; tipo: string | null };
+      const marcados = new Set(camposTarjetaIA);
+      setForm(f => {
+        const nuevo = { ...f };
+        if (datos.marca)  { nuevo.marca = datos.marca;              marcados.add('marca'); }
+        if (datos.modelo) { nuevo.modelo = datos.modelo;            marcados.add('modelo'); }
+        if (datos.anio)   { nuevo.anio = String(datos.anio);        marcados.add('anio'); }
+        if (datos.placa)  { nuevo.placa = datos.placa;              marcados.add('placa'); }
+        if (datos.tipo && CATEGORIAS.some(([val]) => val === datos.tipo)) { nuevo.tipo = datos.tipo; marcados.add('tipo'); }
+        return nuevo;
+      });
+      setCamposTarjetaIA(marcados);
+
+      const noLeidos: string[] = Array.isArray(data.campos_no_leidos) ? data.campos_no_leidos : [];
+      let aviso = 'Listo, leímos tu tarjeta de propiedad. Revisa los datos y corrige lo que haga falta.';
+      if (noLeidos.length) aviso += ` No pudimos leer: ${noLeidos.join(', ')}.`;
+      if (data.confianza === 'baja') aviso += ' Las fotos quedaron poco nítidas, revisa con calma cada dato.';
+      setAvisoTarjetaIA(aviso);
+    } catch {
+      setErrorTarjetaIA('Sin conexión — revisa tu internet o llena el formulario a mano.');
+    } finally {
+      setLeyendoTarjeta(false);
+    }
+  };
+
   // ── Quick edits ────────────────────────────────────────────────────────────
   const guardarPlaca = async (vid: number, valor: string) => {
     const placa = valor.toUpperCase().trim();
@@ -404,6 +497,7 @@ export default function DashboardPropietario() {
       const d = await res.json();
       setMsg('✅ Vehículo publicado. Ahora completa el perfil para activarlo.');
       setForm(FORM_INICIAL); setFotos(FOTOS_VACIAS); setDiasDisponibles([]);
+      setTarjetaFrente(null); setTarjetaReverso(null); setCamposTarjetaIA(new Set()); setAvisoTarjetaIA(''); setErrorTarjetaIA('');
       if (user) {
         const vs = await cargarVehiculos(user.id);
         const nuevo = vs.find(v => v.id === d.id);
@@ -412,6 +506,13 @@ export default function DashboardPropietario() {
       setTab('vehiculos');
     } else {
       const d = await res.json();
+      // El servidor exige perfil completo (contraseña + documento + fecha de
+      // nacimiento) antes de publicar — típico de cuentas creadas por Google.
+      // Se manda a completarlo en vez de solo mostrar el error genérico.
+      if ((d as { codigo?: string }).codigo === 'perfil_incompleto') {
+        router.push(`/completar-perfil?next=${encodeURIComponent('/dashboard/propietario')}`);
+        return;
+      }
       setMsg((d as { error?: string }).error || 'Error al publicar');
     }
   };
@@ -914,6 +1015,57 @@ export default function DashboardPropietario() {
               msg.startsWith('✅') ? 'bg-success/10 text-success border-success/30' : 'bg-danger/10 text-danger border-danger/25'
             }`}>{msg}</div>
           )}
+
+          {/* ── Atajo opcional: leer la tarjeta de propiedad con IA ──
+              Nunca obligatorio: el formulario manual de abajo sigue funcionando
+              exactamente igual sin usarlo. Y ojo: leerla NO verifica que el
+              vehículo sea del propietario — eso lo sigue haciendo el equipo con
+              los documentos reales que se suben después. */}
+          {tarjetaIADisponible && (
+            <div className="rounded-2xl border-2 border-dashed border-accent/40 bg-accent-light/50 p-4 mb-5">
+              <div className="flex items-start gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-accent/15 text-accent flex items-center justify-center flex-shrink-0">
+                  <IconPhoto size={18} />
+                </div>
+                <div className="min-w-0">
+                  <p className="font-bold text-ink text-sm">Publica más rápido</p>
+                  <p className="text-xs text-ink/60 mt-0.5 leading-relaxed">
+                    Sube el frente y el reverso de la tarjeta de propiedad y completamos marca, línea, año, placa
+                    y categoría por ti. Revisas los datos y corriges lo que haga falta antes de publicar.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 mt-3">
+                <label className="flex flex-col items-center justify-center gap-1 border border-accent/30 bg-surface-2 rounded-xl py-3 px-2 text-xs text-ink/70 cursor-pointer hover:bg-accent/5 transition">
+                  <span className="font-semibold">{tarjetaFrente ? '✓ Frente listo' : 'Frente de la tarjeta'}</span>
+                  <input type="file" accept="image/*" className="hidden"
+                    onChange={e => setTarjetaFrente(e.target.files?.[0] || null)} />
+                </label>
+                <label className="flex flex-col items-center justify-center gap-1 border border-accent/30 bg-surface-2 rounded-xl py-3 px-2 text-xs text-ink/70 cursor-pointer hover:bg-accent/5 transition">
+                  <span className="font-semibold">{tarjetaReverso ? '✓ Reverso listo' : 'Reverso de la tarjeta'}</span>
+                  <input type="file" accept="image/*" className="hidden"
+                    onChange={e => setTarjetaReverso(e.target.files?.[0] || null)} />
+                </label>
+              </div>
+
+              <button type="button"
+                onClick={leerTarjetaPropiedad}
+                disabled={!tarjetaFrente || !tarjetaReverso || leyendoTarjeta}
+                className="w-full mt-3 flex items-center justify-center gap-2 bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold py-2.5 px-3 rounded-xl transition">
+                {leyendoTarjeta ? 'Leyendo tu tarjeta de propiedad…' : 'Leer y completar el formulario'}
+              </button>
+
+              {avisoTarjetaIA && (
+                <p className="text-[11px] text-success mt-2 flex items-start gap-1.5">
+                  <IconCheck size={12} className="flex-shrink-0 mt-0.5" /> <span>{avisoTarjetaIA}</span>
+                </p>
+              )}
+              {errorTarjetaIA && <p className="text-[11px] text-danger mt-2">{errorTarjetaIA}</p>}
+              <p className="text-[11px] text-ink/45 mt-2">¿Prefieres escribirlo tú? Llena el formulario de abajo, es igual de válido.</p>
+            </div>
+          )}
+
           <form onSubmit={publicar} className="space-y-6">
             <div>
               <h3 className="text-xs font-bold text-ink/50 mb-3 uppercase tracking-widest">Datos del vehículo</h3>
@@ -923,28 +1075,56 @@ export default function DashboardPropietario() {
                   { key: 'modelo', label: 'Modelo',  req: true },
                 ] as const).map(f => (
                   <div key={f.key}>
-                    <label className="text-xs font-semibold text-ink/60 block mb-1.5">{f.label} <span className="text-accent">*</span></label>
+                    <label className="text-xs font-semibold text-ink/60 block mb-1.5">
+                      {f.label} <span className="text-accent">*</span>
+                      {camposTarjetaIA.has(f.key) && (
+                        <span className="ml-1.5 inline-flex items-center gap-1 text-[10px] font-semibold text-accent normal-case tracking-normal">
+                          <IconCheck size={10} /> de tu foto
+                        </span>
+                      )}
+                    </label>
                     <input required={f.req}
-                      className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40"
-                      value={form[f.key]} onChange={e => setForm(f2 => ({ ...f2, [f.key]: e.target.value }))} />
+                      className={`w-full border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40 ${camposTarjetaIA.has(f.key) ? 'border-accent/50 bg-accent-light/40' : 'border-border'}`}
+                      value={form[f.key]} onChange={e => { desmarcarCampoTarjeta(f.key); setForm(f2 => ({ ...f2, [f.key]: e.target.value })); }} />
                   </div>
                 ))}
                 <div>
-                  <label className="text-xs font-semibold text-ink/60 block mb-1.5">Año <span className="text-accent">*</span></label>
+                  <label className="text-xs font-semibold text-ink/60 block mb-1.5">
+                    Año <span className="text-accent">*</span>
+                    {camposTarjetaIA.has('anio') && (
+                      <span className="ml-1.5 inline-flex items-center gap-1 text-[10px] font-semibold text-accent normal-case tracking-normal">
+                        <IconCheck size={10} /> de tu foto
+                      </span>
+                    )}
+                  </label>
                   <input type="number" required min="2000" max="2030"
-                    className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40"
-                    value={form.anio} onChange={e => setForm(f => ({ ...f, anio: e.target.value }))} />
+                    className={`w-full border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40 ${camposTarjetaIA.has('anio') ? 'border-accent/50 bg-accent-light/40' : 'border-border'}`}
+                    value={form.anio} onChange={e => { desmarcarCampoTarjeta('anio'); setForm(f => ({ ...f, anio: e.target.value })); }} />
                 </div>
                 <div>
-                  <label className="text-xs font-semibold text-ink/60 block mb-1.5">Placa</label>
+                  <label className="text-xs font-semibold text-ink/60 block mb-1.5">
+                    Placa
+                    {camposTarjetaIA.has('placa') && (
+                      <span className="ml-1.5 inline-flex items-center gap-1 text-[10px] font-semibold text-accent normal-case tracking-normal">
+                        <IconCheck size={10} /> de tu foto
+                      </span>
+                    )}
+                  </label>
                   <input placeholder="ABC-123"
-                    className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40 uppercase"
-                    value={form.placa} onChange={e => setForm(f => ({ ...f, placa: e.target.value.toUpperCase() }))} />
+                    className={`w-full border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40 uppercase ${camposTarjetaIA.has('placa') ? 'border-accent/50 bg-accent-light/40' : 'border-border'}`}
+                    value={form.placa} onChange={e => { desmarcarCampoTarjeta('placa'); setForm(f => ({ ...f, placa: e.target.value.toUpperCase() })); }} />
                 </div>
                 <div>
-                  <label className="text-xs font-semibold text-ink/60 block mb-1.5">Categoría <span className="text-accent">*</span></label>
-                  <select className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40"
-                    value={form.tipo} onChange={e => setForm(f => ({ ...f, tipo: e.target.value }))}>
+                  <label className="text-xs font-semibold text-ink/60 block mb-1.5">
+                    Categoría <span className="text-accent">*</span>
+                    {camposTarjetaIA.has('tipo') && (
+                      <span className="ml-1.5 inline-flex items-center gap-1 text-[10px] font-semibold text-accent normal-case tracking-normal">
+                        <IconCheck size={10} /> de tu foto
+                      </span>
+                    )}
+                  </label>
+                  <select className={`w-full border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40 ${camposTarjetaIA.has('tipo') ? 'border-accent/50 bg-accent-light/40' : 'border-border'}`}
+                    value={form.tipo} onChange={e => { desmarcarCampoTarjeta('tipo'); setForm(f => ({ ...f, tipo: e.target.value })); }}>
                     {CATEGORIAS.map(([val, label]) => (
                       <option key={val} value={val}>{label}</option>
                     ))}

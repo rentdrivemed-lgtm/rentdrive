@@ -222,14 +222,26 @@ function RegistroForm() {
   };
 
   // Google crea (o vincula) la cuenta directo en el servidor, sin pasar por los 2
-  // pasos del formulario (documento, celular, dirección quedan vacíos por ahora —
-  // se pueden completar luego desde el perfil).
-  const entrarConGoogle = (user: SesionUser) => {
+  // pasos del formulario (documento, contraseña, fecha de nacimiento quedan
+  // vacíos). Por eso, apenas entra, se revisa si el perfil quedó completo y si no
+  // se manda a completarlo (app/completar-perfil) — es obligatorio antes de
+  // reservar o publicar, pero no para solo navegar el sitio.
+  const entrarConGoogle = async (user: SesionUser) => {
     setUser(user);
     refetch();
     const destino = tomarDestino();
-    if (destino && user.rol === 'usuario') { router.push(destino); return; }
-    router.push(user.rol === 'propietario' ? '/dashboard/propietario' : '/dashboard/usuario');
+    const destinoFinal = destino || (user.rol === 'propietario' ? '/dashboard/propietario' : '/dashboard/usuario');
+
+    try {
+      const r = await fetch('/api/auth/me');
+      const d = await r.json().catch(() => ({}));
+      if (d?.user && d.user.perfil_completo === false) {
+        router.push(`/completar-perfil?next=${encodeURIComponent(destinoFinal)}`);
+        return;
+      }
+    } catch { /* seguimos con el flujo normal; el servidor igual bloquea al reservar/publicar */ }
+
+    router.push(destinoFinal);
   };
 
   const submit = async (e: React.FormEvent) => {

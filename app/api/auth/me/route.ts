@@ -9,7 +9,12 @@ import { referidoHabilitado } from '@/lib/referidos';
 // (CAMPOS_EDITABLES abajo): es la única vía de autoservicio que tiene hoy un
 // usuario con un contacto de emergencia legacy inválido para corregirlo, ya que
 // no hay página de perfil dedicada para ese campo todavía.
-const CAMPOS_SELECT = 'tipo_documento, documento_identidad, celular, celular_indicativo, direccion, ciudad, contacto_emergencia, cedula_url, cedula_url_dorso, banco, numero_cuenta, certificado_bancario_url, codigo_referido, creditos_referido, admin_nivel, permisos_extra';
+//
+// fecha_nacimiento y el booleano derivado `password_configurada` (nunca la
+// contraseña en sí) se agregaron para que el frontend detecte perfiles
+// incompletos de cuentas creadas por Google (ver app/api/auth/completar-perfil
+// y lib/perfil.ts, que es la autoridad real del lado servidor).
+const CAMPOS_SELECT = "tipo_documento, documento_identidad, fecha_nacimiento, celular, celular_indicativo, direccion, ciudad, contacto_emergencia, cedula_url, cedula_url_dorso, banco, numero_cuenta, certificado_bancario_url, codigo_referido, creditos_referido, admin_nivel, permisos_extra, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END AS password_configurada";
 
 export async function GET() {
   const user = await getCurrentUser();
@@ -19,7 +24,11 @@ export async function GET() {
   const db = getDb();
   const fila = db.prepare(`SELECT ${CAMPOS_SELECT} FROM usuarios WHERE id = ?`).get(user.id) as Record<string, unknown> | undefined;
 
-  return NextResponse.json({ user: { ...user, ...(fila || {}), referido_habilitado: referidoHabilitado(db) } });
+  const perfilCompleto = !!fila?.password_configurada && !!fila?.tipo_documento && !!fila?.documento_identidad && !!fila?.fecha_nacimiento;
+
+  return NextResponse.json({
+    user: { ...user, ...(fila || {}), perfil_completo: perfilCompleto, referido_habilitado: referidoHabilitado(db) },
+  });
 }
 
 // Campos que el usuario puede editar de su propio perfil.

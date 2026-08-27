@@ -5,6 +5,7 @@ import { enviarCorreo } from '@/lib/email';
 import { tieneAltaDisponibilidadEsteMes } from '@/lib/disponibilidad-reglas';
 import { precioMercadoSugerido, segmentoValido } from '@/lib/precioMercado';
 import { adminTieneArea, sinPermisoArea } from '@/lib/guard';
+import { perfilIncompleto, CODIGO_PERFIL_INCOMPLETO } from '@/lib/perfil';
 
 function datesInRange(start: string, end: string): string[] {
   const dates: string[] = [];
@@ -105,6 +106,14 @@ export async function POST(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user || user.rol !== 'propietario') {
     return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+  }
+
+  // Gate real (server-side) de perfil completo — ver lib/perfil.ts.
+  if (perfilIncompleto(user.id)) {
+    return NextResponse.json(
+      { error: 'Completa tu perfil antes de publicar un vehículo.', codigo: CODIGO_PERFIL_INCOMPLETO },
+      { status: 403 },
+    );
   }
 
   const body = await req.json();
