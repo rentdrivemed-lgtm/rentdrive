@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { origenNoPermitido } from '@/lib/csrf';
 import { consumirIntento, ipCliente } from '@/lib/limite-tasa';
 import { tieneClaveAnthropic } from '@/lib/anthropic';
-import { leerDocumentoRegistro, type MediaTypeImagen, type TipoDocumentoRegistro } from '@/lib/registro-ocr';
+import { leerDocumentoRegistro, type TipoDocumentoRegistro } from '@/lib/registro-ocr';
+import { tipoRealImagen, formDataConLimite, PAYLOAD_TOO_LARGE } from '@/lib/subida-imagen';
 
 export const runtime = 'nodejs';
 
@@ -30,10 +31,11 @@ export const runtime = 'nodejs';
 // 4) Tamaño: se corta en dos capas. (a) Content-Length declarado, rechazado antes
 //    de tocar el body — pero un cliente puede omitir ese header (p. ej. chunked) y
 //    saltarse esta capa por completo. (b) Por eso el body se lee como stream con un
-//    límite duro impuesto mientras se lee (`formDataConLimite`, abajo): si en algún
-//    punto de la lectura se supera MAX_BYTES, se corta ahí mismo, ANTES de tener el
-//    FormData completo en memoria. Ver el comentario de esa función para el detalle
-//    y la limitación conocida.
+//    límite duro impuesto mientras se lee (`formDataConLimite`, en lib/subida-imagen.ts,
+//    compartido con app/api/vehiculos/extraer-matricula/): si en algún punto de la
+//    lectura se supera MAX_BYTES, se corta ahí mismo, ANTES de tener el FormData
+//    completo en memoria. Ver el comentario de esa función para el detalle y la
+//    limitación conocida.
 // 5) Tipo MIME REAL: no se confía en `file.type` (lo pone el cliente y se falsifica
 //    trivialmente); se leen los bytes mágicos. Solo JPG/PNG/WebP — nada de PDF, que
 //    consume muchos más tokens y no aporta para una foto de cédula.
@@ -58,70 +60,12 @@ const HORA_MS = 60 * 60 * 1000;
 
 const TIPOS_VALIDOS: TipoDocumentoRegistro[] = ['cedula', 'licencia'];
 
-/** Detecta el formato real por los bytes mágicos, ignorando lo que declare el cliente. */
-function tipoRealImagen(buf: Buffer): MediaTypeImagen | null {
-  if (buf.length < 12) return null;
-  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
-  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47 &&
-      buf[4] === 0x0d && buf[5] === 0x0a && buf[6] === 0x1a && buf[7] === 0x0a) return 'image/png';
-  if (buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
-  return null;
-}
+// tipoRealImagen y formDataConLimite viven en lib/subida-imagen.ts (compartidos con
+// app/api/vehiculos/extraer-matricula/route.ts, mismo patrón de validación).
 
 /** Le dice al formulario si puede ofrecer el atajo (sin clave de IA no se muestra). */
 export async function GET() {
   return NextResponse.json({ disponible: tieneClaveAnthropic() });
-}
-
-const PAYLOAD_TOO_LARGE = 'PAYLOAD_TOO_LARGE';
-
-/**
- * Lee el body multipart como STREAM, cortando en cuanto se supera `maxBytes`, en
- * vez de esperar a que `req.formData()` termine de bufferizar todo el cuerpo.
- *
- * Por qué hace falta además del chequeo de Content-Length de arriba: ese header
- * lo declara el cliente y es perfectamente válido no mandarlo (p. ej. con
- * Transfer-Encoding: chunked); si falta, el guard de Content-Length nunca corre y
- * `await req.formData()` bufferizaría el cuerpo completo en memoria ANTES de que
- * el código llegue a revisar `file.size`. Envolver el stream en un
- * `TransformStream` que corta al vuelo cierra ese hueco: el límite se impone
- * mientras se está leyendo, sin depender de ningún header declarado por el cliente.
- *
- * Limitación conocida y verificada: esto limita bytes de RED (lo que via por el
- * stream), no garantiza un techo de memoria de proceso *exacto* — Node puede
- * mantener en buffer algunos chunks ya leídos antes de que el corte se propague,
- * y decodificar/reconstruir el FormData todavía usa memoria proporcional a lo ya
- * leído hasta el corte (como mucho `maxBytes` más el tamaño de un chunk). Es una
- * cota real y muy por debajo de "sin límite", pero no es una garantía de memoria
- * bit-exacta.
- */
-async function formDataConLimite(req: NextRequest, maxBytes: number): Promise<FormData> {
-  const body = req.body;
-  if (!body) return req.formData();
-
-  let total = 0;
-  const limitador = new TransformStream<Uint8Array, Uint8Array>({
-    transform(chunk, controller) {
-      total += chunk.byteLength;
-      if (total > maxBytes) {
-        controller.error(new Error(PAYLOAD_TOO_LARGE));
-        return;
-      }
-      controller.enqueue(chunk);
-    },
-  });
-
-  const streamLimitado = body.pipeThrough(limitador);
-  const reqLimitada = new Request(req.url, {
-    method: req.method,
-    headers: req.headers,
-    body: streamLimitado,
-    // Node/undici lo exige cuando el body es un stream (no hay red real de por
-    // medio acá, pero el constructor de Request lo valida igual).
-    duplex: 'half',
-  } as RequestInit & { duplex: 'half' });
-
-  return reqLimitada.formData();
 }
 
 export async function POST(req: NextRequest) {

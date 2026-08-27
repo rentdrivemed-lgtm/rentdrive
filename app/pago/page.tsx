@@ -204,7 +204,17 @@ function PagoContent() {
         }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) { setError(data.error || 'Error al procesar el pago. Intenta de nuevo.'); return; }
+      if (!res.ok) {
+        // El servidor exige perfil completo (contraseña + documento + fecha de
+        // nacimiento) antes de reservar — típico de cuentas creadas por Google.
+        // Se manda a completarlo en vez de solo mostrar el error genérico.
+        if (data.codigo === 'perfil_incompleto') {
+          router.push(`/completar-perfil?next=${encodeURIComponent(window.location.pathname + window.location.search)}`);
+          return;
+        }
+        setError(data.error || 'Error al procesar el pago. Intenta de nuevo.');
+        return;
+      }
       setExito(true);
     } catch {
       setError('Sin conexión — revisa tu internet e intenta de nuevo.');

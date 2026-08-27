@@ -40,17 +40,30 @@ export default function LoginPage() {
 
   // Compartido entre login con correo+contraseña y login con Google: actualiza la
   // sesión global (navbar, polling) y redirige según el rol real de la cuenta.
-  const entrarComo = (user: SesionUser) => {
+  const entrarComo = async (user: SesionUser) => {
     setUser(user);
     refetch();
 
     // Si venía de reservar (reserva en curso guardada), retoma el pago.
     const destino = tomarDestino();
-    if (destino && user.rol === 'usuario') { router.push(destino); return; }
+    const destinoFinal = destino || (user.rol === 'admin' ? '/dashboard/admin' : user.rol === 'propietario' ? '/dashboard/propietario' : '/dashboard/usuario');
 
-    if (user.rol === 'admin') router.push('/dashboard/admin');
-    else if (user.rol === 'propietario') router.push('/dashboard/propietario');
-    else router.push('/dashboard/usuario');
+    // ¿Perfil incompleto? (típicamente cuentas creadas por Google, sin contraseña
+    // ni documento/fecha de nacimiento). Si es así, se completa antes de seguir —
+    // pero solo bloquea reservar/publicar, no navegar, así que si algo falla acá
+    // seguimos con el flujo normal (el servidor igual lo bloquea al reservar/publicar).
+    if (user.rol !== 'admin') {
+      try {
+        const r = await fetch('/api/auth/me');
+        const d = await r.json().catch(() => ({}));
+        if (d?.user && d.user.perfil_completo === false) {
+          router.push(`/completar-perfil?next=${encodeURIComponent(destinoFinal)}`);
+          return;
+        }
+      } catch { /* seguimos con el flujo normal */ }
+    }
+
+    router.push(destinoFinal);
   };
 
   const submit = async (e: React.FormEvent) => {
@@ -65,7 +78,7 @@ export default function LoginPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setError(data.error || 'No pudimos iniciar sesión. Intenta de nuevo.'); return; }
-      entrarComo(data.user);
+      await entrarComo(data.user);
     } catch {
       setError('Sin conexión — revisa tu internet e intenta de nuevo.');
     } finally {
