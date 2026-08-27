@@ -54,6 +54,13 @@ export async function PUT(req: NextRequest) {
   if (!user || user.rol !== 'admin') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
   const db = getDb();
   const { nivel, extra } = permisosDe(db, user.id);
+  // Esta ruta llama a `permisosDe` directo (no pasa por `guardArea`) porque el
+  // permiso requerido depende de QUÉ claves trae el body (ver CAMPO_PERMISO), así
+  // que necesita revalidar igual que `guardArea`: `nivel === null` = la fila de este
+  // usuario ya no existe o no está `activa` (JWT válido hasta 7 días mientras tanto).
+  if (nivel === null) {
+    return NextResponse.json({ error: 'No tienes permiso para esta sección.' }, { status: 403 });
+  }
   const body = await req.json().catch(() => ({}));
 
   // Solo las claves reconocidas y presentes como string en el body.

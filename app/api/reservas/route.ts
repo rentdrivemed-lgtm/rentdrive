@@ -163,7 +163,10 @@ export async function POST(req: NextRequest) {
   if (!lugarValido(recogidaL)) return NextResponse.json({ error: 'Indica el lugar y la hora de recogida.' }, { status: 400 });
   if (!lugarValido(entregaL))  return NextResponse.json({ error: 'Indica el lugar y la hora de entrega.' }, { status: 400 });
 
-  const vehiculo = db.prepare('SELECT * FROM vehiculos WHERE id = ? AND disponible = 1').get(Number(vehiculo_id)) as Record<string, unknown> | undefined;
+  // `archivado = 0` explícito además de `disponible = 1`: un vehículo archivado ya
+  // queda con `disponible = 0` al archivarse (ver lib/eliminar.ts), pero se valida
+  // acá también en defensa en profundidad — nunca debe poder reservarse uno archivado.
+  const vehiculo = db.prepare('SELECT * FROM vehiculos WHERE id = ? AND disponible = 1 AND archivado = 0').get(Number(vehiculo_id)) as Record<string, unknown> | undefined;
   if (!vehiculo) return NextResponse.json({ error: 'Vehículo no disponible' }, { status: 400 });
 
   const conflicto = db.prepare(`

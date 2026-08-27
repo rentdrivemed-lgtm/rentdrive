@@ -19,7 +19,9 @@ CREATE TABLE IF NOT EXISTS usuarios (
   admin_nivel           TEXT DEFAULT 'principal',
   permisos_extra        TEXT DEFAULT '{}',   -- excepciones de permisos por empleado (JSON { area: boolean })
   documento_identidad   TEXT DEFAULT '',
-  estado_cuenta         TEXT DEFAULT 'activa' CHECK (estado_cuenta IN ('activa','inactiva')),
+  -- 'archivada': cuenta con historial de negocio real (reservas, liquidaciones, remisiones
+  -- firmadas, etc.) que no se pudo borrar de verdad al "eliminarla" — ver lib/eliminar.ts.
+  estado_cuenta         TEXT DEFAULT 'activa' CHECK (estado_cuenta IN ('activa','inactiva','archivada')),
   celular               TEXT DEFAULT '',
   tipo_documento        TEXT DEFAULT 'cedula',
   fecha_nacimiento      TEXT DEFAULT '',

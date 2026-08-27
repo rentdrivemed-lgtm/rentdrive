@@ -9,10 +9,16 @@ export type MiembroEquipo = { id: number; nombre: string; correo: string; admin_
 // Lista de miembros del equipo (cuentas admin activas) — para asignar tareas,
 // invitar a tableros, etc.
 export function miembrosEquipo(db: DB): MiembroEquipo[] {
+  // `estado_cuenta = 'activa'` (comparación directa, no `!= 'inactiva'`): la columna
+  // tiene DEFAULT 'activa' + CHECK(IN ('activa','inactiva','archivada')) desde el
+  // CREATE TABLE original (no es una columna agregada después sin default), así que
+  // no hay cuentas legacy con estado_cuenta NULL que el COALESCE necesitara cubrir.
+  // Con `!= 'inactiva'` una cuenta admin ARCHIVADA seguía colando como miembro de
+  // equipo asignable/activo — con la comparación directa, solo 'activa' cuenta.
   return db.prepare(
     `SELECT id, nombre, correo, COALESCE(admin_nivel,'principal') AS admin_nivel
      FROM usuarios
-     WHERE rol = 'admin' AND COALESCE(estado_cuenta,'activa') != 'inactiva'
+     WHERE rol = 'admin' AND estado_cuenta = 'activa'
      ORDER BY nombre`
   ).all() as MiembroEquipo[];
 }

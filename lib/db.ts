@@ -27,7 +27,11 @@ function initDb(db: Database.Database) {
       password TEXT NOT NULL,
       rol TEXT NOT NULL CHECK(rol IN ('admin','propietario','usuario')),
       documento_identidad TEXT,
-      estado_cuenta TEXT DEFAULT 'activa' CHECK(estado_cuenta IN ('activa','inactiva')),
+      -- 'archivada': tiene historial de negocio real (reservas, liquidaciones, remisiones firmadas,
+      -- etc.) y por eso NO se puede borrar de verdad; se oculta de listados normales pero se
+      -- conserva íntegra (reversible). Ver lib/eliminar.ts. Bases ya existentes se migran con
+      -- migrarUsuariosEstadoArchivada() más abajo (SQLite no permite ALTER de un CHECK).
+      estado_cuenta TEXT DEFAULT 'activa' CHECK(estado_cuenta IN ('activa','inactiva','archivada')),
       created_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -491,6 +495,11 @@ function initDb(db: Database.Database) {
   try { db.exec("ALTER TABLE vehiculos ADD COLUMN valor_comercial REAL DEFAULT 0"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE vehiculos ADD COLUMN precio_ajuste_pct REAL DEFAULT 0"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE vehiculos ADD COLUMN precio_manual INTEGER DEFAULT 0"); } catch { /* ya existe */ }
+  // Archivado (distinto de `disponible`, que es el toggle operativo del día a día tipo "en
+  // mantenimiento"): 1 = el vehículo tiene historial de negocio real (reservas) y por eso no se
+  // pudo borrar de verdad al "eliminarlo" — se ocultó de listados públicos/admin pero se conserva
+  // íntegro y es reversible. Ver lib/eliminar.ts.
+  try { db.exec("ALTER TABLE vehiculos ADD COLUMN archivado INTEGER DEFAULT 0"); } catch { /* ya existe */ }
 
   try { db.exec("ALTER TABLE usuarios ADD COLUMN celular TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE usuarios ADD COLUMN tipo_documento TEXT DEFAULT 'cedula'"); } catch { /* ya existe */ }
@@ -555,6 +564,7 @@ function initDb(db: Database.Database) {
   try { db.exec("ALTER TABLE cotizaciones ADD COLUMN fecha_inicio TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE cotizaciones ADD COLUMN fecha_fin TEXT DEFAULT ''"); } catch { /* ya existe */ }
   migrarCotizacionesReservaOpcional(db);
+  migrarUsuariosEstadoArchivada(db);
 
   const adminExists = db.prepare("SELECT id FROM usuarios WHERE rol='admin' LIMIT 1").get();
   if (!adminExists) {
@@ -698,6 +708,63 @@ function migrarCotizacionesReservaOpcional(db: Database.Database) {
     console.log('[db] Migración: cotizaciones.reserva_id ahora es opcional (cotizador de venta).');
   } catch (e) {
     console.error('[db] Migración cotizaciones.reserva_id nullable falló:', e instanceof Error ? e.message : e);
+  } finally {
+    if (fkEstabaActivo) db.pragma('foreign_keys = ON');
+  }
+}
+
+// SQLite tampoco permite ampliar los valores de un CHECK existente con ALTER TABLE directo.
+// `usuarios.estado_cuenta` necesitó un tercer valor ('archivada', ver lib/eliminar.ts — "eliminar
+// inteligente" de cuentas) además de 'activa'/'inactiva'. Mismo patrón de reconstrucción que
+// migrarCotizacionesReservaOpcional: crear una tabla nueva con el CHECK correcto, copiar los datos,
+// borrar la vieja y renombrar. Es un no-op seguro en bases nuevas (el CREATE TABLE de arriba ya
+// trae 'archivada' en el CHECK, así que `sql` de sqlite_master ya la contiene).
+//
+// A diferencia de `cotizaciones` (pocas columnas fijas), `usuarios` ha ido acumulando ~20 columnas
+// por ALTER TABLE a lo largo de las sesiones. En vez de copiarlas todas a mano (fácil de desactualizar
+// y de olvidar una), las columnas "base" (las del CREATE TABLE original, con sus constraints reales:
+// UNIQUE, NOT NULL, CHECK) se reescriben a mano, y el resto se toman dinámicamente de
+// PRAGMA table_info — todas esas columnas agregadas después son siempre nullable con un DEFAULT
+// simple (sin CHECK ni UNIQUE propios), así que copiar solo nombre+tipo+default es fiel y seguro.
+function migrarUsuariosEstadoArchivada(db: Database.Database) {
+  const fkEstabaActivo = !!db.pragma('foreign_keys', { simple: true });
+  try {
+    const tabla = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='usuarios'").get() as { sql?: string } | undefined;
+    if (!tabla?.sql || /archivada/.test(tabla.sql)) return; // ya migrada, o la tabla no existe todavía
+
+    const cols = db.prepare('PRAGMA table_info(usuarios)').all() as
+      { name: string; type: string; notnull: number; dflt_value: string | null; pk: number }[];
+
+    const BASE = new Set(['id', 'nombre', 'correo', 'password', 'rol', 'documento_identidad', 'estado_cuenta', 'created_at']);
+    const extra = cols.filter(c => !BASE.has(c.name));
+    const extraDef = extra
+      .map(c => `${c.name} ${c.type || 'TEXT'}${c.dflt_value === null ? '' : ` DEFAULT ${c.dflt_value}`}`)
+      .join(',\n        ');
+
+    if (fkEstabaActivo) db.pragma('foreign_keys = OFF');
+    const reconstruir = db.transaction(() => {
+      db.exec(`
+        CREATE TABLE usuarios_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          nombre TEXT NOT NULL,
+          correo TEXT UNIQUE NOT NULL,
+          password TEXT NOT NULL,
+          rol TEXT NOT NULL CHECK(rol IN ('admin','propietario','usuario')),
+          documento_identidad TEXT,
+          estado_cuenta TEXT DEFAULT 'activa' CHECK(estado_cuenta IN ('activa','inactiva','archivada')),
+          created_at TEXT DEFAULT (datetime('now'))${extra.length ? ',\n        ' + extraDef : ''}
+        );
+
+        INSERT INTO usuarios_new SELECT * FROM usuarios;
+
+        DROP TABLE usuarios;
+        ALTER TABLE usuarios_new RENAME TO usuarios;
+      `);
+    });
+    reconstruir();
+    console.log('[db] Migración: usuarios.estado_cuenta ahora admite "archivada".');
+  } catch (e) {
+    console.error('[db] Migración usuarios.estado_cuenta archivada falló:', e instanceof Error ? e.message : e);
   } finally {
     if (fkEstabaActivo) db.pragma('foreign_keys = ON');
   }

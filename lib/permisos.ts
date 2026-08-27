@@ -15,6 +15,14 @@ export const NIVEL_LABEL: Record<AdminNivel, string> = {
 export function esNivel(v: unknown): v is AdminNivel {
   return v === 'principal' || v === 'socio' || v === 'secretaria';
 }
+// Utilidad GENÉRICA: normaliza un valor crudo (típicamente `usuarios.admin_nivel`
+// de una fila que YA SABEMOS que existe y está activa, o el `admin_nivel` que llegó
+// en el body al crear una cuenta nueva) a un nivel válido, cayendo a 'principal' si
+// viene vacío/corrupto. A propósito NO es la función que decide si una sesión puede
+// autorizar una request: para eso ver `nivelDe`/`permisosDe` más abajo, que sí
+// distinguen "la fila no existe o está inactiva/archivada" (deniega todo) de "la fila
+// existe y está activa, pero el valor guardado es raro" (aquí sí cae a 'principal',
+// igual que el DEFAULT de la columna en la BD — ver lib/db.ts).
 export function normalizarNivel(v: unknown): AdminNivel {
   return esNivel(v) ? v : 'principal';
 }
@@ -164,7 +172,12 @@ export function fusionarPermisosExtra(actual: PermisosExtra, delta: PermisosExtr
 
 // Permiso efectivo. El tercer parámetro es OPCIONAL: sin él, el comportamiento es
 // idéntico al de siempre (solo la matriz por nivel).
-export function puede(nivel: AdminNivel, area: string, extra?: PermisosExtra | null): boolean {
+// `nivel === null` significa "sin nivel autorizable" (ver `nivelDe`/`permisosDe`: la
+// fila del usuario ya no existe, o existe pero no está `activa`) y SIEMPRE deniega,
+// sin excepción — ni siquiera una excepción `true` en `permisos_extra` puede pasar
+// por encima de esto, porque esa cuenta ya no debería poder autorizar nada.
+export function puede(nivel: AdminNivel | null, area: string, extra?: PermisosExtra | null): boolean {
+  if (nivel === null) return false;
   const permitidos = AREA_NIVELES[area];
   if (!permitidos) return false;
   if (extra && esAreaAsignable(area)) {
@@ -183,18 +196,37 @@ export function esSocio(nivel: AdminNivel): boolean {
 
 type DB = Database.Database;
 
-export function nivelDe(db: DB, userId: number): AdminNivel {
-  const r = db.prepare('SELECT admin_nivel FROM usuarios WHERE id = ?').get(userId) as { admin_nivel?: string } | undefined;
-  return normalizarNivel(r?.admin_nivel);
+// IMPORTANTE — fuente de autorización de sesión: `nivelDe`/`permisosDe` son las
+// funciones que `guardArea`/`adminTieneArea` (y cualquier ruta que las llame directo,
+// ver PUT /api/config) usan para decidir si una sesión con JWT válido puede autorizar
+// una acción. El JWT (`getCurrentUser()`) sigue siendo válido hasta 7 días aunque la
+// fila del usuario cambie o desaparezca de la BD (ver lib/eliminar.ts: "eliminar" una
+// cuenta admin sin historial hace un DELETE real, no solo una desactivación), así que
+// estas dos funciones son la ÚNICA revalidación real contra el estado actual en BD.
+//
+// Devuelven `nivel: null` — "sin nivel autorizable", `puede()` lo deniega SIEMPRE —
+// en dos casos que hay que tratar igual de estrictos:
+//   1) la fila ya no existe (cuenta borrada de verdad);
+//   2) la fila existe pero `estado_cuenta !== 'activa'` (desactivada o archivada).
+// Solo con la fila existiendo Y activa se cae al nivel normalizado de la columna
+// (que sí puede caer a 'principal' por defecto si el valor guardado es raro, ver
+// `normalizarNivel`).
+export function nivelDe(db: DB, userId: number): AdminNivel | null {
+  const r = db.prepare('SELECT admin_nivel, estado_cuenta FROM usuarios WHERE id = ?').get(userId) as
+    { admin_nivel?: string; estado_cuenta?: string } | undefined;
+  if (!r || r.estado_cuenta !== 'activa') return null;
+  return normalizarNivel(r.admin_nivel);
 }
 
-// Nivel + excepciones en una sola consulta. Si la columna aún no existe (BD vieja),
-// cae al comportamiento anterior (solo nivel) en vez de tumbar la petición.
-export function permisosDe(db: DB, userId: number): { nivel: AdminNivel; extra: PermisosExtra } {
+// Nivel + excepciones en una sola consulta. Si la columna `permisos_extra` aún no
+// existe (BD vieja), cae al comportamiento anterior (solo nivel, vía `nivelDe`, que
+// también exige fila activa) en vez de tumbar la petición.
+export function permisosDe(db: DB, userId: number): { nivel: AdminNivel | null; extra: PermisosExtra } {
   try {
-    const r = db.prepare('SELECT admin_nivel, permisos_extra FROM usuarios WHERE id = ?').get(userId) as
-      { admin_nivel?: string; permisos_extra?: string } | undefined;
-    return { nivel: normalizarNivel(r?.admin_nivel), extra: parsePermisosExtra(r?.permisos_extra) };
+    const r = db.prepare('SELECT admin_nivel, permisos_extra, estado_cuenta FROM usuarios WHERE id = ?').get(userId) as
+      { admin_nivel?: string; permisos_extra?: string; estado_cuenta?: string } | undefined;
+    if (!r || r.estado_cuenta !== 'activa') return { nivel: null, extra: {} };
+    return { nivel: normalizarNivel(r.admin_nivel), extra: parsePermisosExtra(r.permisos_extra) };
   } catch (e) {
     console.error('[permisos] no se pudo leer permisos_extra:', e instanceof Error ? e.message : e);
     return { nivel: nivelDe(db, userId), extra: {} };

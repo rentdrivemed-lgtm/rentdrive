@@ -42,7 +42,7 @@ type Vehiculo = {
   precio_dia: number; propietario_id: number; propietario_nombre: string; disponible: number;
   fotos: string; fotos_detalle: string; placa?: string; documentos?: string;
   documentos_estado?: string; documentos_nota?: string; documentos_revisiones?: string;
-  en_vitrina?: number;
+  en_vitrina?: number; archivado?: number;
 };
 
 const rolColor: Record<string, string> = {
@@ -290,6 +290,12 @@ export default function DashboardAdmin() {
   const [filtroEstado, setFiltroEstado] = useState('');
   const [filtroBusq, setFiltroBusq] = useState('');
   const [perfilModal, setPerfilModal] = useState<{ u: Usuario } | null>(null);
+  // ── Eliminar/archivar (usuarios y vehículos) ──
+  const [verArchivadosUsuarios, setVerArchivadosUsuarios] = useState(false);
+  const [verArchivadosVehiculos, setVerArchivadosVehiculos] = useState(false);
+  const [vehiculosArchivados, setVehiculosArchivados] = useState<Vehiculo[]>([]);
+  const [eliminandoUsuario, setEliminandoUsuario] = useState<number | null>(null);
+  const [eliminandoVehiculo, setEliminandoVehiculo] = useState<number | null>(null);
   const [resetPass, setResetPass] = useState<{ uid: number; nueva: string; confirmar: string; guardando: boolean; ok: string } | null>(null);
   const [clienteDocs, setClienteDocs] = useState<{ r: ReservaCalendario & {
     documento_id_url?: string; documento_id_url_dorso?: string; documento_es_pasaporte?: number;
@@ -417,6 +423,43 @@ export default function DashboardAdmin() {
       body: JSON.stringify({ id: u.id, estado_cuenta: nuevo }),
     });
     if (res.ok) setUsuarios(prev => prev.map(x => x.id === u.id ? { ...x, estado_cuenta: nuevo } : x));
+  };
+
+  // Eliminar cuenta (borrado inteligente, ver lib/eliminar.ts): el servidor decide solo
+  // entre borrado real y archivado reversible según si la cuenta tiene historial de negocio.
+  const eliminarUsuario = async (u: Usuario) => {
+    if (!window.confirm(
+      `¿Eliminar la cuenta de ${u.nombre} (${u.correo})?\n\n` +
+      'Si nunca tuvo actividad (reservas, vehículos, pagos, chat…) se borra para siempre. ' +
+      'Si sí tuvo, se archivará (queda oculta pero se puede recuperar).'
+    )) return;
+    setEliminandoUsuario(u.id);
+    try {
+      const res = await fetch(`/api/admin/usuarios?id=${u.id}`, { method: 'DELETE' });
+      const d = await res.json().catch(() => ({})) as { resultado?: string; error?: string };
+      if (!res.ok) { alert(d.error || 'No se pudo eliminar la cuenta.'); return; }
+      if (d.resultado === 'borrado') {
+        setUsuarios(prev => prev.filter(x => x.id !== u.id));
+        alert(`✓ Se eliminó por completo la cuenta de ${u.nombre} (no tenía historial).`);
+      } else {
+        setUsuarios(prev => prev.map(x => x.id === u.id ? { ...x, estado_cuenta: 'archivada' } : x));
+        alert(`✓ ${u.nombre} tenía historial de negocio, así que se archivó (no se borró) — puedes desarchivarla desde "Ver archivadas".`);
+      }
+    } catch {
+      alert('Error de conexión, intenta de nuevo.');
+    } finally {
+      setEliminandoUsuario(null);
+    }
+  };
+
+  const desarchivarUsuario = async (u: Usuario) => {
+    const res = await fetch('/api/admin/usuarios', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: u.id, accion: 'desarchivar' }),
+    });
+    if (res.ok) setUsuarios(prev => prev.map(x => x.id === u.id ? { ...x, estado_cuenta: 'inactiva' } : x));
+    else alert('No se pudo desarchivar la cuenta.');
   };
 
   // ── Equipo y roles (solo nivel principal) ──────────────────────────────────
@@ -580,6 +623,56 @@ export default function DashboardAdmin() {
     } catch {
       // Revierte el cambio optimista si el servidor no lo confirmó.
       setVehiculos(vs => vs.map(x => x.id === v.id ? { ...x, en_vitrina: v.en_vitrina } : x));
+    }
+  };
+
+  const cargarVehiculosArchivados = () =>
+    fetch('/api/vehiculos?archivados=1').then(r => r.json()).then(d => setVehiculosArchivados(d.vehiculos || [])).catch(() => {});
+
+  const alternarVerArchivadosVehiculos = () => {
+    const nuevo = !verArchivadosVehiculos;
+    setVerArchivadosVehiculos(nuevo);
+    if (nuevo) cargarVehiculosArchivados();
+  };
+
+  // Eliminar vehículo (borrado inteligente, ver lib/eliminar.ts): el servidor decide solo
+  // entre borrado real y archivado reversible según si el vehículo tiene reservas.
+  const eliminarVehiculo = async (v: Vehiculo) => {
+    if (!window.confirm(
+      `¿Eliminar ${v.marca} ${v.modelo} ${v.anio}?\n\n` +
+      'Si nunca tuvo reservas se borra para siempre. Si sí tuvo, se archivará ' +
+      '(desaparece de la vitrina y del panel, pero se puede recuperar).'
+    )) return;
+    setEliminandoVehiculo(v.id);
+    try {
+      const res = await fetch(`/api/vehiculos/${v.id}`, { method: 'DELETE' });
+      const d = await res.json().catch(() => ({})) as { resultado?: string; error?: string };
+      if (!res.ok) { alert(d.error || 'No se pudo eliminar el vehículo.'); return; }
+      setVehiculos(vs => vs.filter(x => x.id !== v.id));
+      if (d.resultado === 'borrado') {
+        alert(`✓ Se eliminó por completo ${v.marca} ${v.modelo} (no tenía reservas).`);
+      } else {
+        alert(`✓ ${v.marca} ${v.modelo} tenía reservas, así que se archivó (no se borró) — puedes desarchivarlo desde "Ver archivados".`);
+        if (verArchivadosVehiculos) cargarVehiculosArchivados();
+      }
+    } catch {
+      alert('Error de conexión, intenta de nuevo.');
+    } finally {
+      setEliminandoVehiculo(null);
+    }
+  };
+
+  const desarchivarVehiculo = async (v: Vehiculo) => {
+    const res = await fetch(`/api/vehiculos/${v.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ archivado: 0 }),
+    });
+    if (res.ok) {
+      setVehiculosArchivados(vs => vs.filter(x => x.id !== v.id));
+      cargarVehiculos();
+    } else {
+      alert('No se pudo desarchivar el vehículo.');
     }
   };
 
@@ -755,6 +848,13 @@ export default function DashboardAdmin() {
     vehiculos.filter(v => v.documentos_estado === 'en_revision').map(v => v.propietario_id)
   );
 
+  // Las cuentas archivadas (ver lib/eliminar.ts) se ocultan del listado normal — solo se
+  // ven al activar "Ver archivadas".
+  const archivadasUsuariosCount = usuarios.filter(u => u.estado_cuenta === 'archivada').length;
+  const usuariosFiltrados = usuarios.filter(u =>
+    verArchivadosUsuarios ? u.estado_cuenta === 'archivada' : u.estado_cuenta !== 'archivada'
+  );
+
   const reservasFiltradas = reservas
     .filter(r => {
       if (filtroEstado && r.estado !== filtroEstado) return false;
@@ -869,6 +969,16 @@ export default function DashboardAdmin() {
           </div>
         </div>
       )}
+      {tab === 'usuarios' && puede(miNivel, 'usuarios_gestion') && (
+        <div className="flex items-center justify-end mb-3">
+          <button onClick={() => setVerArchivadosUsuarios(v => !v)}
+            className={`text-xs px-3 py-1.5 rounded-xl border transition font-medium ${
+              verArchivadosUsuarios ? 'border-accent bg-accent text-white' : 'border-border text-ink/60 hover:bg-surface'
+            }`}>
+            {verArchivadosUsuarios ? '← Ver cuentas activas' : `🗄️ Ver archivadas (${archivadasUsuariosCount})`}
+          </button>
+        </div>
+      )}
       {tab === 'usuarios' && (
         <div className="bg-surface-2 rounded-2xl shadow-sm border border-border overflow-hidden">
           <div className="overflow-x-auto">
@@ -883,7 +993,12 @@ export default function DashboardAdmin() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {usuarios.map(u => (
+                {usuariosFiltrados.length === 0 && (
+                  <tr><td colSpan={5} className="px-4 py-8 text-center text-sm text-ink/40">
+                    {verArchivadosUsuarios ? 'No hay cuentas archivadas.' : 'No hay usuarios.'}
+                  </td></tr>
+                )}
+                {usuariosFiltrados.map(u => (
                   <Fragment key={u.id}>
                   <tr className="hover:bg-surface transition">
                     <td className="px-4 py-3 font-semibold text-ink">
@@ -901,7 +1016,9 @@ export default function DashboardAdmin() {
                     </td>
                     <td className="px-4 py-3">
                       <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${
-                        u.estado_cuenta === 'activa' ? 'bg-success/15 text-success' : 'bg-danger/15 text-danger'
+                        u.estado_cuenta === 'activa' ? 'bg-success/15 text-success'
+                          : u.estado_cuenta === 'archivada' ? 'bg-warning/15 text-warning'
+                          : 'bg-danger/15 text-danger'
                       }`}>
                         {u.estado_cuenta}
                       </span>
@@ -912,34 +1029,53 @@ export default function DashboardAdmin() {
                           className="flex items-center gap-1 text-xs border border-accent/30 text-accent px-2.5 py-1.5 rounded-xl hover:bg-accent-light transition font-medium">
                           <IconUser size={11} /> Perfil
                         </button>
-                        {u.rol === 'admin' && puede(miNivel, 'usuarios_gestion') && u.id !== miId && (
-                          <select value={normalizarNivel(u.admin_nivel)} onChange={e => cambiarNivel(u, e.target.value as AdminNivel)}
-                            className="text-xs border border-border rounded-xl px-2 py-1.5 bg-surface text-ink" title="Nivel de acceso">
-                            {NIVELES.map(n => <option key={n} value={n}>{NIVEL_LABEL[n]}</option>)}
-                          </select>
-                        )}
-                        {u.rol === 'admin' && puede(miNivel, 'usuarios_gestion') && u.id !== miId && (
-                          <button onClick={() => abrirPermisos(u)} title="Elegir qué secciones ve esta persona"
-                            className={`text-xs px-3 py-1.5 rounded-xl border transition font-medium ${
-                              permisosAbierto === u.id ? 'border-accent text-accent bg-accent-light' : 'border-border text-ink/70 hover:bg-surface'
-                            }`}>
-                            🔐 Secciones
-                            {Object.keys(parsePermisosExtra(u.permisos_extra)).length > 0 && (
-                              <span className="ml-1 text-[10px] font-bold text-warning">
-                                ({Object.keys(parsePermisosExtra(u.permisos_extra)).length})
-                              </span>
+                        {u.estado_cuenta === 'archivada' ? (
+                          puede(miNivel, 'usuarios_gestion') && (
+                            <button onClick={() => desarchivarUsuario(u)}
+                              className="text-xs px-3 py-1.5 rounded-xl border border-success/30 text-success hover:bg-success/10 transition font-medium">
+                              📤 Desarchivar
+                            </button>
+                          )
+                        ) : (
+                          <>
+                            {u.rol === 'admin' && puede(miNivel, 'usuarios_gestion') && u.id !== miId && (
+                              <select value={normalizarNivel(u.admin_nivel)} onChange={e => cambiarNivel(u, e.target.value as AdminNivel)}
+                                className="text-xs border border-border rounded-xl px-2 py-1.5 bg-surface text-ink" title="Nivel de acceso">
+                                {NIVELES.map(n => <option key={n} value={n}>{NIVEL_LABEL[n]}</option>)}
+                              </select>
                             )}
-                          </button>
-                        )}
-                        {(u.rol !== 'admin' || (puede(miNivel, 'usuarios_gestion') && u.id !== miId)) && (
-                          <button onClick={() => toggleEstado(u)}
-                            className={`text-xs px-3 py-1.5 rounded-xl border transition font-medium ${
-                              u.estado_cuenta === 'activa'
-                                ? 'border-danger/25 text-danger hover:bg-danger/10'
-                                : 'border-success/30 text-success hover:bg-success/10'
-                            }`}>
-                            {u.estado_cuenta === 'activa' ? 'Desactivar' : 'Activar'}
-                          </button>
+                            {u.rol === 'admin' && puede(miNivel, 'usuarios_gestion') && u.id !== miId && (
+                              <button onClick={() => abrirPermisos(u)} title="Elegir qué secciones ve esta persona"
+                                className={`text-xs px-3 py-1.5 rounded-xl border transition font-medium ${
+                                  permisosAbierto === u.id ? 'border-accent text-accent bg-accent-light' : 'border-border text-ink/70 hover:bg-surface'
+                                }`}>
+                                🔐 Secciones
+                                {Object.keys(parsePermisosExtra(u.permisos_extra)).length > 0 && (
+                                  <span className="ml-1 text-[10px] font-bold text-warning">
+                                    ({Object.keys(parsePermisosExtra(u.permisos_extra)).length})
+                                  </span>
+                                )}
+                              </button>
+                            )}
+                            {(u.rol !== 'admin' || (puede(miNivel, 'usuarios_gestion') && u.id !== miId)) && (
+                              <button onClick={() => toggleEstado(u)}
+                                className={`text-xs px-3 py-1.5 rounded-xl border transition font-medium ${
+                                  u.estado_cuenta === 'activa'
+                                    ? 'border-danger/25 text-danger hover:bg-danger/10'
+                                    : 'border-success/30 text-success hover:bg-success/10'
+                                }`}>
+                                {u.estado_cuenta === 'activa' ? 'Desactivar' : 'Activar'}
+                              </button>
+                            )}
+                            {/* Eliminar cuenta: exclusiva de usuarios_gestion, sin excepción — nunca sobre uno mismo. */}
+                            {puede(miNivel, 'usuarios_gestion') && u.id !== miId && (
+                              <button onClick={() => eliminarUsuario(u)} disabled={eliminandoUsuario === u.id}
+                                title="Borra la cuenta si nunca tuvo actividad; si tuvo, la archiva"
+                                className="text-xs px-3 py-1.5 rounded-xl border border-danger/30 text-danger hover:bg-danger/10 transition font-medium disabled:opacity-50">
+                                {eliminandoUsuario === u.id ? 'Eliminando…' : '🗑️ Eliminar'}
+                              </button>
+                            )}
+                          </>
                         )}
                       </div>
                     </td>
@@ -970,6 +1106,43 @@ export default function DashboardAdmin() {
 
       {/* ── VEHÍCULOS ── */}
       {tab === 'vehiculos' && (
+        <div className="flex items-center justify-end mb-3">
+          <button onClick={alternarVerArchivadosVehiculos}
+            className={`text-xs px-3 py-1.5 rounded-xl border transition font-medium ${
+              verArchivadosVehiculos ? 'border-accent bg-accent text-white' : 'border-border text-ink/60 hover:bg-surface'
+            }`}>
+            {verArchivadosVehiculos ? '← Ver vehículos activos' : '🗄️ Ver archivados'}
+          </button>
+        </div>
+      )}
+      {tab === 'vehiculos' && verArchivadosVehiculos && (
+        <div className="space-y-3">
+          {vehiculosArchivados.length === 0 && (
+            <div className="text-center py-14 bg-surface-2 rounded-2xl border border-border">
+              <IconCar size={48} className="text-ink/20 mx-auto mb-3" />
+              <p className="text-ink/50">No hay vehículos archivados.</p>
+            </div>
+          )}
+          {vehiculosArchivados.map(v => {
+            let portada = '';
+            try { portada = (JSON.parse(v.fotos) as string[])[0] || ''; } catch { portada = ''; }
+            return (
+              <div key={v.id} className="bg-surface-2 rounded-2xl shadow-sm p-4 border border-border flex gap-4 items-center flex-wrap">
+                {portada && <img src={portada} alt={v.marca} className="w-20 h-14 object-cover rounded-xl flex-shrink-0 opacity-70" />}
+                <div className="flex-1 min-w-0">
+                  <p className="font-bold text-ink">{v.marca} {v.modelo} {v.anio}</p>
+                  <p className="text-sm text-ink/50 mt-0.5">Propietario: {v.propietario_nombre} {v.placa && `· Placa: ${v.placa}`}</p>
+                </div>
+                <button onClick={() => desarchivarVehiculo(v)}
+                  className="text-xs px-3 py-1.5 rounded-xl border border-success/30 text-success hover:bg-success/10 transition font-medium">
+                  📤 Desarchivar
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {tab === 'vehiculos' && !verArchivadosVehiculos && (
         <div className="space-y-3">
           {errorListas.vehiculos ? (
             <div className="text-center py-14 bg-danger/5 rounded-2xl border border-danger/25">
@@ -1074,6 +1247,11 @@ export default function DashboardAdmin() {
                       }`}>
                       📄 Docs
                       {v.documentos_estado === 'en_revision' && <span className="w-1.5 h-1.5 rounded-full bg-warning/100 ml-0.5" />}
+                    </button>
+                    <button onClick={() => eliminarVehiculo(v)} disabled={eliminandoVehiculo === v.id}
+                      title="Borra el vehículo si nunca tuvo reservas; si tuvo, lo archiva"
+                      className="flex items-center gap-1 text-xs border border-danger/30 text-danger px-2.5 py-1.5 rounded-xl hover:bg-danger/10 transition font-medium disabled:opacity-50">
+                      {eliminandoVehiculo === v.id ? 'Eliminando…' : '🗑️ Eliminar'}
                     </button>
                   </div>
                 </div>
@@ -1943,16 +2121,31 @@ export default function DashboardAdmin() {
                     <p className="text-xs text-ink/50">Registrado el {u.created_at?.split('T')[0] || u.created_at}</p>
                     <p className="text-xs text-ink/50">Estado: <span className={u.estado_cuenta === 'activa' ? 'text-success font-semibold' : 'text-danger font-semibold'}>{u.estado_cuenta}</span></p>
                   </div>
-                  {u.rol !== 'admin' && (
-                    <button onClick={() => { toggleEstado(u); setPerfilModal(p => p ? { u: { ...p.u, estado_cuenta: p.u.estado_cuenta === 'activa' ? 'inactiva' : 'activa' } } : null); }}
-                      className={`text-xs px-3 py-1.5 rounded-xl border transition font-medium ${
-                        u.estado_cuenta === 'activa'
-                          ? 'border-danger/25 text-danger hover:bg-danger/10'
-                          : 'border-success/30 text-success hover:bg-success/10'
-                      }`}>
-                      {u.estado_cuenta === 'activa' ? 'Desactivar cuenta' : 'Activar cuenta'}
-                    </button>
-                  )}
+                  <div className="flex items-center gap-2">
+                    {u.rol !== 'admin' && u.estado_cuenta !== 'archivada' && (
+                      <button onClick={() => { toggleEstado(u); setPerfilModal(p => p ? { u: { ...p.u, estado_cuenta: p.u.estado_cuenta === 'activa' ? 'inactiva' : 'activa' } } : null); }}
+                        className={`text-xs px-3 py-1.5 rounded-xl border transition font-medium ${
+                          u.estado_cuenta === 'activa'
+                            ? 'border-danger/25 text-danger hover:bg-danger/10'
+                            : 'border-success/30 text-success hover:bg-success/10'
+                        }`}>
+                        {u.estado_cuenta === 'activa' ? 'Desactivar cuenta' : 'Activar cuenta'}
+                      </button>
+                    )}
+                    {puede(miNivel, 'usuarios_gestion') && u.id !== miId && (
+                      u.estado_cuenta === 'archivada' ? (
+                        <button onClick={() => { desarchivarUsuario(u); setPerfilModal(null); }}
+                          className="text-xs px-3 py-1.5 rounded-xl border border-success/30 text-success hover:bg-success/10 transition font-medium">
+                          📤 Desarchivar
+                        </button>
+                      ) : (
+                        <button onClick={async () => { await eliminarUsuario(u); setPerfilModal(null); }}
+                          className="text-xs px-3 py-1.5 rounded-xl border border-danger/30 text-danger hover:bg-danger/10 transition font-medium">
+                          🗑️ Eliminar
+                        </button>
+                      )
+                    )}
+                  </div>
                 </div>
 
                 {/* Resetear contraseña */}

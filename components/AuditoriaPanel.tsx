@@ -8,6 +8,7 @@ type Evento = {
 
 const AREA_LABEL: Record<string, string> = {
   contabilidad: '💰 Contabilidad', usuarios: '👤 Usuarios', config: '⚙️ Configuración', soporte: '💬 Soporte',
+  vehiculos: '🚗 Vehículos',
 };
 const ACCION_LABEL: Record<string, string> = {
   crear_gasto: 'Creó un gasto', editar_gasto: 'Editó un gasto', anular_gasto: 'Anuló un gasto',
@@ -15,6 +16,10 @@ const ACCION_LABEL: Record<string, string> = {
   editar_config: 'Cambió la configuración', crear_cuenta_equipo: 'Creó una cuenta de equipo',
   cambiar_nivel: 'Cambió el nivel de un usuario', desactivar_cuenta: 'Desactivó una cuenta',
   activar_cuenta: 'Activó una cuenta', resetear_clave: 'Reseteó una contraseña',
+  eliminar_cuenta: 'Eliminó una cuenta (borrado real)', archivar_cuenta: 'Archivó una cuenta',
+  desarchivar_cuenta: 'Desarchivó una cuenta',
+  eliminar_vehiculo: 'Eliminó un vehículo (borrado real)', archivar_vehiculo: 'Archivó un vehículo',
+  desarchivar_vehiculo: 'Desarchivó un vehículo',
 };
 
 function formatHora(ts: string) {
