@@ -5,6 +5,7 @@
 // de la plataforma) — la liquidación es un comprobante interno, no una factura DIAN,
 // porque la mayoría de propietarios son personas naturales sin RUT de facturación.
 import type Database from 'better-sqlite3';
+import { createHash } from 'crypto';
 import { getConfig } from './operaciones';
 import { emitirFacturaDataico, dataicoHabilitado } from './dataico';
 import { enviarCorreo } from './email';
@@ -129,6 +130,21 @@ export function generarLiquidacion(db: DB, reservaId: number) {
 }
 
 // ── Remisiones (documento a nombre del dueño del vehículo) ───────────────────
+// A la vez es la "cuenta de cobro": el propietario debe firmarla (firma electrónica
+// simple) para autorizar el pago — ver `firmarCuentaCobro` más abajo. Mientras
+// `firmada_en` esté vacío, la liquidación asociada NO puede marcarse como pagada
+// (chequeo en app/api/contabilidad/liquidaciones/route.ts).
+export type RemisionRow = {
+  id: number; reserva_id: number; propietario_id: number; numero: string;
+  propietario_nombre: string; propietario_documento: string;
+  vehiculo_descripcion: string; placa: string;
+  fecha_inicio: string; fecha_fin: string; dias: number;
+  bruto: number; comision_pct: number; comision_valor: number; neto: number;
+  firmada_en: string; firma_ip: string; firma_user_agent: string;
+  firma_imagen: string; firma_nombre_confirmado: string; firma_hash: string;
+  created_at: string;
+};
+
 // Se genera automáticamente cuando el cliente paga. Deja constancia formal de que
 // DrivePass gestionó el alquiler del vehículo del propietario y del neto a liquidarle.
 export function generarRemision(db: DB, reservaId: number) {
@@ -161,6 +177,70 @@ export function generarRemision(db: DB, reservaId: number) {
   const id = Number(result.lastInsertRowid);
   db.prepare('UPDATE remisiones SET numero = ? WHERE id = ?').run(numero('REM', id), id);
   return db.prepare('SELECT * FROM remisiones WHERE reserva_id = ?').get(reservaId);
+}
+
+// Avisa al propietario que tiene una cuenta de cobro nueva esperando su firma. Se llama
+// SOLO cuando la remisión se crea en el flujo normal de pago (procesarPagoConfirmado),
+// nunca en el backfill de remisiones viejas (evita notificar "firma pendiente" sobre
+// alquileres que ya se pagaron hace tiempo, de antes de existir este requisito).
+function notificarNuevaCuentaCobro(db: DB, rem: RemisionRow): void {
+  try {
+    const titulo = `🧾 Nueva cuenta de cobro: ${rem.vehiculo_descripcion}`;
+    const mensaje = `Generamos tu cuenta de cobro por el alquiler del ${rem.fecha_inicio} al ${rem.fecha_fin}: ` +
+      `recibirás $${rem.neto.toLocaleString('es-CO')} (neto, ya descontada la comisión del ${(rem.comision_pct * 100).toFixed(0)}%). ` +
+      `Fírmala desde tu panel para autorizar el pago.`;
+    db.prepare(
+      'INSERT INTO notificaciones (destinatario_id, tipo, titulo, mensaje, referencia_id, referencia_tipo) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(rem.propietario_id, 'cuenta_cobro_pendiente', titulo, mensaje, rem.id, 'remision');
+  } catch (e) {
+    console.error('[contabilidad] no se pudo notificar la nueva cuenta de cobro:', e instanceof Error ? e.message : e);
+  }
+}
+
+// Hash de integridad sobre los campos "congelados" de la remisión en el momento de
+// firmar. Permite detectar si algo se editó después (no debería poder pasar, pero
+// sirve como evidencia adicional). SHA-256 sobre una concatenación estable de campos.
+export function calcularHashRemision(r: {
+  numero: string; propietario_documento: string; vehiculo_descripcion: string; placa: string;
+  bruto: number; comision_pct: number; comision_valor: number; neto: number;
+  fecha_inicio: string; fecha_fin: string;
+}): string {
+  const base = [
+    r.numero, r.propietario_documento, r.vehiculo_descripcion, r.placa,
+    r.bruto, r.comision_pct, r.comision_valor, r.neto, r.fecha_inicio, r.fecha_fin,
+  ].join('|');
+  return createHash('sha256').update(base).digest('hex');
+}
+
+export type FirmarCuentaCobroOk = { ok: true; remision: RemisionRow };
+export type FirmarCuentaCobroError = { ok: false; status: number; error: string };
+
+// Firma electrónica simple de la cuenta de cobro (remisión) por su propietario.
+// Es la autorización previa al pago: mientras no esté firmada, el admin no puede
+// marcar la liquidación asociada como pagada (ver liquidaciones/route.ts → PUT).
+// No permite refirmar/sobrescribir una firma ya existente.
+export function firmarCuentaCobro(
+  db: DB, remisionId: number, propietarioId: number,
+  opts: { firmaImagen?: string; nombreConfirmado: string; ip: string; userAgent: string },
+): FirmarCuentaCobroOk | FirmarCuentaCobroError {
+  const rem = db.prepare('SELECT * FROM remisiones WHERE id = ?').get(remisionId) as RemisionRow | undefined;
+  if (!rem) return { ok: false, status: 404, error: 'Cuenta de cobro no encontrada.' };
+  if (rem.propietario_id !== propietarioId) return { ok: false, status: 403, error: 'No tienes permiso para firmar esta cuenta de cobro.' };
+  if (rem.firmada_en) return { ok: false, status: 409, error: 'Esta cuenta de cobro ya fue firmada.' };
+
+  const nombreConfirmado = (opts.nombreConfirmado || '').trim();
+  if (!nombreConfirmado) return { ok: false, status: 400, error: 'Debes escribir tu nombre completo para confirmar la firma.' };
+
+  const hash = calcularHashRemision(rem);
+  db.prepare(`
+    UPDATE remisiones SET
+      firmada_en = datetime('now','localtime'),
+      firma_ip = ?, firma_user_agent = ?, firma_imagen = ?, firma_nombre_confirmado = ?, firma_hash = ?
+    WHERE id = ?
+  `).run(opts.ip || '', opts.userAgent || '', opts.firmaImagen || '', nombreConfirmado, hash, remisionId);
+
+  const actualizada = db.prepare('SELECT * FROM remisiones WHERE id = ?').get(remisionId) as RemisionRow;
+  return { ok: true, remision: actualizada };
 }
 
 // ── Facturas (DataICO o borrador local si no hay credenciales) ──────────────
@@ -212,7 +292,9 @@ export async function procesarPagoConfirmado(db: DB, reservaId: number) {
   await generarCotizacion(db, reservaId, false); // por si la reserva es de antes de este módulo
   const factura = await emitirFactura(db, reservaId);
   const liquidacion = generarLiquidacion(db, reservaId);
-  const remision = generarRemision(db, reservaId); // remisión a nombre del dueño del vehículo
+  const yaExistiaRemision = !!db.prepare('SELECT id FROM remisiones WHERE reserva_id = ?').get(reservaId);
+  const remision = generarRemision(db, reservaId); // remisión a nombre del dueño del vehículo = cuenta de cobro
+  if (remision && !yaExistiaRemision) notificarNuevaCuentaCobro(db, remision as RemisionRow);
   return { factura, liquidacion, remision };
 }
 

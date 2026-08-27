@@ -89,10 +89,25 @@ CREATE TABLE IF NOT EXISTS remisiones (
   comision_pct          REAL DEFAULT 0,
   comision_valor        REAL DEFAULT 0,
   neto                  REAL DEFAULT 0,
+  -- Firma electrónica simple del propietario sobre la cuenta de cobro: '' = sin firmar.
+  -- Es requisito previo al pago (no un recibo posterior) — ver lib/contabilidad.ts → firmarCuentaCobro.
+  firmada_en              TEXT DEFAULT '',
+  firma_ip                TEXT DEFAULT '',
+  firma_user_agent        TEXT DEFAULT '',
+  firma_imagen            TEXT DEFAULT '',
+  firma_nombre_confirmado TEXT DEFAULT '',
+  firma_hash              TEXT DEFAULT '',
   created_at            TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
 );
 -- Nota: liquidaciones necesita además la columna comprobante_url:
 --   ALTER TABLE liquidaciones ADD COLUMN IF NOT EXISTS comprobante_url TEXT DEFAULT '';
+-- Nota: si la tabla remisiones ya existía antes de este cambio, agregar las columnas de firma:
+--   ALTER TABLE remisiones ADD COLUMN IF NOT EXISTS firmada_en TEXT DEFAULT '';
+--   ALTER TABLE remisiones ADD COLUMN IF NOT EXISTS firma_ip TEXT DEFAULT '';
+--   ALTER TABLE remisiones ADD COLUMN IF NOT EXISTS firma_user_agent TEXT DEFAULT '';
+--   ALTER TABLE remisiones ADD COLUMN IF NOT EXISTS firma_imagen TEXT DEFAULT '';
+--   ALTER TABLE remisiones ADD COLUMN IF NOT EXISTS firma_nombre_confirmado TEXT DEFAULT '';
+--   ALTER TABLE remisiones ADD COLUMN IF NOT EXISTS firma_hash TEXT DEFAULT '';
 
 -- ─────────────── auditoría (bitácora: quién hizo qué y a qué hora) ───────────────
 -- El nivel de admin va en usuarios.admin_nivel ('principal' | 'socio' | 'secretaria').

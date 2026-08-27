@@ -11,9 +11,11 @@ import CalendarioDisponibilidad from '@/components/CalendarioDisponibilidad';
 import DisponibilidadReglas from '@/components/DisponibilidadReglas';
 import ReferidosCard from '@/components/ReferidosCard';
 import CalendarioReservas, { type ReservaCalendario } from '@/components/CalendarioReservas';
-import { IconCar, IconCalendar, IconChat, IconCheck, IconArrowL } from '@/components/Icons';
+import { IconCar, IconCalendar, IconChat, IconCheck, IconArrowL, IconExport } from '@/components/Icons';
 import { TIPO_VEHICULO_LABELS, type TipoVehiculo } from '@/lib/rentabilidad';
 import { precioMercadoSugerido, segmentoValido } from '@/lib/precioMercado';
+import FirmaCanvas from '@/components/FirmaCanvas';
+import { descargarCuentaCobroPDF } from '@/lib/contabilidad-pdf';
 
 // Opciones de categoría (mismas 6 que la calculadora de mercado) para el selector.
 const CATEGORIAS = Object.entries(TIPO_VEHICULO_LABELS) as [TipoVehiculo, string][];
@@ -51,6 +53,13 @@ type Fotos = {
   cojineria: string; baul: string; tablero: string;
 };
 type NotifRaw = { id: number; tipo: string; titulo: string; mensaje: string; leida: number };
+type CuentaCobro = {
+  id: number; numero: string; propietario_nombre: string; propietario_documento: string;
+  vehiculo_descripcion: string; placa: string;
+  fecha_inicio: string; fecha_fin: string; dias: number;
+  bruto: number; comision_pct: number; comision_valor: number; neto: number;
+  firmada_en: string; firma_ip: string; firma_imagen: string; firma_nombre_confirmado: string; created_at: string;
+};
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const FOTOS_VACIAS: Fotos = {
@@ -112,7 +121,7 @@ export default function DashboardPropietario() {
   const [reservas, setReservas] = useState<Reserva[]>([]);
   const [loadingReservas, setLoadingReservas] = useState(false);
   const [errorReservas, setErrorReservas] = useState('');
-  const [tab, setTab] = useState<'vehiculos' | 'reservas' | 'nuevo' | 'perfil' | 'editar'>('vehiculos');
+  const [tab, setTab] = useState<'vehiculos' | 'reservas' | 'cuentas_cobro' | 'nuevo' | 'perfil' | 'editar'>('vehiculos');
 
   // Nuevo vehículo
   const [form, setForm] = useState(FORM_INICIAL);
@@ -143,6 +152,17 @@ export default function DashboardPropietario() {
   });
   const [perfilMsg, setPerfilMsg] = useState('');
   const [guardandoPerfil, setGuardandoPerfil] = useState(false);
+
+  // Cuentas de cobro (remisiones a firmar)
+  const [cuentasPendientes, setCuentasPendientes] = useState<CuentaCobro[]>([]);
+  const [cuentasFirmadas, setCuentasFirmadas] = useState<CuentaCobro[]>([]);
+  const [empresaCuentaCobro, setEmpresaCuentaCobro] = useState({ nombre: 'DrivePass', nit: '' });
+  const [cargandoCuentas, setCargandoCuentas] = useState(false);
+  const [errorCuentas, setErrorCuentas] = useState('');
+  const [firmaImagenPorId, setFirmaImagenPorId] = useState<Record<number, string>>({});
+  const [nombreConfirmadoPorId, setNombreConfirmadoPorId] = useState<Record<number, string>>({});
+  const [firmandoId, setFirmandoId] = useState<number | null>(null);
+  const [cuentaMsg, setCuentaMsg] = useState('');
 
   // Popups
   const [popupCompleto, setPopupCompleto] = useState<string | null>(null); // vehicle name
@@ -178,6 +198,53 @@ export default function DashboardPropietario() {
     setLoadingReservas(false);
   };
 
+  const cargarCuentasCobro = async () => {
+    setCargandoCuentas(true);
+    setErrorCuentas('');
+    try {
+      const res = await fetch('/api/propietario/cuentas-cobro', { cache: 'no-store' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setErrorCuentas((err as { error?: string }).error || `Error ${res.status}`);
+        setCargandoCuentas(false);
+        return;
+      }
+      const data = await res.json();
+      setCuentasPendientes(data.pendientes || []);
+      setCuentasFirmadas(data.firmadas || []);
+      if (data.empresa) setEmpresaCuentaCobro(data.empresa);
+    } catch {
+      setErrorCuentas('Error de red al cargar tus cuentas de cobro.');
+    }
+    setCargandoCuentas(false);
+  };
+
+  const firmarCuenta = async (remisionId: number) => {
+    const nombreConfirmado = (nombreConfirmadoPorId[remisionId] || '').trim();
+    const firmaImagen = firmaImagenPorId[remisionId] || '';
+    if (!nombreConfirmado || !firmaImagen) return;
+
+    setFirmandoId(remisionId);
+    setCuentaMsg('');
+    try {
+      const res = await fetch('/api/propietario/cuentas-cobro', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ remision_id: remisionId, firma_imagen: firmaImagen, nombre_confirmado: nombreConfirmado }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setCuentaMsg('✓ Firmaste la cuenta de cobro. DrivePass ya puede procesar tu pago.');
+        cargarCuentasCobro();
+      } else {
+        setCuentaMsg((d as { error?: string }).error || 'No se pudo registrar la firma.');
+      }
+    } catch {
+      setCuentaMsg('Sin conexión al registrar la firma.');
+    } finally {
+      setFirmandoId(null);
+    }
+  };
+
   // ── Mount: load user + check notification popups ─────────────────────────
   useEffect(() => {
     fetch('/api/auth/me').then(r => r.json()).then(d => {
@@ -196,6 +263,7 @@ export default function DashboardPropietario() {
       });
       cargarVehiculos(d.user.id);
       cargarReservas();
+      cargarCuentasCobro(); // para el contador de pendientes en la pestaña, aunque no se abra
     }).catch(() => router.push('/login'));
 
     // Notification popups: check for unread doc / payment notifications
@@ -223,6 +291,7 @@ export default function DashboardPropietario() {
 
   useEffect(() => {
     if (tab === 'reservas') cargarReservas();
+    if (tab === 'cuentas_cobro') cargarCuentasCobro();
   }, [tab]);
 
   // ── Quick edits ────────────────────────────────────────────────────────────
@@ -396,6 +465,7 @@ export default function DashboardPropietario() {
   const TABS = [
     { key: 'vehiculos', label: `Mis vehículos (${vehiculos.length})` },
     { key: 'reservas',  label: loadingReservas ? 'Reservas…' : `Reservas (${reservas.length})` },
+    { key: 'cuentas_cobro', label: cuentasPendientes.length > 0 ? `Cuentas de cobro (${cuentasPendientes.length})` : 'Cuentas de cobro' },
     { key: 'nuevo',     label: '+ Publicar vehículo' },
     { key: 'perfil',    label: 'Mi perfil' },
   ] as const;
@@ -685,6 +755,145 @@ export default function DashboardPropietario() {
                         </div>
                       </div>
                     ))}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── CUENTAS DE COBRO (firma electrónica previa al pago) ──────────────── */}
+      {tab === 'cuentas_cobro' && (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-ink/50">
+              Firma tu cuenta de cobro para autorizar a DrivePass a transferirte el neto de cada alquiler.
+            </p>
+            <button onClick={cargarCuentasCobro} disabled={cargandoCuentas}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 border border-accent/30 text-accent rounded-xl hover:bg-accent-light transition disabled:opacity-50 font-medium">
+              <IconCalendar size={12} /> {cargandoCuentas ? 'Cargando…' : 'Actualizar'}
+            </button>
+          </div>
+
+          {errorCuentas && (
+            <div className="bg-danger/10 border border-danger/25 text-danger text-sm px-4 py-3 rounded-xl flex items-center justify-between gap-3">
+              <span>{errorCuentas}</span>
+              <button onClick={cargarCuentasCobro} className="font-semibold hover:text-danger">Reintentar</button>
+            </div>
+          )}
+
+          {cuentaMsg && (
+            <div className={`text-sm px-4 py-2.5 rounded-xl border ${cuentaMsg.startsWith('✓') ? 'bg-success/10 text-success border-success/30' : 'bg-danger/10 text-danger border-danger/25'}`}>
+              {cuentaMsg}
+            </div>
+          )}
+
+          {cargandoCuentas ? (
+            <div className="space-y-3">{[1, 2].map(i => <div key={i} className="bg-surface-2 rounded-2xl border border-border h-40 animate-pulse" />)}</div>
+          ) : !errorCuentas && (
+            <>
+              <div>
+                <h3 className="font-bold text-ink text-sm mb-3">Pendientes de firma</h3>
+                {cuentasPendientes.length === 0 ? (
+                  <div className="text-center py-14 bg-surface-2 rounded-2xl border border-border">
+                    <p className="text-3xl mb-2">✅</p>
+                    <p className="text-ink/50 font-medium">No tienes cuentas de cobro pendientes de firma.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {cuentasPendientes.map(c => {
+                      const dias = c.dias; // congelado en la remisión al momento de generarla — no se recalcula
+                      const listoParaFirmar = !!firmaImagenPorId[c.id] && !!(nombreConfirmadoPorId[c.id] || '').trim();
+                      const firmando = firmandoId === c.id;
+                      return (
+                        <div key={c.id} className="bg-surface-2 rounded-2xl border border-border p-5 space-y-4">
+                          <div className="flex items-start justify-between flex-wrap gap-3">
+                            <div>
+                              <p className="font-bold text-ink text-base">{c.vehiculo_descripcion}{c.placa ? ` · ${c.placa}` : ''}</p>
+                              <p className="text-xs text-ink/50">{c.fecha_inicio} → {c.fecha_fin} ({dias} día{dias !== 1 ? 's' : ''}) · Cuenta {c.numero}</p>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-xs text-ink/50 mb-0.5">Neto a recibir</p>
+                              <p className="text-xl font-black text-success">{copCorto(c.neto)}</p>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-3 gap-2 text-center bg-surface rounded-xl border border-border p-3">
+                            <div>
+                              <p className="text-[10px] text-ink/40 uppercase tracking-wide">Bruto</p>
+                              <p className="text-sm font-bold text-ink">{copCorto(c.bruto)}</p>
+                            </div>
+                            <div>
+                              <p className="text-[10px] text-ink/40 uppercase tracking-wide">Comisión ({(c.comision_pct * 100).toFixed(0)}%)</p>
+                              <p className="text-sm font-bold text-ink">- {copCorto(c.comision_valor)}</p>
+                            </div>
+                            <div>
+                              <p className="text-[10px] text-ink/40 uppercase tracking-wide">Neto</p>
+                              <p className="text-sm font-bold text-success">{copCorto(c.neto)}</p>
+                            </div>
+                          </div>
+
+                          <p className="text-sm text-ink/70 bg-accent-light border border-accent/20 rounded-xl px-3.5 py-2.5">
+                            Al firmar, autorizas a DrivePass a transferirte {copCorto(c.neto)} por el alquiler de tu {c.vehiculo_descripcion} del {c.fecha_inicio} al {c.fecha_fin}, ya descontada la comisión de administración del {(c.comision_pct * 100).toFixed(0)}%.
+                          </p>
+
+                          <div>
+                            <label className="text-xs font-medium text-ink/60 block mb-1">Tu firma</label>
+                            <FirmaCanvas
+                              disabled={firmando}
+                              onChange={dataUrl => setFirmaImagenPorId(prev => ({ ...prev, [c.id]: dataUrl }))}
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-xs font-medium text-ink/60 block mb-1">Confirma tu nombre completo</label>
+                            <input
+                              value={nombreConfirmadoPorId[c.id] || ''}
+                              onChange={e => setNombreConfirmadoPorId(prev => ({ ...prev, [c.id]: e.target.value }))}
+                              disabled={firmando}
+                              placeholder="Nombre y apellidos"
+                              className="w-full border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40 disabled:opacity-60"
+                            />
+                          </div>
+
+                          <button onClick={() => firmarCuenta(c.id)} disabled={!listoParaFirmar || firmando}
+                            className="w-full flex items-center justify-center gap-2 bg-success hover:bg-success/80 text-white text-sm font-bold px-4 py-2.5 rounded-xl transition disabled:opacity-50">
+                            <IconCheck size={14} /> {firmando ? 'Firmando…' : 'Firmar y autorizar el pago'}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <h3 className="font-bold text-ink text-sm mb-3">Firmadas</h3>
+                {cuentasFirmadas.length === 0 ? (
+                  <div className="text-center py-10 bg-surface-2 rounded-2xl border border-border">
+                    <p className="text-ink/40 text-sm">Todavía no has firmado ninguna cuenta de cobro.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {cuentasFirmadas.map(c => {
+                      return (
+                        <div key={c.id} className="flex items-center justify-between gap-3 bg-surface-2 rounded-xl px-4 py-3 border border-border flex-wrap">
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-ink truncate">{c.vehiculo_descripcion}{c.placa ? ` · ${c.placa}` : ''}</p>
+                            <p className="text-xs text-ink/50">{c.fecha_inicio} → {c.fecha_fin} · Cuenta {c.numero}</p>
+                            <p className="text-[11px] text-success/80">✓ Firmada el {c.firmada_en.slice(0, 16).replace('T', ' ')}</p>
+                          </div>
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            <span className="text-sm font-bold text-ink">{copCorto(c.neto)}</span>
+                            <button onClick={() => descargarCuentaCobroPDF(empresaCuentaCobro, c)}
+                              className="text-xs border border-border text-ink/70 px-2.5 py-1.5 rounded-xl hover:bg-surface transition font-medium flex items-center gap-1">
+                              <IconExport size={12} /> PDF
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>

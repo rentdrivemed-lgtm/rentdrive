@@ -329,6 +329,14 @@ function initDb(db: Database.Database) {
       comision_pct REAL DEFAULT 0,
       comision_valor REAL DEFAULT 0,
       neto REAL DEFAULT 0,
+      -- Firma electrónica simple del propietario (cuenta de cobro): '' = sin firmar.
+      -- Es la autorización previa al pago, no un recibo posterior (ver lib/contabilidad.ts → firmarCuentaCobro).
+      firmada_en TEXT DEFAULT '',
+      firma_ip TEXT DEFAULT '',
+      firma_user_agent TEXT DEFAULT '',
+      firma_imagen TEXT DEFAULT '',
+      firma_nombre_confirmado TEXT DEFAULT '',
+      firma_hash TEXT DEFAULT '',
       created_at TEXT DEFAULT (datetime('now', 'localtime'))
     );
 
@@ -444,6 +452,13 @@ function initDb(db: Database.Database) {
   `);
 
   try { db.exec("ALTER TABLE liquidaciones ADD COLUMN comprobante_url TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  // Firma electrónica simple de la cuenta de cobro (remisión) — requisito previo al pago.
+  try { db.exec("ALTER TABLE remisiones ADD COLUMN firmada_en TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE remisiones ADD COLUMN firma_ip TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE remisiones ADD COLUMN firma_user_agent TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE remisiones ADD COLUMN firma_imagen TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE remisiones ADD COLUMN firma_nombre_confirmado TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE remisiones ADD COLUMN firma_hash TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE gastos ADD COLUMN pagos TEXT DEFAULT '[]'"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE gastos ADD COLUMN abonado REAL DEFAULT 0"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE gastos ADD COLUMN comprobante_pago_url TEXT DEFAULT ''"); } catch { /* ya existe */ }
