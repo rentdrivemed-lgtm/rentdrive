@@ -1,4 +1,6 @@
+import sharp from 'sharp';
 import { getAnthropic } from './anthropic';
+import { normalizarOrientacion } from './blur-placas';
 
 export type ResultadoRegla = 'pasa' | 'falla' | 'no_aplica';
 export type Veredicto    = 'aprobado' | 'rechazado' | 'revision';
@@ -38,14 +40,121 @@ export type ContextoVerificacion = {
 
 type MediaType = 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif' | 'application/pdf';
 
+// Máximo tamaño por imagen que acepta la API de Anthropic (10 MB en base64,
+// ver docs de visión). Lo comprobamos nosotros para dar un error claro por
+// documento en vez de dejar que la llamada completa reviente.
+const MAX_BASE64_BYTES = 10 * 1024 * 1024;
+
+type ImgMediaType = 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
+
+const FORMATO_A_MEDIA_TYPE: Partial<Record<string, ImgMediaType>> = {
+  jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif',
+};
+
+/**
+ * Descarga un documento y lo deja listo para mandarlo a Claude, validando los
+ * bytes REALES con `sharp` en vez de confiar ciegamente en el `content-type`
+ * que reporte el CDN (Cloudinary). Esto es clave porque el error
+ * `400 "Could not process image"` de la API de Anthropic ocurre justamente
+ * cuando el `media_type` declarado no coincide con los bytes, o cuando el
+ * archivo está corrupto/truncado — si eso pasa acá, se lanza un error que el
+ * llamador (`verificarDocumentos`) captura POR DOCUMENTO, así que un solo
+ * archivo dañado no tumba la verificación completa de los demás.
+ *
+ * De paso, aplica `normalizarOrientacion` (misma función que usa la subida de
+ * fotos) como defensa adicional para documentos que se subieron ANTES del fix
+ * de orientación EXIF y siguen rotados en Cloudinary.
+ */
 async function fetchAsBase64(url: string): Promise<{ data: string; mediaType: MediaType }> {
   const resp = await fetch(url, { signal: AbortSignal.timeout(20000) });
   if (!resp.ok) throw new Error(`No se pudo descargar ${url}: ${resp.status}`);
   const buf = Buffer.from(await resp.arrayBuffer());
-  const ct = (resp.headers.get('content-type') || 'image/jpeg').split(';')[0].trim();
-  const allowed: MediaType[] = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf'];
-  const mediaType: MediaType = allowed.includes(ct as MediaType) ? (ct as MediaType) : 'image/jpeg';
-  return { data: buf.toString('base64'), mediaType };
+  const ct = (resp.headers.get('content-type') || '').split(';')[0].trim();
+
+  const esPdf = ct === 'application/pdf' || (!ct && url.toLowerCase().split('?')[0].endsWith('.pdf'));
+  if (esPdf) {
+    if (buf.subarray(0, 5).toString('ascii') !== '%PDF-') {
+      throw new Error('El archivo se declara como PDF pero no tiene una cabecera PDF válida (posible descarga corrupta)');
+    }
+    const dataPdf = buf.toString('base64');
+    if (dataPdf.length > MAX_BASE64_BYTES) {
+      throw new Error(`El PDF pesa demasiado para procesarlo (${(buf.length / 1024 / 1024).toFixed(1)} MB)`);
+    }
+    return { data: dataPdf, mediaType: 'application/pdf' };
+  }
+
+  const img = sharp(buf);
+  const meta = await img.metadata().catch((e: unknown) => {
+    throw new Error(`No se pudo leer la imagen — archivo corrupto o formato no reconocido (${e instanceof Error ? e.message : String(e)})`);
+  });
+  // `metadata()` solo lee la cabecera (dimensiones/formato) y NO detecta un
+  // archivo truncado a mitad de los datos de píxeles — justo el caso real
+  // (subida interrumpida / bug de recorte viejo) que produce el 400 "Could
+  // not process image" de Anthropic. `stats()` fuerza una decodificación
+  // completa y es más barata que re-codificar todo a JPEG.
+  await img.stats().catch((e: unknown) => {
+    const msg = e instanceof Error ? e.message : String(e);
+    // No todos los fallos de `stats()` son un archivo dañado: si este build
+    // de sharp/libvips no trae el códec (típico con HEIC/HEVC en algunos
+    // entornos), el mensaje lo delata y no es culpa del archivo del usuario.
+    if (/unsupported image format|error while loading plugin|no decoder for this format|heif.*not supported/i.test(msg)) {
+      throw new Error(`Este formato de imagen no está soportado por el servidor, aunque el archivo no esté dañado (${msg})`);
+    }
+    throw new Error(`La imagen está dañada o incompleta, no se puede decodificar por completo (${msg})`);
+  });
+
+  const w = meta.width ?? 0;
+  const h = meta.height ?? 0;
+  if (w < 10 || h < 10) {
+    throw new Error(`La imagen tiene dimensiones inválidas (${w}x${h}px) — probablemente esté corrupta o truncada`);
+  }
+
+  const mediaTypeReal = meta.format ? FORMATO_A_MEDIA_TYPE[meta.format] : undefined;
+
+  let bufferFinal: Buffer = buf;
+  if (mediaTypeReal && mediaTypeReal !== 'image/gif') {
+    // normalizarOrientacion solo re-codifica si de verdad hay una rotación
+    // EXIF pendiente; si no, devuelve el buffer original intacto.
+    bufferFinal = await normalizarOrientacion(buf, mediaTypeReal);
+  }
+
+  if (mediaTypeReal) {
+    const dataImg = bufferFinal.toString('base64');
+    if (dataImg.length > MAX_BASE64_BYTES) {
+      throw new Error(`La imagen pesa demasiado para procesarla (${(bufferFinal.length / 1024 / 1024).toFixed(1)} MB)`);
+    }
+    return { data: dataImg, mediaType: mediaTypeReal };
+  }
+
+  // Formato que Claude no acepta directamente (heic, tiff, bmp, ...): en vez
+  // de perder el documento completo, lo recodificamos a JPEG con sharp.
+  try {
+    const jpegBuf = await sharp(buf).rotate().jpeg({ quality: 92 }).toBuffer();
+    const dataJpeg = jpegBuf.toString('base64');
+    if (dataJpeg.length > MAX_BASE64_BYTES) {
+      throw new Error(`La imagen pesa demasiado para procesarla (${(jpegBuf.length / 1024 / 1024).toFixed(1)} MB)`);
+    }
+    return { data: dataJpeg, mediaType: 'image/jpeg' };
+  } catch (e) {
+    throw new Error(`Formato de imagen no soportado (${meta.format ?? 'desconocido'}) y no se pudo convertir: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+/** Duck-typing en vez de `instanceof Anthropic.APIError`: nos basta con la
+ * forma del error (más robusto ante posibles duplicados del módulo del SDK
+ * en distintos bundles, y no ata este código a una clase concreta del SDK).
+ *
+ * Antes filtrábamos por `/image|imagen/i` en el mensaje, pero los PDFs se
+ * mandan como bloque `document`, no `image`, así que un rechazo de un PDF
+ * corrupto usa otro vocabulario ("document", "pdf", etc.) y no entraba a
+ * este fallback — tumbando el batch completo con un 502 crudo, el mismo bug
+ * que este fallback existe para prevenir. Cualquier 400 de la API en esta
+ * llamada (que solo envía texto + imágenes/documentos) es, en la práctica,
+ * un rechazo del contenido visual, así que basta con el status.*/
+function esErrorDeImagenAnthropic(e: unknown): boolean {
+  if (!e || typeof e !== 'object') return false;
+  const err = e as { status?: unknown };
+  return err.status === 400;
 }
 
 const DATOS_VACIOS: DatosExtraidos = {
@@ -159,14 +268,42 @@ Cruces entre documentos (si hay más de uno):
 
 Usa "revision" cuando algo es legible pero no puedes confirmar con certeza.
 Usa "rechazado" solo cuando hay un problema claro (vencido, datos no coinciden, documento falso/manipulado).
-Usa confianza "alta" solo cuando puedes leer claramente los datos y todo cuadra.`,
+Usa confianza "alta" solo cuando puedes leer claramente los datos y todo cuadra.
+Si en vez de una imagen o documento ves un texto "[Error al cargar: ...]" para alguno de los documentos, significa que no se pudo procesar ese archivo: para ese documento en particular, devuelve "es_legible": false y "veredicto": "revision", con el motivo indicando que el archivo no se pudo cargar.`,
   });
 
-  const resp = await anthropic.messages.create({
-    model: 'claude-opus-4-8',
-    max_tokens: 4000,
-    messages: [{ role: 'user', content: content as Parameters<typeof anthropic.messages.create>[0]['messages'][0]['content'] }],
-  });
+  type AnthropicContent = Parameters<typeof anthropic.messages.create>[0]['messages'][0]['content'];
+
+  let resp;
+  try {
+    resp = await anthropic.messages.create({
+      model: 'claude-opus-4-8',
+      max_tokens: 4000,
+      messages: [{ role: 'user', content: content as AnthropicContent }],
+    });
+  } catch (e) {
+    // Defensa adicional: la validación de arriba (sharp) descarta la gran
+    // mayoría de imágenes corruptas/truncadas ANTES de llegar aquí, pero si
+    // la API igual rechaza el lote completo por un problema de imagen que no
+    // detectamos localmente, reintentamos UNA vez sin ningún bloque
+    // image/document (solo texto) para no tumbar con un 502 crudo la
+    // verificación de los documentos que sí eran válidos — Claude no podrá
+    // leer ninguna imagen en este reintento, pero al menos deja un veredicto
+    // "revisión" explicando qué pasó en vez de reventar toda la respuesta.
+    const hayBloquesVisuales = content.some(b => b.type !== 'text');
+    if (!esErrorDeImagenAnthropic(e) || !hayBloquesVisuales) throw e;
+
+    const contentSoloTexto = content.filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text');
+    contentSoloTexto.push({
+      type: 'text',
+      text: '\n[Aviso del sistema: la API de IA rechazó procesar las imágenes/documentos de este lote. No pudiste ver ninguna imagen en este intento — marca TODOS los documentos anteriores con "es_legible": false, "veredicto": "revision" y "motivo": "No se pudo procesar la imagen con la IA; vuelve a subir el documento e intenta de nuevo."]',
+    });
+    resp = await anthropic.messages.create({
+      model: 'claude-opus-4-8',
+      max_tokens: 4000,
+      messages: [{ role: 'user', content: contentSoloTexto as AnthropicContent }],
+    });
+  }
 
   const text = resp.content[0].type === 'text' ? resp.content[0].text.trim() : '';
 

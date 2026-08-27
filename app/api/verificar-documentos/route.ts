@@ -15,6 +15,27 @@ const VEH_DOCS: [string, string][] = [
   ['todo_riesgo', 'Seguro todo riesgo'],
 ];
 
+// El SDK de Anthropic arma el mensaje de error como "<status> <json crudo>"
+// (p. ej. `400 {"type":"error","error":{"type":"invalid_request_error",
+// "message":"Could not process image"},"request_id":"..."}`) — mostrar eso
+// tal cual en la UI es una mala experiencia. Extraemos solo el mensaje
+// interno y, para el caso reportado, damos una explicación accionable.
+function mensajeAmigable(e: unknown): string {
+  const raw = e instanceof Error ? e.message : 'Error en la verificación';
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (match) {
+    try {
+      const parsed = JSON.parse(match[0]) as { error?: { message?: string } };
+      const interno = parsed?.error?.message;
+      if (interno === 'Could not process image') {
+        return 'Uno de los documentos no se pudo procesar (imagen dañada o formato no compatible). Vuelve a subir ese documento e intenta de nuevo.';
+      }
+      if (interno) return interno;
+    } catch { /* no era JSON válido, se usa el mensaje crudo abajo */ }
+  }
+  return raw;
+}
+
 function computeEstado(docs: Record<string, { url?: string } | undefined>, revs: Record<string, { estado?: string }>): string {
   const subidos = VEH_DOCS.map(([k]) => k).filter(k => docs[k]?.url);
   if (subidos.length === 0) return 'sin_documentos';
@@ -127,7 +148,6 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ error: 'Indica vehiculo_id o reserva_id.' }, { status: 400 });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Error en la verificación';
-    return NextResponse.json({ error: `Falló la verificación con IA: ${msg}` }, { status: 502 });
+    return NextResponse.json({ error: `Falló la verificación con IA: ${mensajeAmigable(e)}` }, { status: 502 });
   }
 }
