@@ -73,10 +73,14 @@ export async function detectarYDifuminarPlaca(
   let deteccion: PlacaDeteccion = { plate_visible: false };
 
   let text = '';
+  let stopReason: string | null | undefined;
   try {
     const resp = await client.messages.create({
       model: 'claude-opus-4-8',
-      max_tokens: 256,
+      // Se pide razonar en prosa antes del JSON final (ver prompt más abajo),
+      // así que dejamos margen extra sobre el mínimo previo (1024) para que
+      // ese razonamiento no trunque la respuesta antes de cerrar el JSON.
+      max_tokens: 2048,
       messages: [{
         role: 'user',
         content: [
@@ -86,30 +90,72 @@ export async function detectarYDifuminarPlaca(
           },
           {
             type: 'text',
-            text: `Detect vehicle license plates in this photo. Return ONLY valid JSON, no markdown:
+            text: `You are inspecting a photo of a car (this is one photo out of a set: front, back, sides, interior) to find and locate its license plate (Colombian plate, e.g. "KZR957" — yellow background with black bold characters for private cars).
+
+IMPORTANT: search actively for the plate at ANY angle the photo happens to show — do NOT assume the car is facing front. Colombian plates can appear:
+- On the FRONT of the car, usually mounted below the grille/logo, above or on the front bumper.
+- On the BACK of the car, usually mounted above or below the tail lights, on the trunk/bumper area.
+- At a 3/4 or side angle, partially foreshortened, smaller, or at a slant — still look for it.
+- Sometimes partially obscured, reflective, small in the frame, or off-center — still try to find it if any part of it is legible or even just visible.
+
+Think step by step first (reason briefly about which side of the car is shown and where the plate would be), THEN respond with ONLY valid JSON, no markdown, as the very last part of your answer:
 {"plate_visible":boolean,"region":{"x_pct":number,"y_pct":number,"w_pct":number,"h_pct":number}}
 Rules:
-- x_pct, y_pct = top-left corner of the plate as % of image width/height (0–100)
-- w_pct, h_pct = plate size as % of image width/height
-- If no plate is visible, set plate_visible to false and omit region
-- Be generous with the bounding box (add ~10% padding around the plate)`,
+- x_pct, y_pct = top-left corner of the plate bounding box, as % of image width/height (0–100)
+- w_pct, h_pct = plate bounding box size, as % of image width/height
+- If genuinely no plate is visible anywhere in the photo (e.g. interior shot, extreme close-up of a body panel), set plate_visible to false and omit region
+- If a plate IS visible, be generous with the bounding box: add at least ~15% padding around the plate on every side, since the box will be blurred and any sliver left outside it will remain readable
+- Do not skip the back of the car just because it's not the "obvious" angle — the plate is just as often on the back as on the front`,
           },
         ],
       }],
     });
 
     text = resp.content[0].type === 'text' ? resp.content[0].text.trim() : '';
+    stopReason = resp.stop_reason;
   } catch (err) {
     console.error('[blur-placas] Error llamando a la API de Anthropic — se sube la foto sin difuminar la placa:', err);
     return { buffer, difuminada: false };
   }
 
   try {
-    const match = text.match(/\{[\s\S]*\}/);
-    if (match) deteccion = JSON.parse(match[0]) as PlacaDeteccion;
-    else console.warn('[blur-placas] Respuesta de Claude sin JSON reconocible — se sube la foto sin difuminar la placa. Respuesta:', text.slice(0, 300));
+    // El modelo puede razonar en prosa antes del JSON final (se le pidió pensar
+    // primero). El prompt es explícito en que el JSON final es la ÚLTIMA parte
+    // de la respuesta, así que anclamos en la ÚLTIMA ocurrencia de la clave
+    // "plate_visible" (no la primera): si el razonamiento incluye un JSON de
+    // borrador descartado antes de la corrección final, la primera ocurrencia
+    // apuntaría a ese borrador con coordenadas equivocadas. Balanceamos llaves
+    // desde ahí hacia adelante en vez de un simple "primer { … último }" (que se
+    // rompería si el razonamiento previo contuviera alguna llave suelta).
+    // TODO: el balanceo de llaves no es JSON-aware (no ignora llaves dentro de
+    // strings); no bloqueante hoy porque la respuesta es JSON simple sin texto
+    // libre embebido en los valores, pero podría revisarse a futuro.
+    const claveIdx = text.lastIndexOf('"plate_visible"');
+    let jsonStr: string | null = null;
+    if (claveIdx !== -1) {
+      const inicio = text.lastIndexOf('{', claveIdx);
+      if (inicio !== -1) {
+        let profundidad = 0;
+        for (let i = inicio; i < text.length; i++) {
+          if (text[i] === '{') profundidad++;
+          else if (text[i] === '}') {
+            profundidad--;
+            if (profundidad === 0) { jsonStr = text.slice(inicio, i + 1); break; }
+          }
+        }
+      }
+    }
+    if (!jsonStr) {
+      const match = text.match(/\{[\s\S]*\}/);
+      jsonStr = match ? match[0] : null;
+    }
+    if (jsonStr) {
+      deteccion = JSON.parse(jsonStr) as PlacaDeteccion;
+    } else {
+      console.warn('[blur-placas] Respuesta de Claude sin JSON reconocible — se sube la foto sin difuminar la placa. stop_reason:', stopReason, 'Respuesta:', text.slice(0, 300));
+    }
   } catch (err) {
-    console.error('[blur-placas] JSON inválido en la respuesta de Claude — se sube la foto sin difuminar la placa:', err, 'Respuesta:', text.slice(0, 300));
+    console.error('[blur-placas] JSON inválido en la respuesta de Claude — se sube la foto sin difuminar la placa:', err, 'stop_reason:', stopReason, 'Respuesta:', text.slice(0, 300));
     return { buffer, difuminada: false };
   }
 
@@ -126,10 +172,12 @@ Rules:
   const r = deteccion.region;
   // Margen extra (además del que ya se le pide a Claude) para tolerar
   // bounding boxes ligeramente desalineados y no dejar un borde de placa
-  // visible sin difuminar: expandimos la caja un 2% del ancho/alto de la
+  // visible sin difuminar: expandimos la caja un 8% del ancho/alto de la
   // imagen hacia cada lado y luego recortamos contra los bordes reales.
-  const padX = Math.round(imgW * 0.02);
-  const padY = Math.round(imgH * 0.02);
+  // (Antes era 2%: en fotos en ángulo — 3/4, laterales — el bounding box de
+  // Claude es menos preciso y dejaba tiras de placa nítida fuera del recorte.)
+  const padX = Math.round(imgW * 0.08);
+  const padY = Math.round(imgH * 0.08);
 
   const boxLeft = (r.x_pct / 100) * imgW;
   const boxTop  = (r.y_pct / 100) * imgH;
@@ -143,12 +191,35 @@ Rules:
   const width  = Math.min(imgW - left, Math.max(20, right - left));
   const height = Math.min(imgH - top,  Math.max(10, bottom - top));
 
-  // Extraer región de la placa → pixelar fuertemente → componer de vuelta
-  const placaRegion = await sharp(buffer)
+  // Extraer región de la placa → pixelar MUY fuerte → blur adicional → tapar
+  // con un rectángulo negro semi-opaco encima → componer de vuelta.
+  //
+  // El pipeline anterior (reducir 6x + blur(8)) dejaba caracteres grandes y en
+  // negrita (típicos de una placa colombiana) todavía legibles, según reportó
+  // el usuario dos veces con fotos reales. Ahora se combinan tres capas de
+  // seguridad redundantes para garantizar que quede ilegible sin importar el
+  // tamaño/contraste de los caracteres o la precisión del bounding box:
+  //   1. Pixelado mucho más agresivo (reducir 16x en vez de 6x) → los "pixeles"
+  //      resultantes son grandes y la forma de los caracteres se pierde del todo.
+  //   2. Blur adicional mucho más fuerte (25 en vez de 8) sobre el resultado
+  //      pixelado, para difuminar también los bordes duros del pixelado.
+  //   3. Un rectángulo negro sólido al 90% de opacidad compuesto ENCIMA de las
+  //      dos capas anteriores: aunque el pixelado/blur fallaran, esta capa por
+  //      sí sola garantiza que la región quede ilegible.
+  const factorReduccion = 16;
+  const placaPixelada = await sharp(buffer)
     .extract({ left, top, width, height })
-    .resize(Math.max(1, Math.floor(width / 6)), Math.max(1, Math.floor(height / 6))) // reducir 6x
-    .resize(width, height, { kernel: 'nearest' })                                     // ampliar sin suavizado
-    .blur(8)                                                                           // blur adicional
+    .resize(Math.max(1, Math.floor(width / factorReduccion)), Math.max(1, Math.floor(height / factorReduccion)))
+    .resize(width, height, { kernel: 'nearest' })
+    .blur(25)
+    .toBuffer();
+
+  const overlayNegro = await sharp({
+    create: { width, height, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0.9 } },
+  }).png().toBuffer();
+
+  const placaRegion = await sharp(placaPixelada)
+    .composite([{ input: overlayNegro, left: 0, top: 0 }])
     .toBuffer();
 
   const resultado = await sharp(buffer)
