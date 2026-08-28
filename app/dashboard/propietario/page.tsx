@@ -39,6 +39,7 @@ type Vehiculo = {
   ubicacion?: string; descripcion?: string;
   documentos?: string; documentos_estado?: string;
   documentos_nota?: string; documentos_revisiones?: string;
+  contenido_revision?: number;
 };
 type Reserva = ReservaCalendario & { usuario_id: number };
 type User = {
@@ -720,6 +721,12 @@ export default function DashboardPropietario() {
                   </div>
                   {/* Status badges */}
                   <div className="flex gap-2 flex-wrap items-center">
+                    {!!v.contenido_revision && (
+                      <span title="Una de las fotos fue marcada por nuestro sistema y está pendiente de revisión manual del equipo. No se publicará hasta que la aprobemos."
+                        className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-danger/15 text-danger border border-danger/25">
+                        🔞 Foto en revisión
+                      </span>
+                    )}
                     {docsEstado === 'en_revision' && (
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-warning/15 text-warning border border-warning/25">⏳ En revisión</span>
                     )}

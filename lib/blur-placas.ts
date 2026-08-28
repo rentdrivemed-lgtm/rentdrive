@@ -6,6 +6,8 @@ const client = new Anthropic();
 type PlacaDeteccion = {
   plate_visible: boolean;
   region?: { x_pct: number; y_pct: number; w_pct: number; h_pct: number };
+  inappropriate_content: boolean;
+  inappropriate_reason?: string;
 };
 
 /**
@@ -51,10 +53,30 @@ export async function normalizarOrientacion(
   }
 }
 
+export type ResultadoDeteccion = {
+  buffer: Buffer;
+  difuminada: boolean;
+  /** true si la IA marcó la foto como contenido sexual/explícito claramente inapropiado. */
+  contenidoInapropiado: boolean;
+  motivoInapropiado?: string;
+  /**
+   * false si, por CUALQUIER motivo (sin API key, error de red/API, o respuesta sin JSON
+   * válido), la IA NO llegó a evaluar el contenido de esta foto — en ese caso
+   * `contenidoInapropiado` queda en `false` en el valor que devuelve ESTA función (para no
+   * inventar un resultado de moderación que nunca se produjo), pero eso NO es lo mismo que
+   * "la IA revisó la foto y la encontró apropiada". Esta misma función ya deja rastro
+   * distintivo en el log en cada uno de esos casos (ver los `console.error(...
+   * [MODERACION-NO-EVALUADA]...)` más abajo). El call site (app/api/upload/route.ts) debe
+   * leer este campo y tratarlo FAIL-CLOSED — igual que si `contenidoInapropiado` fuera
+   * `true` (a revisión manual) — en vez de fail-open (aprobada en silencio).
+   */
+  moderacionEvaluada: boolean;
+};
+
 export async function detectarYDifuminarPlaca(
   bufferOriginal: Buffer,
   mediaType: 'image/jpeg' | 'image/png' | 'image/webp' = 'image/jpeg'
-): Promise<{ buffer: Buffer; difuminada: boolean }> {
+): Promise<ResultadoDeteccion> {
   // Corregir orientación EXIF primero: tanto la imagen que ve Claude como la
   // región que recortamos/componemos deben trabajar sobre los mismos píxeles
   // "derechos", si no el % de región que calcula Claude (sobre la imagen ya
@@ -62,15 +84,15 @@ export async function detectarYDifuminarPlaca(
   const buffer = await normalizarOrientacion(bufferOriginal, mediaType);
 
   if (!process.env.ANTHROPIC_API_KEY) {
-    console.warn('[blur-placas] ANTHROPIC_API_KEY no configurada — se sube la foto sin difuminar la placa');
-    return { buffer, difuminada: false };
+    console.error('[blur-placas][MODERACION-NO-EVALUADA] ANTHROPIC_API_KEY no configurada — foto subida SIN evaluar contenido ni difuminar placa (fail-open: se trata como apropiada por defecto)');
+    return { buffer, difuminada: false, contenidoInapropiado: false, moderacionEvaluada: false };
   }
 
   // Normalizar a JPEG para base64 (menor tamaño)
   const jpegBuf = await sharp(buffer).jpeg({ quality: 85 }).toBuffer();
   const base64 = jpegBuf.toString('base64');
 
-  let deteccion: PlacaDeteccion = { plate_visible: false };
+  let deteccion: PlacaDeteccion = { plate_visible: false, inappropriate_content: false };
 
   let text = '';
   let stopReason: string | null | undefined;
@@ -98,14 +120,18 @@ IMPORTANT: search actively for the plate at ANY angle the photo happens to show 
 - At a 3/4 or side angle, partially foreshortened, smaller, or at a slant — still look for it.
 - Sometimes partially obscured, reflective, small in the frame, or off-center — still try to find it if any part of it is legible or even just visible.
 
-Think step by step first (reason briefly about which side of the car is shown and where the plate would be), THEN respond with ONLY valid JSON, no markdown, as the very last part of your answer:
-{"plate_visible":boolean,"region":{"x_pct":number,"y_pct":number,"w_pct":number,"h_pct":number}}
+SEPARATELY, also check the photo for content moderation: this platform is a car rental marketplace (DrivePass, Medellín) and photos here are supposed to be regular photos of a car (exterior, interior, engine bay, etc.), sometimes with a person standing near/in the car (owner showing off the car, a normal selfie with the vehicle, someone sitting in the driver's seat, etc. — all of that is completely normal and fine). Only flag it as inappropriate if the photo clearly, unambiguously shows sexual or explicit content that has no place on a car rental listing — e.g. nudity, sexually explicit poses/acts, or pornographic material. Be conservative: a normal photo of a person (clothed, in any normal pose) near/in/around the car is NEVER inappropriate, even if they're not the main subject. When in doubt, do NOT flag it — false positives here are costly (they block a legitimate car listing), so only flag content that is obviously, unambiguously explicit.
+
+Think step by step first (reason briefly about which side of the car is shown and where the plate would be, and separately whether the content is appropriate), THEN respond with ONLY valid JSON, no markdown, as the very last part of your answer:
+{"plate_visible":boolean,"region":{"x_pct":number,"y_pct":number,"w_pct":number,"h_pct":number},"inappropriate_content":boolean,"inappropriate_reason":string}
 Rules:
 - x_pct, y_pct = top-left corner of the plate bounding box, as % of image width/height (0–100)
 - w_pct, h_pct = plate bounding box size, as % of image width/height
 - If genuinely no plate is visible anywhere in the photo (e.g. interior shot, extreme close-up of a body panel), set plate_visible to false and omit region
 - If a plate IS visible, be generous with the bounding box: add at least ~15% padding around the plate on every side, since the box will be blurred and any sliver left outside it will remain readable
-- Do not skip the back of the car just because it's not the "obvious" angle — the plate is just as often on the back as on the front`,
+- Do not skip the back of the car just because it's not the "obvious" angle — the plate is just as often on the back as on the front
+- inappropriate_content: true ONLY for clearly explicit/sexual content as described above; false for every normal car/interior/person photo (this should be false the vast majority of the time)
+- inappropriate_reason: a short (one sentence) explanation ONLY if inappropriate_content is true; omit or leave empty otherwise`,
           },
         ],
       }],
@@ -114,8 +140,8 @@ Rules:
     text = resp.content[0].type === 'text' ? resp.content[0].text.trim() : '';
     stopReason = resp.stop_reason;
   } catch (err) {
-    console.error('[blur-placas] Error llamando a la API de Anthropic — se sube la foto sin difuminar la placa:', err);
-    return { buffer, difuminada: false };
+    console.error('[blur-placas][MODERACION-NO-EVALUADA] Error llamando a la API de Anthropic — foto subida SIN evaluar contenido ni difuminar placa (fail-open: se trata como apropiada por defecto):', err);
+    return { buffer, difuminada: false, contenidoInapropiado: false, moderacionEvaluada: false };
   }
 
   try {
@@ -152,16 +178,31 @@ Rules:
     if (jsonStr) {
       deteccion = JSON.parse(jsonStr) as PlacaDeteccion;
     } else {
-      console.warn('[blur-placas] Respuesta de Claude sin JSON reconocible — se sube la foto sin difuminar la placa. stop_reason:', stopReason, 'Respuesta:', text.slice(0, 300));
+      // Sin JSON reconocible: no se pudo leer NI la placa NI la moderación de esta
+      // respuesta — tratamos ambas como no evaluadas (fail-open), y lo marcamos
+      // distintivo porque, a diferencia del resto de los warn de este módulo, este
+      // caso específicamente deja la foto sin evaluación real de contenido.
+      console.error('[blur-placas][MODERACION-NO-EVALUADA] Respuesta de Claude sin JSON reconocible — foto subida SIN evaluar contenido ni difuminar placa (fail-open: se trata como apropiada por defecto). stop_reason:', stopReason, 'Respuesta:', text.slice(0, 300));
+      return { buffer, difuminada: false, contenidoInapropiado: false, moderacionEvaluada: false };
     }
   } catch (err) {
-    console.error('[blur-placas] JSON inválido en la respuesta de Claude — se sube la foto sin difuminar la placa:', err, 'stop_reason:', stopReason, 'Respuesta:', text.slice(0, 300));
-    return { buffer, difuminada: false };
+    console.error('[blur-placas][MODERACION-NO-EVALUADA] JSON inválido en la respuesta de Claude — foto subida SIN evaluar contenido ni difuminar placa (fail-open: se trata como apropiada por defecto):', err, 'stop_reason:', stopReason, 'Respuesta:', text.slice(0, 300));
+    return { buffer, difuminada: false, contenidoInapropiado: false, moderacionEvaluada: false };
+  }
+
+  // El chequeo de contenido inapropiado es independiente del de la placa: aplica
+  // sin importar si se encontró o no una placa visible en la foto. Si llegamos hasta
+  // acá, la IA sí devolvió un JSON válido con `inappropriate_content`, así que la
+  // moderación SÍ se evaluó de verdad (a diferencia de los casos fail-open de arriba).
+  const contenidoInapropiado = deteccion.inappropriate_content === true;
+  const motivoInapropiado = contenidoInapropiado ? (deteccion.inappropriate_reason || 'Contenido marcado como inapropiado por la IA') : undefined;
+  if (contenidoInapropiado) {
+    console.warn('[blur-placas] Foto marcada por la IA como contenido inapropiado:', motivoInapropiado);
   }
 
   if (!deteccion.plate_visible || !deteccion.region) {
     console.warn('[blur-placas] Claude no detectó una placa visible en la foto (plate_visible=false)');
-    return { buffer, difuminada: false };
+    return { buffer, difuminada: false, contenidoInapropiado, motivoInapropiado, moderacionEvaluada: true };
   }
 
   // Obtener dimensiones (ya con orientación normalizada, igual que lo que vio Claude)
@@ -227,5 +268,5 @@ Rules:
     .jpeg({ quality: 90 })
     .toBuffer();
 
-  return { buffer: resultado, difuminada: true };
+  return { buffer: resultado, difuminada: true, contenidoInapropiado, motivoInapropiado, moderacionEvaluada: true };
 }

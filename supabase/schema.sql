@@ -249,6 +249,36 @@ CREATE TABLE IF NOT EXISTS tablero_elementos (
   updated_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
 );
 
+-- ─────────────── moderación de contenido (fotos de vehículo) — modelo ALLOW-LIST ───────────────
+-- Registro server-side de TODA foto subida por POST /api/upload (no solo las marcadas),
+-- con el resultado de moderación de la IA (misma llamada que detecta la placa) y quién
+-- la subió. POST/PUT vehiculos exige que cada URL NUEVA en fotos/fotos_detalle tenga un
+-- registro aquí perteneciente al usuario autenticado — así se rechaza cualquier URL que
+-- nunca haya pasado por /api/upload (externa inventada) o que pertenezca a otro usuario,
+-- sin depender de ningún flag que el cliente pudiera omitir. `url_normalizada` es la
+-- clave real de cruce (minúsculas/sin query/sin trailing slash — ver normalizarUrlFoto
+-- en lib/moderacion.ts) para que el chequeo no sea evadible con variaciones triviales.
+CREATE TABLE IF NOT EXISTS fotos_moderacion (
+  id                    SERIAL PRIMARY KEY,
+  url                   TEXT UNIQUE NOT NULL,
+  url_normalizada       TEXT DEFAULT '',
+  usuario_id            INTEGER REFERENCES usuarios(id),
+  contenido_inapropiado INTEGER DEFAULT 0,
+  motivo                TEXT DEFAULT '',
+  created_at            TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+);
+-- Nota: `vehiculos.contenido_revision` (INTEGER/boolean, default 0) y
+-- `vehiculos.contenido_revision_motivo` (TEXT, default '') son columnas nuevas de
+-- esta misma feature (moderación de contenido) que pertenecen a la tabla `vehiculos`.
+-- ⚠️ IMPORTANTE: a la fecha de este cambio, `vehiculos` YA NO tiene su CREATE TABLE en
+-- este archivo (falta desde antes de esta tarea — no es un problema introducido aquí;
+-- muchas otras columnas de `vehiculos` usadas por el código real, como `placa`,
+-- `documentos`, `documentos_estado`, `en_vitrina`, `valor_comercial`, `precio_manual`,
+-- `archivado`, tampoco están documentadas en este schema.sql). Si en algún momento se
+-- reconstruye el CREATE TABLE vehiculos para Supabase, agregar ahí también:
+--   ALTER TABLE vehiculos ADD COLUMN IF NOT EXISTS contenido_revision INTEGER DEFAULT 0;
+--   ALTER TABLE vehiculos ADD COLUMN IF NOT EXISTS contenido_revision_motivo TEXT DEFAULT '';
+
 -- Tarjetas de presentación virtual (NFC) — una por creador/embajador (y a
 -- futuro, por cliente). El HTML autocontenido vive en el volumen persistente
 -- y se sirve tal cual en /tarjeta/<slug> para el tag físico.

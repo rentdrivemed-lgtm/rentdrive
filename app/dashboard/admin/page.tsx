@@ -43,6 +43,7 @@ type Vehiculo = {
   fotos: string; fotos_detalle: string; placa?: string; documentos?: string;
   documentos_estado?: string; documentos_nota?: string; documentos_revisiones?: string;
   en_vitrina?: number; archivado?: number;
+  contenido_revision?: number; contenido_revision_motivo?: string;
 };
 
 const rolColor: Record<string, string> = {
@@ -294,6 +295,10 @@ export default function DashboardAdmin() {
   const [verArchivadosUsuarios, setVerArchivadosUsuarios] = useState(false);
   const [verArchivadosVehiculos, setVerArchivadosVehiculos] = useState(false);
   const [vehiculosArchivados, setVehiculosArchivados] = useState<Vehiculo[]>([]);
+  // ── Moderación de contenido: vehículos con fotos marcadas por la IA, pendientes de revisión manual ──
+  const [verRevisionContenido, setVerRevisionContenido] = useState(false);
+  const [vehiculosRevisionContenido, setVehiculosRevisionContenido] = useState<Vehiculo[]>([]);
+  const [aprobandoContenido, setAprobandoContenido] = useState<number | null>(null);
   const [eliminandoUsuario, setEliminandoUsuario] = useState<number | null>(null);
   const [eliminandoVehiculo, setEliminandoVehiculo] = useState<number | null>(null);
   const [resetPass, setResetPass] = useState<{ uid: number; nueva: string; confirmar: string; guardando: boolean; ok: string } | null>(null);
@@ -334,6 +339,13 @@ export default function DashboardAdmin() {
     cargarUsuarios();
     cargarVehiculos();
     cargarReservas();
+    // Carga silenciosa solo para el contador del badge (ver botón "🔞 Ver en revisión de
+    // contenido" en la pestaña Vehículos) — inline en vez de llamar a la función declarada
+    // más abajo en el componente, para no arrastrar otro caso del error preexistente de lint
+    // react-hooks/immutability que ya tienen cargarUsuarios/cargarVehiculos/cargarReservas
+    // (ver AGENTS.md/PROYECTO.md — no bloqueante hoy, pero no hace falta sumarle uno más).
+    // Si el 403 llega por falta de permiso del área "vehiculos" simplemente no se muestra.
+    fetch('/api/vehiculos?revisionContenido=1').then(r => r.json()).then(d => setVehiculosRevisionContenido(d.vehiculos || [])).catch(() => {});
     fetch('/api/config').then(r => r.json()).then(d => setPicoPlaca(parsePicoPlaca(d.config?.pico_placa || ''))).catch(() => {});
   }, [router]);
 
@@ -632,7 +644,7 @@ export default function DashboardAdmin() {
   const alternarVerArchivadosVehiculos = () => {
     const nuevo = !verArchivadosVehiculos;
     setVerArchivadosVehiculos(nuevo);
-    if (nuevo) cargarVehiculosArchivados();
+    if (nuevo) { setVerRevisionContenido(false); cargarVehiculosArchivados(); }
   };
 
   // Eliminar vehículo (borrado inteligente, ver lib/eliminar.ts): el servidor decide solo
@@ -673,6 +685,36 @@ export default function DashboardAdmin() {
       cargarVehiculos();
     } else {
       alert('No se pudo desarchivar el vehículo.');
+    }
+  };
+
+  // ── Moderación de contenido (fotos marcadas por la IA, ver lib/moderacion.ts) ──
+  const cargarVehiculosRevisionContenido = () =>
+    fetch('/api/vehiculos?revisionContenido=1').then(r => r.json()).then(d => setVehiculosRevisionContenido(d.vehiculos || [])).catch(() => {});
+
+  const alternarVerRevisionContenido = () => {
+    const nuevo = !verRevisionContenido;
+    setVerRevisionContenido(nuevo);
+    if (nuevo) { setVerArchivadosVehiculos(false); cargarVehiculosRevisionContenido(); }
+  };
+
+  const aprobarContenidoVehiculo = async (v: Vehiculo) => {
+    if (!window.confirm(`¿Confirmas que revisaste las fotos de ${v.marca} ${v.modelo} ${v.anio} y NO tienen contenido inapropiado? Quedará publicado de nuevo.`)) return;
+    setAprobandoContenido(v.id);
+    try {
+      const res = await fetch(`/api/vehiculos/${v.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contenido_revision: 0, contenido_revision_motivo: '' }),
+      });
+      if (res.ok) {
+        setVehiculosRevisionContenido(vs => vs.filter(x => x.id !== v.id));
+        cargarVehiculos();
+      } else {
+        alert('No se pudo aprobar el vehículo.');
+      }
+    } finally {
+      setAprobandoContenido(null);
     }
   };
 
@@ -1114,13 +1156,58 @@ export default function DashboardAdmin() {
 
       {/* ── VEHÍCULOS ── */}
       {tab === 'vehiculos' && (
-        <div className="flex items-center justify-end mb-3">
+        <div className="flex items-center justify-end gap-2 mb-3">
+          {vehiculosRevisionContenido.length > 0 && !verRevisionContenido && (
+            <span className="text-[10px] font-bold px-2 py-1 rounded-full bg-danger/15 text-danger border border-danger/25">
+              {vehiculosRevisionContenido.length} en revisión de contenido
+            </span>
+          )}
+          <button onClick={alternarVerRevisionContenido}
+            className={`text-xs px-3 py-1.5 rounded-xl border transition font-medium ${
+              verRevisionContenido ? 'border-danger bg-danger text-white' : 'border-border text-ink/60 hover:bg-surface'
+            }`}>
+            {verRevisionContenido ? '← Ver vehículos activos' : '🔞 Ver en revisión de contenido'}
+          </button>
           <button onClick={alternarVerArchivadosVehiculos}
             className={`text-xs px-3 py-1.5 rounded-xl border transition font-medium ${
               verArchivadosVehiculos ? 'border-accent bg-accent text-white' : 'border-border text-ink/60 hover:bg-surface'
             }`}>
             {verArchivadosVehiculos ? '← Ver vehículos activos' : '🗄️ Ver archivados'}
           </button>
+        </div>
+      )}
+      {tab === 'vehiculos' && verRevisionContenido && (
+        <div className="space-y-3">
+          {vehiculosRevisionContenido.length === 0 && (
+            <div className="text-center py-14 bg-surface-2 rounded-2xl border border-border">
+              <IconCar size={48} className="text-ink/20 mx-auto mb-3" />
+              <p className="text-ink/50">No hay vehículos en revisión de contenido.</p>
+            </div>
+          )}
+          {vehiculosRevisionContenido.map(v => {
+            let portada = '';
+            try { portada = (JSON.parse(v.fotos) as string[])[0] || ''; } catch { portada = ''; }
+            return (
+              <div key={v.id} className="bg-surface-2 rounded-2xl shadow-sm p-4 border border-danger/30 ring-1 ring-danger/20 flex gap-4 items-center flex-wrap">
+                {portada && <img src={portada} alt={v.marca} className="w-20 h-14 object-cover rounded-xl flex-shrink-0" />}
+                <div className="flex-1 min-w-0">
+                  <p className="font-bold text-ink">{v.marca} {v.modelo} {v.anio}</p>
+                  <p className="text-sm text-ink/50 mt-0.5">Propietario: {v.propietario_nombre} {v.placa && `· Placa: ${v.placa}`}</p>
+                  <p className="text-xs text-danger mt-1">🔞 {v.contenido_revision_motivo || 'La IA marcó al menos una foto como contenido inapropiado.'}</p>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <button onClick={() => setFotoModal({ v })}
+                    className="flex items-center gap-1 text-xs border border-accent/30 text-accent px-2.5 py-1.5 rounded-xl hover:bg-accent-light transition font-medium">
+                    Ver fotos
+                  </button>
+                  <button onClick={() => aprobarContenidoVehiculo(v)} disabled={aprobandoContenido === v.id}
+                    className="flex items-center gap-1 text-xs border border-success/30 text-success px-2.5 py-1.5 rounded-xl hover:bg-success/10 transition font-medium disabled:opacity-50">
+                    {aprobandoContenido === v.id ? 'Aprobando…' : '✓ Aprobar y publicar'}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
       {tab === 'vehiculos' && verArchivadosVehiculos && (
@@ -1150,7 +1237,7 @@ export default function DashboardAdmin() {
           })}
         </div>
       )}
-      {tab === 'vehiculos' && !verArchivadosVehiculos && (
+      {tab === 'vehiculos' && !verArchivadosVehiculos && !verRevisionContenido && (
         <div className="space-y-3">
           {errorListas.vehiculos ? (
             <div className="text-center py-14 bg-danger/5 rounded-2xl border border-danger/25">

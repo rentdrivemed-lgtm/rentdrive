@@ -8,7 +8,6 @@ type Props = {
   value: string;
   onChange: (url: string) => void;
   required?: boolean;
-  blurPlaca?: boolean;
 };
 
 /**
@@ -29,26 +28,34 @@ async function rotarImagenUrl(url: string): Promise<Blob> {
   return recortarImagen(url, { x: 0, y: 0, width, height }, 90);
 }
 
-export default function FotoUpload({ label, value, onChange, required, blurPlaca = true }: Props) {
+export default function FotoUpload({ label, value, onChange, required }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [subiendo, setSubiendo] = useState(false);
   const [rotando, setRotando] = useState(false);
   const [error, setError] = useState('');
   const [difuminada, setDifuminada] = useState(false);
+  const [sospechoso, setSospechoso] = useState(false);
 
   const subirArchivo = async (fileOrBlob: File | Blob, filename: string) => {
     const fd = new FormData();
     fd.append('file', fileOrBlob, filename);
-    if (blurPlaca) fd.append('blurPlaca', '1');
+    // La detección de placa y la moderación de contenido ya NO dependen de ningún campo
+    // que mande el cliente — /api/upload las ejecuta siempre para toda imagen (ver el
+    // fix de seguridad documentado ahí y en lib/moderacion.ts).
     let res: Response;
     try {
       res = await fetch('/api/upload', { method: 'POST', body: fd });
     } catch {
       throw new Error('Sin conexión — revisa tu internet e intenta de nuevo.');
     }
-    const data = await res.json().catch(() => ({})) as { url?: string; error?: string; difuminada?: boolean };
+    const data = await res.json().catch(() => ({})) as { url?: string; error?: string; difuminada?: boolean; contenidoSospechoso?: boolean };
     if (!res.ok || !data.url) throw new Error(data.error || 'Error al subir');
     if (data.difuminada) setDifuminada(true);
+    // Aviso solo informativo: el vehículo queda en revisión de verdad server-side (ver
+    // POST/PUT /api/vehiculos, que cruza la URL contra lo que marcó /api/upload) — este
+    // banner no bloquea nada por sí mismo, solo avisa de inmediato para que el propietario
+    // no se sorprenda si su publicación no aparece pública hasta que el equipo la revise.
+    setSospechoso(!!data.contenidoSospechoso);
     onChange(data.url);
   };
 
@@ -58,6 +65,7 @@ export default function FotoUpload({ label, value, onChange, required, blurPlaca
     setError('');
     setSubiendo(true);
     setDifuminada(false);
+    setSospechoso(false);
 
     try {
       await subirArchivo(file, file.name);
@@ -136,6 +144,11 @@ export default function FotoUpload({ label, value, onChange, required, blurPlaca
         )}
       </div>
       {error && <p className="text-[11px] text-danger">{error}</p>}
+      {sospechoso && (
+        <p className="text-[11px] text-danger">
+          🔞 Esta foto quedó marcada para revisión manual de nuestro equipo — tu publicación no se hará visible al público hasta que la aprobemos.
+        </p>
+      )}
       <input
         ref={inputRef}
         type="file"
