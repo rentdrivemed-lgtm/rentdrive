@@ -128,7 +128,7 @@ Rules:
 - x_pct, y_pct = top-left corner of the plate bounding box, as % of image width/height (0–100)
 - w_pct, h_pct = plate bounding box size, as % of image width/height
 - If genuinely no plate is visible anywhere in the photo (e.g. interior shot, extreme close-up of a body panel), set plate_visible to false and omit region
-- If a plate IS visible, be generous with the bounding box: add at least ~15% padding around the plate on every side, since the box will be blurred and any sliver left outside it will remain readable
+- If a plate IS visible, return a TIGHT bounding box around the plate's actual edges, with only a small ~5% padding on every side to account for imprecision in your own estimate — do NOT return a box much larger than the plate itself (e.g. do not include large parts of the bumper/grille around it). The code that consumes this region adds its own additional safety margin afterward, so your box should track the plate closely, not be generous
 - Do not skip the back of the car just because it's not the "obvious" angle — the plate is just as often on the back as on the front
 - inappropriate_content: true ONLY for clearly explicit/sexual content as described above; false for every normal car/interior/person photo (this should be false the vast majority of the time)
 - inappropriate_reason: a short (one sentence) explanation ONLY if inappropriate_content is true; omit or leave empty otherwise`,
@@ -211,19 +211,26 @@ Rules:
   const imgH = meta.height ?? 1;
 
   const r = deteccion.region;
-  // Margen extra (además del que ya se le pide a Claude) para tolerar
-  // bounding boxes ligeramente desalineados y no dejar un borde de placa
-  // visible sin difuminar: expandimos la caja un 8% del ancho/alto de la
-  // imagen hacia cada lado y luego recortamos contra los bordes reales.
-  // (Antes era 2%: en fotos en ángulo — 3/4, laterales — el bounding box de
-  // Claude es menos preciso y dejaba tiras de placa nítida fuera del recorte.)
-  const padX = Math.round(imgW * 0.08);
-  const padY = Math.round(imgH * 0.08);
-
   const boxLeft = (r.x_pct / 100) * imgW;
   const boxTop  = (r.y_pct / 100) * imgH;
   const boxW    = (r.w_pct / 100) * imgW;
   const boxH    = (r.h_pct / 100) * imgH;
+
+  // Margen extra (además del pequeño ~5% que ya se le pide a Claude) para tolerar
+  // bounding boxes ligeramente desalineados y no dejar un borde de placa visible sin
+  // cubrir: expandimos la caja un 10% del ANCHO/ALTO DE LA PLACA DETECTADA (boxW/boxH),
+  // no de la imagen completa. Antes esto era `imgW * 0.08` / `imgH * 0.08` — un 8% del
+  // tamaño TOTAL de la foto, que en una imagen de ~1200px de ancho agrega ~96px de
+  // margen por lado a una placa que puede medir solo 150-250px de ancho: el rectángulo
+  // final terminaba siendo 2-3x más grande que la placa real y tapaba buena parte del
+  // paragolpes (bug reportado por el usuario con foto real). Además ese margen del
+  // código se sumaba al ~15% de padding que el prompt ya le pedía a Claude sobre la
+  // región devuelta — dos márgenes generosos que se componían. Ahora solo uno de los
+  // dos es generoso (el del código, proporcional a la placa) y el otro (el del prompt)
+  // se bajó a ~5%, solo para tolerar imprecisión del propio estimado de Claude.
+  // `Math.max(4, ...)` evita un margen ridículamente chico en cajas casi de 0px.
+  const padX = Math.max(4, Math.round(boxW * 0.10));
+  const padY = Math.max(4, Math.round(boxH * 0.10));
 
   const left   = Math.max(0, Math.floor(boxLeft - padX));
   const top    = Math.max(0, Math.floor(boxTop - padY));
@@ -232,35 +239,36 @@ Rules:
   const width  = Math.min(imgW - left, Math.max(20, right - left));
   const height = Math.min(imgH - top,  Math.max(10, bottom - top));
 
-  // Extraer región de la placa → pixelar MUY fuerte → blur adicional → tapar
-  // con un rectángulo negro semi-opaco encima → componer de vuelta.
+  // Tapar la región de la placa con un rectángulo AMARILLO SÓLIDO (con un borde
+  // negro delgado), imitando el fondo real de una placa colombiana de vehículo
+  // particular — así el resultado se ve como una placa genérica tapada a
+  // propósito (intencional), no como un agujero negro que parece un bug.
   //
-  // El pipeline anterior (reducir 6x + blur(8)) dejaba caracteres grandes y en
-  // negrita (típicos de una placa colombiana) todavía legibles, según reportó
-  // el usuario dos veces con fotos reales. Ahora se combinan tres capas de
-  // seguridad redundantes para garantizar que quede ilegible sin importar el
-  // tamaño/contraste de los caracteres o la precisión del bounding box:
-  //   1. Pixelado mucho más agresivo (reducir 16x en vez de 6x) → los "pixeles"
-  //      resultantes son grandes y la forma de los caracteres se pierde del todo.
-  //   2. Blur adicional mucho más fuerte (25 en vez de 8) sobre el resultado
-  //      pixelado, para difuminar también los bordes duros del pixelado.
-  //   3. Un rectángulo negro sólido al 90% de opacidad compuesto ENCIMA de las
-  //      dos capas anteriores: aunque el pixelado/blur fallaran, esta capa por
-  //      sí sola garantiza que la región quede ilegible.
-  const factorReduccion = 16;
-  const placaPixelada = await sharp(buffer)
-    .extract({ left, top, width, height })
-    .resize(Math.max(1, Math.floor(width / factorReduccion)), Math.max(1, Math.floor(height / factorReduccion)))
-    .resize(width, height, { kernel: 'nearest' })
-    .blur(25)
-    .toBuffer();
+  // El pipeline anterior pixelaba fuerte + blur y ENCIMA componía un rectángulo
+  // negro al 90% de opacidad. Con relleno 100% opaco (sin canal alfa parcial) los
+  // píxeles originales quedan completamente reemplazados sin importar su
+  // contraste/tamaño de fuente — no hace falta pixelado/blur por debajo como capa
+  // de respaldo, así que se simplificó a solo el rectángulo sólido: el resultado
+  // es idéntico en garantía de ilegibilidad y más limpio/intencional visualmente,
+  // y además evita el costo de las dos operaciones de resize+blur por foto.
+  const AMARILLO_PLACA = { r: 244, g: 196, b: 0, alpha: 1 };
+  const BORDE_NEGRO = { r: 0, g: 0, b: 0, alpha: 1 };
+  // Borde ~6% del lado más chico del rectángulo (con un piso de 2px) para que se
+  // note como un borde de placa incluso en cajas pequeñas, sin comerse el relleno.
+  const borde = Math.max(2, Math.round(Math.min(width, height) * 0.06));
+  const anchoRelleno = Math.max(1, width - borde * 2);
+  const altoRelleno = Math.max(1, height - borde * 2);
 
-  const overlayNegro = await sharp({
-    create: { width, height, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0.9 } },
+  const fondoConBorde = await sharp({
+    create: { width, height, channels: 4, background: BORDE_NEGRO },
   }).png().toBuffer();
 
-  const placaRegion = await sharp(placaPixelada)
-    .composite([{ input: overlayNegro, left: 0, top: 0 }])
+  const relleno = await sharp({
+    create: { width: anchoRelleno, height: altoRelleno, channels: 4, background: AMARILLO_PLACA },
+  }).png().toBuffer();
+
+  const placaRegion = await sharp(fondoConBorde)
+    .composite([{ input: relleno, left: borde, top: borde }])
     .toBuffer();
 
   const resultado = await sharp(buffer)

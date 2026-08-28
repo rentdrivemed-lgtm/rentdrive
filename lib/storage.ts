@@ -20,7 +20,7 @@ export type UploadResult = { url: string; path: string };
 // genera Cloudinary — no hace falta un sistema de tokens firmados para esto.
 const CLOUDINARY_HOST = 'https://res.cloudinary.com/';
 
-function esUrlDeStorageValida(url: unknown): boolean {
+export function esUrlDeStorageValida(url: unknown): boolean {
   if (typeof url !== 'string' || !url) return false;
   const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
   // Falla CERRADO si falta la env var: sin `cloudName` no hay forma de restringir el
