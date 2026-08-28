@@ -773,14 +773,19 @@ function migrarUsuariosEstadoArchivada(db: Database.Database) {
 }
 
 // Activa la config de pico y placa (Medellín, particulares) con la rotación vigente del
-// 3 de agosto al 31 de diciembre de 2026. SOLO siembra si la clave 'pico_placa' está vacía/
-// sin configurar todavía, para no pisar un ajuste que Victor ya haya hecho a mano desde el
-// panel admin (PicoPlacaConfig / PUT /api/config). Idempotente: en arranques siguientes,
-// como la clave ya tiene valor, esta función es un no-op.
+// 3 de agosto al 31 de diciembre de 2026. Solo siembra si la config actual NO es una
+// rotación completa y activa (no cubre los 5 días hábiles, o está desactivada) — para no
+// pisar un ajuste real que Victor haya hecho a mano desde el panel admin (PicoPlacaConfig
+// / PUT /api/config), pero sí corregir valores vacíos, incompletos o de prueba (ej. un
+// solo día configurado, `activo:false`) que no representan una restricción real vigente.
+// Idempotente en la práctica: una vez la config queda completa y activa (a mano o por esta
+// misma migración), deja de tocarla en arranques siguientes.
 function migrarPicoPlacaActivar(db: Database.Database) {
   try {
     const row = db.prepare('SELECT valor FROM config WHERE clave = ?').get('pico_placa') as { valor: string } | undefined;
-    if (row && row.valor && row.valor.trim() !== '') return; // ya configurado (a mano o por esta migración antes)
+    const actual = parsePicoPlacaSeguro(row?.valor);
+    const diasCompletos = ['1', '2', '3', '4', '5'].every(d => Array.isArray(actual?.dias?.[d]) && actual.dias[d].length > 0);
+    if (actual?.activo && diasCompletos) return; // ya hay una rotación real y completa activa — no tocar
 
     const valor = JSON.stringify({
       activo: true,
@@ -792,4 +797,9 @@ function migrarPicoPlacaActivar(db: Database.Database) {
   } catch (e) {
     console.error('[db] Migración pico_placa activar falló:', e instanceof Error ? e.message : e);
   }
+}
+
+function parsePicoPlacaSeguro(valor: string | undefined): { activo?: boolean; dias?: Record<string, number[]> } | null {
+  if (!valor || valor.trim() === '') return null;
+  try { return JSON.parse(valor); } catch { return null; }
 }
