@@ -39,12 +39,23 @@ type Props = {
 export default function GoogleAuthButton({ rol, codigoReferido, onSuccess, onError }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   // El callback de Google se registra una sola vez (al inicializar), así que leemos
-  // el rol/código de referido vigentes desde un ref en vez de re-inicializar el
-  // botón cada vez que cambian.
+  // el rol/código de referido/onSuccess/onError vigentes desde refs en vez de
+  // re-inicializar el botón cada vez que cambian. Esto es clave para `onSuccess`/
+  // `onError`: quien usa este componente casi siempre pasa funciones inline (una
+  // identidad nueva en cada render del padre). Si `handleCredential` dependiera de
+  // esas props directamente, cambiaría de identidad en cada tecla que el usuario
+  // escriba en CUALQUIER campo del formulario (el padre re-renderiza completo), lo
+  // que dispara de nuevo el efecto de abajo y hace que el SDK de Google destruya y
+  // vuelva a pintar el botón (`innerHTML = ''` + `renderButton`) en cada pulsación
+  // — el parpadeo/cambio de forma que se veía en /registro.
   const rolRef = useRef(rol);
   useEffect(() => { rolRef.current = rol; }, [rol]);
   const codigoReferidoRef = useRef(codigoReferido);
   useEffect(() => { codigoReferidoRef.current = codigoReferido; }, [codigoReferido]);
+  const onSuccessRef = useRef(onSuccess);
+  useEffect(() => { onSuccessRef.current = onSuccess; }, [onSuccess]);
+  const onErrorRef = useRef(onError);
+  useEffect(() => { onErrorRef.current = onError; }, [onError]);
 
   const handleCredential = useCallback(async (response: { credential: string }) => {
     try {
@@ -58,12 +69,12 @@ export default function GoogleAuthButton({ rol, codigoReferido, onSuccess, onErr
         }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) { onError(data.error || 'No pudimos iniciar sesión con Google.'); return; }
-      onSuccess(data.user);
+      if (!res.ok) { onErrorRef.current(data.error || 'No pudimos iniciar sesión con Google.'); return; }
+      onSuccessRef.current(data.user);
     } catch {
-      onError('Sin conexión — revisa tu internet e intenta de nuevo.');
+      onErrorRef.current('Sin conexión — revisa tu internet e intenta de nuevo.');
     }
-  }, [onSuccess, onError]);
+  }, []);
 
   const initGoogle = useCallback(() => {
     if (!GOOGLE_CLIENT_ID || !window.google || !containerRef.current) return;

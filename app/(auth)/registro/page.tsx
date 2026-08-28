@@ -84,6 +84,19 @@ function RegistroForm() {
   const searchParams = useSearchParams();
   const { setUser, refetch } = useSession();
 
+  // El aviso de error vive donde ya estaba (cerca del título del paso), pero con el
+  // formulario largo el botón de submit queda abajo del scroll y el error pasa
+  // desapercibido. En vez de mover el aviso lejos del flujo natural de lectura,
+  // cuando aparece un error lo llevamos a la vista y le damos foco (accesible con
+  // lectores de pantalla) para que sea imposible no verlo, venga de donde venga.
+  const errorRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (error) {
+      errorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      errorRef.current?.focus({ preventScroll: true });
+    }
+  }, [error]);
+
   const [cuenta, setCuenta] = useState({
     nombre: '', correo: '', password: '', confirmar: '',
   });
@@ -274,8 +287,11 @@ function RegistroForm() {
   // Un campo que vino de la foto se resalta y se etiqueta: la persona tiene que
   // poder ver de un vistazo qué escribió la IA para revisarlo antes de enviar.
   const clsCampo = (campo: CampoIA) => `${inputCls} ${camposIA.has(campo) ? 'border-accent/50 bg-accent-light/40' : ''}`;
+  // En su propia línea (no "inline-flex" pegada al texto de la etiqueta): así nunca
+  // queda a mitad de una palabra ni deja el campo pegado al texto que envuelve — el
+  // campo siempre baja un renglón completo para darle espacio al aviso.
   const marcaIA = (campo: CampoIA) => camposIA.has(campo) ? (
-    <span className="ml-1.5 inline-flex items-center gap-1 text-[10px] font-semibold text-accent normal-case tracking-normal">
+    <span className="flex items-center gap-1 text-[10px] font-semibold text-accent normal-case tracking-normal mt-0.5">
       <IconCheck size={10} /> de tu foto
     </span>
   ) : null;
@@ -351,7 +367,8 @@ function RegistroForm() {
           )}
 
           {error && (
-            <div className="bg-danger/10 text-danger px-4 py-2.5 rounded-xl mb-4 text-sm border border-danger/25">
+            <div ref={errorRef} tabIndex={-1} role="alert"
+              className="bg-danger/10 text-danger px-4 py-2.5 rounded-xl mb-4 text-sm border border-danger/25 focus:outline-none">
               {error}
             </div>
           )}
@@ -392,6 +409,11 @@ function RegistroForm() {
                     </span>
                   </label>
 
+                  {/* A propósito SIN atributo `capture`: con solo `accept="image/*"` los
+                      navegadores móviles muestran el selector nativo con AMBAS opciones
+                      (tomar foto con la cámara o elegir un archivo/galería existente).
+                      Agregar `capture="environment"` forzaría la cámara y ocultaría la
+                      opción de elegir un archivo en algunos navegadores — no lo hagas. */}
                   <input ref={inputCedulaRef} type="file" accept="image/*" className="hidden"
                     onChange={e => { const f = e.target.files?.[0]; if (f) leerDocumento(f, 'cedula'); }} />
                   <input ref={inputLicenciaRef} type="file" accept="image/*" className="hidden"
@@ -528,28 +550,28 @@ function RegistroForm() {
                 </div>
               </div>
 
-              {/* Nacimiento + celular */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-ink/60 mb-1.5 uppercase tracking-wide">
-                    Fecha de nacimiento {marcaIA('fecha_nacimiento')}
-                  </label>
-                  <input type="date" required max={maxNacimiento}
-                    className={clsCampo('fecha_nacimiento')} value={perfil.fecha_nacimiento}
-                    onChange={e => { desmarcarCampo('fecha_nacimiento'); setPerfil(f => ({ ...f, fecha_nacimiento: e.target.value })); }} />
-                  {perfil.fecha_nacimiento && (
-                    <p className="text-[11px] text-ink/50 mt-1">{calcularEdad(perfil.fecha_nacimiento)} años</p>
-                  )}
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-ink/60 mb-1.5 uppercase tracking-wide">Celular</label>
-                  <TelefonoInput
-                    indicativo={perfil.celular_indicativo}
-                    numero={perfil.celular}
-                    onChangeIndicativo={dial => setPerfil(f => ({ ...f, celular_indicativo: dial }))}
-                    onChangeNumero={num => setPerfil(f => ({ ...f, celular: num }))}
-                  />
-                </div>
+              {/* Fecha de nacimiento — solo se usa para validar mayoría de edad (en el
+                  servidor); no se le muestra la edad calculada a la persona. */}
+              <div>
+                <label className="block text-xs font-semibold text-ink/60 mb-1.5 uppercase tracking-wide">
+                  Fecha de nacimiento {marcaIA('fecha_nacimiento')}
+                </label>
+                <input type="date" required max={maxNacimiento}
+                  className={clsCampo('fecha_nacimiento')} value={perfil.fecha_nacimiento}
+                  onChange={e => { desmarcarCampo('fecha_nacimiento'); setPerfil(f => ({ ...f, fecha_nacimiento: e.target.value })); }} />
+              </div>
+
+              {/* Celular — en su propia fila (no compartiendo grid con fecha de nacimiento):
+                  el número completo con indicativo necesita más ancho del que le tocaba en
+                  una columna de la mitad del ancho de la tarjeta. */}
+              <div>
+                <label className="block text-xs font-semibold text-ink/60 mb-1.5 uppercase tracking-wide">Celular</label>
+                <TelefonoInput
+                  indicativo={perfil.celular_indicativo}
+                  numero={perfil.celular}
+                  onChangeIndicativo={dial => setPerfil(f => ({ ...f, celular_indicativo: dial }))}
+                  onChangeNumero={num => setPerfil(f => ({ ...f, celular: num }))}
+                />
               </div>
 
               {/* Licencia — requerida para arrendatarios */}
