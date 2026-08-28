@@ -153,6 +153,14 @@ export default function DashboardPropietario() {
   const [errorTarjetaIA, setErrorTarjetaIA] = useState('');
   const [avisoTarjetaIA, setAvisoTarjetaIA] = useState('');
   const [camposTarjetaIA, setCamposTarjetaIA] = useState<Set<'marca' | 'modelo' | 'anio' | 'placa' | 'tipo'>>(new Set());
+  // Fotos de la tarjeta de propiedad que el endpoint de IA ya guardó como documento
+  // (ver /api/vehiculos/extraer-matricula): se reutilizan al publicar como el documento
+  // oficial "Tarjeta de propiedad" del vehículo, sin volver a pedirlas (Punto 2).
+  const [tarjetaDocumento, setTarjetaDocumento] = useState<{ url: string; url_dorso: string } | null>(null);
+
+  // Solicitar reajuste de precio (el propietario no puede editar el precio directamente)
+  const [reajusteEnviando, setReajusteEnviando] = useState(false);
+  const [reajusteMsg, setReajusteMsg] = useState('');
 
   // Editar vehículo existente
   const [vehiculoEditandoId, setVehiculoEditandoId] = useState<number | null>(null);
@@ -358,7 +366,7 @@ export default function DashboardPropietario() {
 
   const leerTarjetaPropiedad = async () => {
     if (!tarjetaFrente || !tarjetaReverso) return;
-    setErrorTarjetaIA(''); setAvisoTarjetaIA('');
+    setErrorTarjetaIA(''); setAvisoTarjetaIA(''); setTarjetaDocumento(null);
     setLeyendoTarjeta(true);
     try {
       const [frenteImg, reversoImg] = await Promise.all([
@@ -388,6 +396,12 @@ export default function DashboardPropietario() {
       });
       setCamposTarjetaIA(marcados);
 
+      // Las fotos ya quedaron guardadas como el documento "Tarjeta de propiedad" del
+      // vehículo (si la subida falló, `documento` viene null y el propietario podrá
+      // subirla a mano en la sección de documentos, como antes).
+      const documento = (data as { documento?: { url: string; url_dorso: string } | null }).documento;
+      if (documento?.url && documento?.url_dorso) setTarjetaDocumento(documento);
+
       const noLeidos: string[] = Array.isArray(data.campos_no_leidos) ? data.campos_no_leidos : [];
       let aviso = 'Listo, leímos tu tarjeta de propiedad. Revisa los datos y corrige lo que haga falta.';
       if (noLeidos.length) aviso += ` No pudimos leer: ${noLeidos.join(', ')}.`;
@@ -415,10 +429,21 @@ export default function DashboardPropietario() {
   };
 
   const toggleDisponible = async (v: Vehiculo) => {
-    await fetch(`/api/vehiculos/${v.id}`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ disponible: v.disponible ? 0 : 1 }),
-    });
+    setDispMsg(m => ({ ...m, [v.id]: '' }));
+    try {
+      const res = await fetch(`/api/vehiculos/${v.id}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ disponible: v.disponible ? 0 : 1 }),
+      });
+      if (!res.ok) {
+        // Ej. el gate de SOAT/Tecno-mecánica del Punto 1: no deja marcar disponible=1
+        // hasta que ambos documentos estén aprobados por DrivePass.
+        const d = await res.json().catch(() => ({}));
+        setDispMsg(m => ({ ...m, [v.id]: (d as { error?: string }).error || 'No se pudo cambiar la disponibilidad.' }));
+      }
+    } catch {
+      setDispMsg(m => ({ ...m, [v.id]: 'Sin conexión — intenta de nuevo.' }));
+    }
     if (user) cargarVehiculos(user.id);
   };
 
@@ -488,6 +513,31 @@ export default function DashboardPropietario() {
     return exito;
   };
 
+  // ── Solicitar reajuste de precio (Punto 3) ─────────────────────────────────
+  // El propietario no puede editar el precio directamente (lo calcula
+  // lib/precioMercado.ts). Esto reutiliza el chat de soporte propietario↔DrivePass
+  // (conversaciones_soporte) para escalar la solicitud directo a un humano, sin pasar
+  // por el asistente de IA — ver la rama `tipo === 'reajuste_precio'` en /api/soporte.
+  const solicitarReajuste = async () => {
+    if (!vehiculoEditandoId) return;
+    setReajusteEnviando(true); setReajusteMsg('');
+    try {
+      const res = await fetch('/api/soporte', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tipo: 'reajuste_precio', vehiculo_id: vehiculoEditandoId }),
+      });
+      if (res.ok) {
+        setReajusteMsg('✓ Solicitud enviada. El equipo de DrivePass revisará el precio y te contactará por el chat de soporte.');
+      } else {
+        const d = await res.json().catch(() => ({}));
+        setReajusteMsg((d as { error?: string }).error || 'No se pudo enviar la solicitud.');
+      }
+    } catch {
+      setReajusteMsg('Sin conexión — intenta de nuevo.');
+    }
+    setReajusteEnviando(false);
+  };
+
   // ── Publish new vehicle ────────────────────────────────────────────────────
   const publicar = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -503,6 +553,9 @@ export default function DashboardPropietario() {
         fotos: JSON.stringify(fotos.frente ? [fotos.frente] : []),
         fotos_detalle: JSON.stringify(fotos),
         dias_disponibles: JSON.stringify(diasDisponibles),
+        // Reutiliza la tarjeta de propiedad ya guardada por el atajo de IA como el
+        // documento oficial del vehículo — no se vuelve a pedir (Punto 2).
+        documentos: tarjetaDocumento ? JSON.stringify({ tarjeta: tarjetaDocumento }) : undefined,
       }),
     });
     setPublicando(false);
@@ -510,7 +563,7 @@ export default function DashboardPropietario() {
       const d = await res.json();
       setMsg('✅ Vehículo publicado. Ahora completa el perfil para activarlo.');
       setForm(FORM_INICIAL); setFotos(FOTOS_VACIAS); setDiasDisponibles([]);
-      setTarjetaFrente(null); setTarjetaReverso(null); setCamposTarjetaIA(new Set()); setAvisoTarjetaIA(''); setErrorTarjetaIA('');
+      setTarjetaFrente(null); setTarjetaReverso(null); setCamposTarjetaIA(new Set()); setAvisoTarjetaIA(''); setErrorTarjetaIA(''); setTarjetaDocumento(null);
       if (user) {
         const vs = await cargarVehiculos(user.id);
         const nuevo = vs.find(v => v.id === d.id);
@@ -763,6 +816,12 @@ export default function DashboardPropietario() {
                     </button>
                   </div>
                 </div>
+
+                {/* Aviso del gate SOAT/Tecno-mecánica u otros errores al cambiar disponibilidad —
+                    visible siempre (no solo con el calendario abierto, ver `editando` más abajo) */}
+                {!editando && dispMsg[v.id] && (
+                  <p className="text-xs text-danger bg-danger/10 border border-danger/25 rounded-xl px-3 py-2 mb-3">{dispMsg[v.id]}</p>
+                )}
 
                 {/* Progress bar */}
                 <div className="mb-3">
@@ -1067,12 +1126,12 @@ export default function DashboardPropietario() {
                 <label className="flex flex-col items-center justify-center gap-1 border border-accent/30 bg-surface-2 rounded-xl py-3 px-2 text-xs text-ink/70 cursor-pointer hover:bg-accent/5 transition">
                   <span className="font-semibold">{tarjetaFrente ? '✓ Frente listo' : 'Frente de la tarjeta'}</span>
                   <input type="file" accept="image/*" className="hidden"
-                    onChange={e => setTarjetaFrente(e.target.files?.[0] || null)} />
+                    onChange={e => { setTarjetaFrente(e.target.files?.[0] || null); setTarjetaDocumento(null); }} />
                 </label>
                 <label className="flex flex-col items-center justify-center gap-1 border border-accent/30 bg-surface-2 rounded-xl py-3 px-2 text-xs text-ink/70 cursor-pointer hover:bg-accent/5 transition">
                   <span className="font-semibold">{tarjetaReverso ? '✓ Reverso listo' : 'Reverso de la tarjeta'}</span>
                   <input type="file" accept="image/*" className="hidden"
-                    onChange={e => setTarjetaReverso(e.target.files?.[0] || null)} />
+                    onChange={e => { setTarjetaReverso(e.target.files?.[0] || null); setTarjetaDocumento(null); }} />
                 </label>
               </div>
 
@@ -1186,6 +1245,10 @@ export default function DashboardPropietario() {
                   </div>
                 );
               })()}
+              <p className="text-[11px] text-ink/45 mt-2">
+                ¿No estás de acuerdo con este valor? Podrás solicitar un reajuste al equipo de DrivePass
+                una vez publiques tu vehículo.
+              </p>
             </div>
             <button type="submit" disabled={publicando}
               className="w-full flex items-center justify-center gap-2 bg-accent hover:bg-accent-hover text-white py-3 rounded-xl font-bold transition shadow-md shadow-accent/20 disabled:opacity-60 text-sm">
@@ -1305,10 +1368,22 @@ export default function DashboardPropietario() {
                 const precioSug = precioMercadoSugerido(segmentoValido(editForm.tipo), Number(editForm.valor_comercial) || 0);
                 if (precioSug <= 0) return null;
                 return (
-                  <p className="text-[11px] text-ink/60 mt-3">
-                    Precio de alquiler estimado con estos datos: <strong className="text-accent">{copCorto(precioSug)}/día</strong>.
-                    Se recalcula al guardar (salvo que el equipo lo haya fijado a mano).
-                  </p>
+                  <div className="mt-3">
+                    <p className="text-[11px] text-ink/60">
+                      Precio de alquiler estimado con estos datos: <strong className="text-accent">{copCorto(precioSug)}/día</strong>.
+                      Se recalcula al guardar (salvo que el equipo lo haya fijado a mano).
+                    </p>
+                    <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                      <span className="text-[11px] text-ink/50">¿No estás de acuerdo con este valor?</span>
+                      <button type="button" onClick={solicitarReajuste} disabled={reajusteEnviando}
+                        className="text-[11px] font-semibold text-accent underline underline-offset-2 hover:text-accent-hover disabled:opacity-50">
+                        {reajusteEnviando ? 'Enviando…' : 'Solicita un reajuste'}
+                      </button>
+                    </div>
+                    {reajusteMsg && (
+                      <p className={`text-[11px] mt-1 ${reajusteMsg.startsWith('✓') ? 'text-success' : 'text-danger'}`}>{reajusteMsg}</p>
+                    )}
+                  </div>
                 );
               })()}
               <div className="flex items-center gap-3 mt-4">

@@ -56,10 +56,39 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
 
   const body = await req.json().catch(() => ({}));
+  const db = getDb();
+
+  // Solicitud estructurada de reajuste de precio (Punto 3 — el propietario no puede
+  // editar el precio directamente, ver lib/precioMercado.ts). Se salta al asistente
+  // de IA a propósito: es una solicitud de negocio concreta que SIEMPRE debe llegar
+  // a un humano, no algo que el bot deba intentar responder o filtrar. Reutiliza el
+  // mismo chat de soporte propietario↔DrivePass (conversaciones_soporte) en vez de un
+  // endpoint nuevo de "cambiar precio" — un admin la revisa y ajusta a mano si aplica.
+  if (user.rol === 'propietario' && body.tipo === 'reajuste_precio') {
+    const vehiculoId = Number(body.vehiculo_id);
+    if (!vehiculoId) return NextResponse.json({ error: 'Falta el vehículo.' }, { status: 400 });
+    const veh = db.prepare('SELECT id, propietario_id, marca, modelo, anio, placa, precio_dia FROM vehiculos WHERE id = ?')
+      .get(vehiculoId) as { id: number; propietario_id: number; marca: string; modelo: string; anio: number; placa?: string; precio_dia: number } | undefined;
+    if (!veh || veh.propietario_id !== user.id) return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+
+    const conv = obtenerOCrearConversacion(user.id, user.rol);
+    const vLabel = `${veh.marca} ${veh.modelo} ${veh.anio}${veh.placa ? ` (${veh.placa})` : ''}`;
+    const comentario = String(body.mensaje || '').trim().slice(0, 500);
+    const contenido = `⚖️ Solicitud de reajuste de precio para ${vLabel}. Precio actual: $${veh.precio_dia.toLocaleString('es-CO')}/día.`
+      + (comentario ? ` Comentario del propietario: ${comentario}` : '');
+
+    db.prepare('INSERT INTO mensajes_soporte (conversacion_id, remitente_tipo, contenido) VALUES (?, ?, ?)')
+      .run(conv.id, 'solicitante', contenido);
+    const motivo = `Reajuste de precio para ${vLabel} (actual $${veh.precio_dia.toLocaleString('es-CO')}/día)`;
+    db.prepare("UPDATE conversaciones_soporte SET estado = 'escalada', motivo_escalada = ?, actualizado_en = datetime('now','localtime') WHERE id = ?")
+      .run(motivo, conv.id);
+    notificarAdmins(db, conv.id, user.nombre, user.rol, motivo);
+
+    return NextResponse.json({ ok: true, conversacion_id: conv.id });
+  }
+
   const texto = String(body.mensaje || '').trim().slice(0, 2000);
   if (!texto) return NextResponse.json({ error: 'Escribe un mensaje.' }, { status: 400 });
-
-  const db = getDb();
 
   // Admin inicia (o retoma) una conversación con un propietario/usuario.
   if (user.rol === 'admin') {
