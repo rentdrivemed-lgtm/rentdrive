@@ -6,6 +6,7 @@ import { tieneAltaDisponibilidadEsteMes } from '@/lib/disponibilidad-reglas';
 import { precioMercadoSugerido, segmentoValido } from '@/lib/precioMercado';
 import { adminTieneArea, sinPermisoArea } from '@/lib/guard';
 import { perfilIncompleto, CODIGO_PERFIL_INCOMPLETO } from '@/lib/perfil';
+import { documentosConUrlsValidas } from '@/lib/storage';
 
 function datesInRange(start: string, end: string): string[] {
   const dates: string[] = [];
@@ -118,10 +119,17 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json();
   const { marca, modelo, anio, tipo, ubicacion, valor_comercial, precio_ajuste_pct, descripcion,
-          fotos, fotos_detalle, dias_disponibles, placa } = body;
+          fotos, fotos_detalle, dias_disponibles, placa, documentos } = body;
 
   if (!marca || !modelo || !anio) {
     return NextResponse.json({ error: 'Faltan datos requeridos' }, { status: 400 });
+  }
+
+  // Igual que en PUT /api/vehiculos/[id]: `documentos` debe contener SOLO URLs que
+  // realmente vengan de nuestro storage (Cloudinary vía uploadFile(), ver lib/storage.ts) —
+  // nunca un string arbitrario inventado por el cliente.
+  if (!documentosConUrlsValidas(documentos)) {
+    return NextResponse.json({ error: 'Documento inválido, vuelve a subirlo' }, { status: 400 });
   }
 
   // Precio automático de mercado: se deriva de la categoría + valor comercial (lib/precioMercado.ts).
@@ -129,15 +137,32 @@ export async function POST(req: NextRequest) {
   // ("precio por asignar") y el equipo lo completa después.
   const segmento = segmentoValido(tipo);
   const valorComercial = Math.max(0, Number(valor_comercial) || 0);
-  const ajuste = Number(precio_ajuste_pct) || 0;
+  // Tope defensivo: `precio_ajuste_pct` está pensado para afinar +/- una demanda alta o baja
+  // (ver comentario en lib/precioMercado.ts), no para desplazar el precio arbitrariamente.
+  // precioMercadoSugerido ya recorta el resultado final al rango del segmento, pero acotar
+  // también la entrada evita guardar en la BD un valor sin sentido (ej. -300%).
+  const ajuste = Math.min(20, Math.max(-20, Number(precio_ajuste_pct) || 0));
   const precioAuto = precioMercadoSugerido(segmento, valorComercial, ajuste);
+
+  // ── Documentos: reutiliza la tarjeta de propiedad ya subida para el atajo de IA ──
+  // (ver app/api/vehiculos/extraer-matricula/route.ts): si el propietario usó ese atajo,
+  // las fotos de frente/reverso YA se guardaron y sus URLs llegan acá en `documentos`, así
+  // que no hay que pedirlas de nuevo en la sección de documentos del vehículo.
+  let docsIniciales: Record<string, { url?: string; url_dorso?: string } | undefined> = {};
+  try { docsIniciales = JSON.parse(documentos || '{}'); } catch { docsIniciales = {}; }
+  const tieneDocumentoInicial = Object.values(docsIniciales).some(d => d?.url);
+  // Igual que en el PUT: si llega al menos un documento ya en la creación, arranca "en
+  // revisión" (no "sin_documentos") y se avisa al equipo, en vez de esperar a que el
+  // propietario vuelva a tocar el vehículo para que se dispare ese aviso.
+  const documentosEstadoInicial = tieneDocumentoInicial ? 'en_revision' : 'sin_documentos';
 
   const db = getDb();
   const result = await db.prepare(`
     INSERT INTO vehiculos
       (propietario_id, marca, modelo, anio, tipo, ubicacion, precio_dia, descripcion,
-       fotos, fotos_detalle, dias_disponibles, placa, valor_comercial, precio_ajuste_pct, precio_manual)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+       fotos, fotos_detalle, dias_disponibles, placa, valor_comercial, precio_ajuste_pct, precio_manual,
+       disponible, documentos, documentos_estado)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
   `).run(
     user.id, marca, modelo, anio,
     segmento, ubicacion || 'Medellín',
@@ -147,7 +172,20 @@ export async function POST(req: NextRequest) {
     dias_disponibles || '[]',
     (placa || '').toString().toUpperCase().trim(),
     valorComercial, ajuste,
+    documentos || '{}', documentosEstadoInicial,
   );
+
+  // Aviso al equipo, mismo criterio que el PUT cuando el propietario sube documentos por
+  // primera vez (ver app/api/vehiculos/[id]/route.ts).
+  if (tieneDocumentoInicial) {
+    const adminRow = db.prepare("SELECT id FROM usuarios WHERE rol='admin' LIMIT 1").get() as { id: number } | undefined;
+    if (adminRow) {
+      const vLabel = `${marca} ${modelo} ${anio}${placa ? ` (${(placa as string).toUpperCase()})` : ''}`;
+      db.prepare('INSERT INTO notificaciones (destinatario_id, tipo, titulo, mensaje, referencia_id, referencia_tipo) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(adminRow.id, 'documentos_subidos', '📄 Documentos pendientes de revisión',
+          `${user.nombre} subió documentos para ${vLabel}`, Number(result.lastInsertRowid), 'vehiculo');
+    }
+  }
 
   try {
     await enviarCorreo(user.correo, 'Publicaste un vehículo en RentDrive',

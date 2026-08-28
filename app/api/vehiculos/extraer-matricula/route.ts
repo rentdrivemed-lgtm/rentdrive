@@ -5,6 +5,8 @@ import { getCurrentUser } from '@/lib/auth';
 import { tieneClaveAnthropic } from '@/lib/anthropic';
 import { tipoRealImagen, formDataConLimite, PAYLOAD_TOO_LARGE } from '@/lib/subida-imagen';
 import { leerTarjetaPropiedad } from '@/lib/vehiculo-ocr';
+import { uploadFile } from '@/lib/storage';
+import { normalizarOrientacion } from '@/lib/blur-placas';
 
 export const runtime = 'nodejs';
 
@@ -24,6 +26,14 @@ export const runtime = 'nodejs';
 // Igual que en registro-ocr: EXTRAER NO ES VERIFICAR. Esto no prueba que el
 // vehículo sea del propietario ni lo aprueba — eso lo sigue haciendo el equipo
 // con los documentos reales subidos al vehículo (lib/verificacion-docs.ts).
+//
+// A diferencia de lib/registro-ocr.ts (esas fotos SÍ se descartan, porque ahí la
+// persona todavía no tiene cuenta), acá las fotos de frente/reverso SÍ se guardan
+// como archivo (uploadFile) cuando la lectura es válida: son la tarjeta de propiedad
+// real del vehículo, y guardarlas evita pedirla dos veces (una para autocompletar el
+// formulario y otra en la sección de documentos). El cliente recibe sus URLs y las
+// manda de vuelta en `documentos` al crear el vehículo (POST /api/vehiculos); ese
+// documento sigue entrando "en_revision" como cualquier otro — nada de esto lo aprueba.
 
 const MAX_BYTES = 8 * 1024 * 1024; // por imagen
 const USER_MAX_CORTO = 8;
@@ -142,13 +152,37 @@ export async function POST(req: NextRequest) {
       }, { status: 422 });
     }
 
+    // Recién acá, con la lectura ya validada, guardamos las fotos como el documento
+    // "Tarjeta de propiedad" del vehículo (Punto 2: no pedirla dos veces). Si la subida
+    // falla (ej. Cloudinary caído), no tumbamos la respuesta: el formulario igual se
+    // autocompleta con los datos leídos, y la sección de documentos sigue disponible
+    // para subirla a mano como respaldo.
+    let documento: { url: string; url_dorso: string } | null = null;
+    try {
+      const [frenteNorm, reversoNorm] = await Promise.all([
+        normalizarOrientacion(frenteBuf, frenteTipo),
+        normalizarOrientacion(reversoBuf, reversoTipo),
+      ]);
+      const extDe = (mt: string) => mt === 'image/png' ? 'png' : mt === 'image/webp' ? 'webp' : 'jpg';
+      const sufijo = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const [frenteUp, reversoUp] = await Promise.all([
+        uploadFile(`doc-tarjeta-frente-${sufijo}.${extDe(frenteTipo)}`, frenteTipo, frenteNorm),
+        uploadFile(`doc-tarjeta-reverso-${sufijo}.${extDe(reversoTipo)}`, reversoTipo, reversoNorm),
+      ]);
+      documento = { url: frenteUp.url, url_dorso: reversoUp.url };
+    } catch (e) {
+      console.error('[vehiculo-ocr] No se pudo guardar la tarjeta de propiedad como documento:', e instanceof Error ? e.message : e);
+    }
+
     // Nota para quien lea esto después: esto NO verifica que el vehículo sea del
-    // propietario ni lo aprueba. Solo transcribe para pre-llenar el formulario.
+    // propietario ni lo aprueba. Solo transcribe para pre-llenar el formulario
+    // (y, si se pudo, guarda las fotos como el documento oficial del vehículo).
     return NextResponse.json({
       datos: lectura.datos,
       confianza: lectura.confianza,
       campos_no_leidos: lectura.campos_no_leidos,
       nota: lectura.nota,
+      documento,
     });
   } catch (e) {
     console.error('[vehiculo-ocr] Falló la lectura de la tarjeta de propiedad:', e instanceof Error ? e.message : e);

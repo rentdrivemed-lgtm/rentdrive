@@ -10,6 +10,53 @@ cloudinary.config({
 
 export type UploadResult = { url: string; path: string };
 
+// ── Validación de URLs de documentos ────────────────────────────────────────
+// `documentos` (vehículos) guarda URLs de archivos ya subidos por uploadFile()
+// de arriba, es decir SIEMPRE deben apuntar a Cloudinary bajo nuestro cloud_name.
+// Sin esta validación, POST /api/vehiculos y PUT /api/vehiculos/[id] aceptaban
+// cualquier string como si fuera un documento subido de verdad (ej. una URL a
+// un sitio externo, o un dato inventado), sin que nunca haya pasado por el
+// storage real ni por revisión. Basta validar el dominio/prefijo real que
+// genera Cloudinary — no hace falta un sistema de tokens firmados para esto.
+const CLOUDINARY_HOST = 'https://res.cloudinary.com/';
+
+function esUrlDeStorageValida(url: unknown): boolean {
+  if (typeof url !== 'string' || !url) return false;
+  const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+  // Falla CERRADO si falta la env var: sin `cloudName` no hay forma de restringir el
+  // prefijo a NUESTRA cuenta, y aceptar el host genérico dejaría pasar URLs de
+  // cualquier cuenta de Cloudinary (no solo la nuestra). Mejor rechazar todo documento
+  // en ese escenario (un problema de configuración visible) que aceptar de más.
+  if (!cloudName) return false;
+  const prefijo = `${CLOUDINARY_HOST}${cloudName}/`;
+  return url.startsWith(prefijo);
+}
+
+/**
+ * Valida que TODAS las URLs presentes dentro de un JSON de `documentos` (ej.
+ * `{ soat: { url }, tecno: { url }, tarjeta: { url, url_dorso }, ... }`)
+ * provengan de una subida real a nuestro storage. Cualquier clave `url` o
+ * `url_dorso` con un valor que no calce el prefijo real se considera inválida.
+ * Un JSON vacío/sin URLs es válido (no hay nada que validar).
+ */
+export function documentosConUrlsValidas(documentosJson: string | undefined | null): boolean {
+  if (!documentosJson) return true;
+  let docs: Record<string, unknown>;
+  try {
+    docs = JSON.parse(documentosJson);
+  } catch {
+    return false;
+  }
+  if (!docs || typeof docs !== 'object') return false;
+  for (const valor of Object.values(docs)) {
+    if (!valor || typeof valor !== 'object') continue;
+    const doc = valor as Record<string, unknown>;
+    if (doc.url !== undefined && !esUrlDeStorageValida(doc.url)) return false;
+    if (doc.url_dorso !== undefined && !esUrlDeStorageValida(doc.url_dorso)) return false;
+  }
+  return true;
+}
+
 export async function uploadFile(filename: string, contentType: string, data: ArrayBuffer | Buffer): Promise<UploadResult> {
   const buffer = data instanceof ArrayBuffer ? Buffer.from(data) : data;
   const folder = contentType === 'application/pdf' ? 'docs' : filename.startsWith('doc-') ? 'docs' : 'uploads';

@@ -10,28 +10,50 @@ import type { TipoVehiculo } from './rentabilidad';
 // tiene un RANGO real de tarifa y el precio se INTERPOLA según dónde cae el valor comercial del
 // carro dentro del rango de valor del segmento. Así marca/modelo/año (que definen el valor)
 // posicionan el precio sin que el carro más caro del grupo arrastre a todos hacia arriba.
+// Nota (ago-2026): `precioMin` de 'suv' y 'camioneta7' se subieron respecto a la versión
+// original (300k→340k, 450k→500k) porque el piso quedaba POR DEBAJO del modelo más barato
+// de esa misma categoría en la tabla `MODELOS_MERCADO` de abajo (Vitara $340k, Trailblazer
+// $500k) — ese hueco permitía que un vehículo con un `valor_comercial` mal declarado (bajo
+// o incompleto) cayera en un piso más barato que CUALQUIER carro real de su propio segmento.
+// Caso real: una Explorer (SUV) quedó sugerida en $300.000/día — un valor coherente con el
+// piso viejo del segmento, pero absurdo para ese modelo. Ver también el clamp final más abajo.
 export const RANGO_MERCADO_POR_TIPO: Record<TipoVehiculo, {
   valorMin: number; valorMax: number; precioMin: number; precioMax: number;
 }> = {
   sedan:          { valorMin: 45_000_000,  valorMax: 130_000_000, precioMin: 220_000, precioMax: 490_000 },
   coupe:          { valorMin: 90_000_000,  valorMax: 220_000_000, precioMin: 300_000, precioMax: 600_000 },
-  suv:            { valorMin: 95_000_000,  valorMax: 170_000_000, precioMin: 300_000, precioMax: 530_000 },
-  camioneta7:     { valorMin: 150_000_000, valorMax: 330_000_000, precioMin: 450_000, precioMax: 1_050_000 },
+  suv:            { valorMin: 95_000_000,  valorMax: 170_000_000, precioMin: 340_000, precioMax: 530_000 },
+  camioneta7:     { valorMin: 150_000_000, valorMax: 330_000_000, precioMin: 500_000, precioMax: 1_050_000 },
   lujo_auto:      { valorMin: 180_000_000, valorMax: 500_000_000, precioMin: 490_000, precioMax: 1_000_000 },
   lujo_camioneta: { valorMin: 250_000_000, valorMax: 600_000_000, precioMin: 700_000, precioMax: 1_200_000 },
 };
 
 // Interpola el precio sugerido dentro del rango del segmento según el valor comercial.
 // `ajustePct` (ej. +5 / −10) sube o baja modelos de alta/baja demanda. Redondea a $1.000.
+//
+// Blindaje (ago-2026, tras el caso de la Explorer sugerida en $300.000/día): el resultado
+// SIEMPRE se recorta al rango [precioMin, precioMax] del segmento, DESPUÉS de aplicar
+// `ajustePct`. Antes el ajuste no tenía tope, así que un `precio_ajuste_pct` grande (mal
+// declarado, o un valor atípico) podía sacar el precio final del rango razonable del
+// segmento aunque la interpolación por valor comercial sí estuviera acotada. Con el clamp
+// final, el precio de un carro NUNCA puede salir del rango de su categoría sin importar qué
+// valor comercial o qué ajuste se haya declarado — el rango de la categoría manda.
 export function precioMercadoSugerido(
   tipo: TipoVehiculo, valorComercial: number, ajustePct = 0,
 ): number {
+  // Blindaje: un NaN en cualquiera de los dos números (dato mal parseado, división
+  // corrupta aguas arriba, etc.) se propagaría por toda la interpolación y produciría un
+  // resultado NaN, contradiciendo la garantía de "nunca sale del rango" de arriba.
+  if (!Number.isFinite(valorComercial)) valorComercial = 0;
+  if (!Number.isFinite(ajustePct)) ajustePct = 0;
   const r = RANGO_MERCADO_POR_TIPO[tipo];
   if (!r || !valorComercial || valorComercial <= 0) return 0;
   const t = r.valorMax > r.valorMin ? (valorComercial - r.valorMin) / (r.valorMax - r.valorMin) : 0;
   const tc = Math.min(1, Math.max(0, t)); // fuera de rango → se ancla al extremo del segmento
   const base = r.precioMin + tc * (r.precioMax - r.precioMin);
-  return Math.round((base * (1 + ajustePct / 100)) / 1000) * 1000;
+  const conAjuste = base * (1 + ajustePct / 100);
+  const acotado = Math.min(r.precioMax, Math.max(r.precioMin, conAjuste));
+  return Math.round(acotado / 1000) * 1000;
 }
 
 // Banda de cordura: rango razonable de precio/día como % del valor comercial (regresivo).
