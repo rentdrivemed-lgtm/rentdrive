@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import bcrypt from 'bcryptjs';
-import { setConfig } from './operaciones';
+import { getConfig, setConfig } from './operaciones';
 
 const DB_PATH = process.env.NODE_ENV === 'production'
   ? '/app/data/rentdrive.db'
@@ -772,28 +772,43 @@ function migrarUsuariosEstadoArchivada(db: Database.Database) {
   }
 }
 
-// Activa la config de pico y placa (Medellín, particulares) con la rotación vigente del
-// 3 de agosto al 31 de diciembre de 2026. Solo siembra si la config actual NO es una
-// rotación completa y activa (no cubre los 5 días hábiles, o está desactivada) — para no
-// pisar un ajuste real que Victor haya hecho a mano desde el panel admin (PicoPlacaConfig
-// / PUT /api/config), pero sí corregir valores vacíos, incompletos o de prueba (ej. un
-// solo día configurado, `activo:false`) que no representan una restricción real vigente.
-// Idempotente en la práctica: una vez la config queda completa y activa (a mano o por esta
-// misma migración), deja de tocarla en arranques siguientes.
+// Siembra UNA SOLA VEZ la config de pico y placa (Medellín, particulares) con la rotación
+// vigente del 3 de agosto al 31 de diciembre de 2026, para corregir un valor de prueba/
+// basura que había quedado en `config.pico_placa` en producción (incompleto o inactivo).
+//
+// IMPORTANTE: esta migración corre en CADA arranque del proceso (getDb() → initDb()), así
+// que NO puede decidir si debe sembrar mirando la FORMA de `pico_placa` en cada corrida —
+// el panel admin (components/PicoPlacaConfig.tsx / PUT /api/config) permite legítimamente
+// desactivar el pico y placa (`activo:false`, ej. medidas especiales o vacaciones) o dejar
+// un día laboral sin ningún dígito restringido (`dias['5']=[]`); si la migración siguiera
+// "vigilando" eso, revertiría en silencio una decisión real de Victor en el próximo reinicio.
+//
+// En vez de eso, se usa un marcador de control separado (`pico_placa_seed_v1` en `config`,
+// NO expuesto en CLAVES de app/api/config/route.ts — es interno, no editable desde la UI):
+// si ya existe, esta función es un no-op total sin importar qué tenga `pico_placa` en ese
+// momento (fue corregido antes, o Victor lo cambió después — de cualquier forma ya no es
+// responsabilidad de esta migración). Si no existe, es la primera corrida: ahí sí sabemos
+// que el valor en producción es basura de prueba vieja (no una decisión real), se siembra
+// la rotación real, y se marca el seed como hecho para nunca más re-evaluar el dato.
 function migrarPicoPlacaActivar(db: Database.Database) {
   try {
-    const row = db.prepare('SELECT valor FROM config WHERE clave = ?').get('pico_placa') as { valor: string } | undefined;
-    const actual = parsePicoPlacaSeguro(row?.valor);
-    const diasCompletos = ['1', '2', '3', '4', '5'].every(d => Array.isArray(actual?.dias?.[d]) && actual.dias[d].length > 0);
-    if (actual?.activo && diasCompletos) return; // ya hay una rotación real y completa activa — no tocar
+    if (getConfig(db, 'pico_placa_seed_v1')) return; // ya se corrigió una vez — no volver a tocar pico_placa jamás
 
-    const valor = JSON.stringify({
-      activo: true,
-      vigencia: '3 de agosto - 31 de diciembre de 2026',
-      dias: { '1': [5, 8], '2': [1, 4], '3': [0, 2], '4': [3, 6], '5': [7, 9] },
-    });
-    setConfig(db, 'pico_placa', valor);
-    console.log('[db] Migración: pico y placa Medellín activado (rotación 2° semestre 2026).');
+    const actual = parsePicoPlacaSeguro(getConfig(db, 'pico_placa'));
+    const diasCompletos = ['1', '2', '3', '4', '5'].every(d => Array.isArray(actual?.dias?.[d]) && actual.dias[d].length > 0);
+    const esBasuraDePrueba = !actual || !actual.activo || !diasCompletos;
+
+    if (esBasuraDePrueba) {
+      const valor = JSON.stringify({
+        activo: true,
+        vigencia: '3 de agosto - 31 de diciembre de 2026',
+        dias: { '1': [5, 8], '2': [1, 4], '3': [0, 2], '4': [3, 6], '5': [7, 9] },
+      });
+      setConfig(db, 'pico_placa', valor);
+      console.log('[db] Migración: pico y placa Medellín activado (rotación 2° semestre 2026).');
+    }
+
+    setConfig(db, 'pico_placa_seed_v1', '1'); // marca esta corrección como hecha para siempre, pase lo que pase después
   } catch (e) {
     console.error('[db] Migración pico_placa activar falló:', e instanceof Error ? e.message : e);
   }
@@ -801,5 +816,11 @@ function migrarPicoPlacaActivar(db: Database.Database) {
 
 function parsePicoPlacaSeguro(valor: string | undefined): { activo?: boolean; dias?: Record<string, number[]> } | null {
   if (!valor || valor.trim() === '') return null;
-  try { return JSON.parse(valor); } catch { return null; }
+  try {
+    const parsed: unknown = JSON.parse(valor);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null; // no es el shape esperado (ej. "123", "[1,2,3]")
+    return parsed as { activo?: boolean; dias?: Record<string, number[]> };
+  } catch {
+    return null;
+  }
 }
