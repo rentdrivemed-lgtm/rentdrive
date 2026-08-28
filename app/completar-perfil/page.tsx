@@ -90,6 +90,17 @@ function CompletarPerfilForm() {
   const [error, setError] = useState('');
   const [enviando, setEnviando] = useState(false);
 
+  // Cuando aparece un error de validación, lo llevamos a la vista y le damos foco
+  // en vez de dejar que pase desapercibido arriba del formulario mientras la
+  // persona ya scrolleó hasta el botón de submit.
+  const errorRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (error) {
+      errorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      errorRef.current?.focus({ preventScroll: true });
+    }
+  }, [error]);
+
   const [password, setPassword] = useState('');
   const [confirmar, setConfirmar] = useState('');
   const [perfil, setPerfil] = useState({ tipo_documento: 'cedula', documento_identidad: '', fecha_nacimiento: '' });
@@ -223,8 +234,11 @@ function CompletarPerfilForm() {
 
   const inputCls = "w-full border border-border rounded-xl px-4 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40";
   const clsCampo = (campo: CampoIA) => `${inputCls} ${camposIA.has(campo) ? 'border-accent/50 bg-accent-light/40' : ''}`;
+  // En su propia línea (no pegada al texto de la etiqueta): el campo siempre baja
+  // un renglón completo para darle espacio al aviso, en vez de arriesgarse a que la
+  // etiqueta envuelva a la mitad y quede apretada contra el campo.
   const marcaIA = (campo: CampoIA) => camposIA.has(campo) ? (
-    <span className="ml-1.5 inline-flex items-center gap-1 text-[10px] font-semibold text-accent normal-case tracking-normal">
+    <span className="flex items-center gap-1 text-[10px] font-semibold text-accent normal-case tracking-normal mt-0.5">
       <IconCheck size={10} /> de tu foto
     </span>
   ) : null;
@@ -252,7 +266,8 @@ function CompletarPerfilForm() {
           </p>
 
           {error && (
-            <div className="bg-danger/10 text-danger px-4 py-2.5 rounded-xl mb-4 text-sm border border-danger/25">
+            <div ref={errorRef} tabIndex={-1} role="alert"
+              className="bg-danger/10 text-danger px-4 py-2.5 rounded-xl mb-4 text-sm border border-danger/25 focus:outline-none">
               {error}
             </div>
           )}
@@ -283,6 +298,8 @@ function CompletarPerfilForm() {
                 </span>
               </label>
 
+              {/* A propósito SIN `capture`: con solo accept="image/*" el navegador móvil
+                  ofrece cámara y galería/archivo — forzar `capture` ocultaría esa opción. */}
               <input ref={inputRef} type="file" accept="image/*" className="hidden"
                 onChange={e => { const f = e.target.files?.[0]; if (f) leerDocumento(f); }} />
 
@@ -361,9 +378,6 @@ function CompletarPerfilForm() {
               <input type="date" required max={maxNacimiento}
                 className={clsCampo('fecha_nacimiento')} value={perfil.fecha_nacimiento}
                 onChange={e => { desmarcarCampo('fecha_nacimiento'); setPerfil(f => ({ ...f, fecha_nacimiento: e.target.value })); }} />
-              {perfil.fecha_nacimiento && (
-                <p className="text-[11px] text-ink/50 mt-1">{calcularEdad(perfil.fecha_nacimiento)} años</p>
-              )}
             </div>
 
             <button type="submit" disabled={enviando}

@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import FotoUpload from '@/components/FotoUpload';
@@ -129,6 +129,18 @@ export default function DashboardPropietario() {
   const [diasDisponibles, setDiasDisponibles] = useState<string[]>([]);
   const [msg, setMsg] = useState('');
   const [publicando, setPublicando] = useState(false);
+  // El formulario de "Publicar nuevo vehículo" es largo (marca, modelo, año, placa,
+  // categoría, valor comercial, descripción); un error de validación arriba del
+  // todo pasa desapercibido cuando la persona ya scrolleó hasta el botón "Publicar
+  // y completar perfil". Lo llevamos a la vista y le damos foco en vez de mover el
+  // aviso lejos de donde ya está (junto al título del formulario).
+  const msgRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (msg) {
+      msgRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      msgRef.current?.focus({ preventScroll: true });
+    }
+  }, [msg]);
 
   // Atajo opcional: leer marca/modelo/año/placa/tipo de la tarjeta de propiedad
   // con IA, para no tener que escribirlos a mano. Siempre opcional — el
@@ -1011,7 +1023,8 @@ export default function DashboardPropietario() {
             Solo se requiere información básica. Podrás agregar fotos, disponibilidad y documentos luego.
           </p>
           {msg && (
-            <div className={`text-sm px-4 py-2.5 rounded-xl mb-4 border ${
+            <div ref={msgRef} tabIndex={-1} role="alert"
+              className={`text-sm px-4 py-2.5 rounded-xl mb-4 border focus:outline-none ${
               msg.startsWith('✅') ? 'bg-success/10 text-success border-success/30' : 'bg-danger/10 text-danger border-danger/25'
             }`}>{msg}</div>
           )}
