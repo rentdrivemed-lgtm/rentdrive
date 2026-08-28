@@ -1,8 +1,11 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { IconArrowL, IconArrowR } from '@/components/Icons';
-import { diasPicoYPlaca } from '@/lib/picoYPlaca';
+import { DIAS_SEMANA, fechaISOLocal as isoDate, picoPlacaVacio, placaRestringida, ultimoDigitoPlaca, type PicoPlaca } from '@/lib/pico-placa';
 import { useLang } from '@/contexts/LanguageContext';
+
+// Nombres de días en inglés, en el mismo orden/índices que DIAS_SEMANA (id '1'..'5' = Lun..Vie).
+const DIA_NOMBRE_EN: Record<string, string> = { '1': 'Monday', '2': 'Tuesday', '3': 'Wednesday', '4': 'Thursday', '5': 'Friday' };
 
 type Props = {
   /** Días marcados disponibles por el propietario. Vacío = cualquier día futuro. */
@@ -27,6 +30,7 @@ const T = {
     ant: 'Ant.', sig: 'Sig.', limpiar: 'Limpiar',
     tocaRecogida: 'Toca el día de recogida.', tocaDevolucion: 'Ahora toca el día de devolución.', rangoOk: 'Rango seleccionado ✓',
     leyendaSel: 'Selección', leyendaDisp: 'Disponible', leyendaOcup: 'Ocupado', leyendaPico: 'Pico y placa',
+    placaTermina: 'Placa termina en', picoPlacaDia: 'pico y placa:', sinRestriccion: 'sin restricción de pico y placa',
   },
   en: {
     dias: ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'], locale: 'en-US',
@@ -36,12 +40,9 @@ const T = {
     ant: 'Prev', sig: 'Next', limpiar: 'Clear',
     tocaRecogida: 'Tap the pickup day.', tocaDevolucion: 'Now tap the return day.', rangoOk: 'Range selected ✓',
     leyendaSel: 'Selected', leyendaDisp: 'Available', leyendaOcup: 'Booked', leyendaPico: 'Plate restriction',
+    placaTermina: 'Plate ends in', picoPlacaDia: 'restricted day:', sinRestriccion: 'no plate restriction',
   },
 };
-
-function isoDate(d: Date) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
 
 export default function CalendarioReserva({
   availableDates, reservedDates, placa, inicio, fin, onChange, disabled,
@@ -51,9 +52,29 @@ export default function CalendarioReserva({
   const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
   const [base, setBase] = useState(() => new Date(hoy.getFullYear(), hoy.getMonth(), 1));
   const [aviso, setAviso] = useState('');
+  const [pp, setPp] = useState<PicoPlaca>(picoPlacaVacio());
+
+  useEffect(() => {
+    let cancelado = false;
+    fetch('/api/pico-placa')
+      .then(r => (r.ok ? r.json() : null))
+      .then((data: Partial<PicoPlaca> | null) => {
+        if (cancelado || !data) return;
+        setPp({ activo: !!data.activo, vigencia: data.vigencia ?? '', dias: data.dias ?? {} });
+      })
+      .catch(() => { /* si falla, no se marca ningún día — el calendario sigue funcionando */ });
+    return () => { cancelado = true; };
+  }, []);
 
   const reservedSet = new Set(reservedDates || []);
   const availSet = availableDates && availableDates.length > 0 ? new Set(availableDates) : null;
+
+  // Último dígito de la placa y, bajo la config vigente, el/los día(s) de la semana en
+  // que está restringido (vacío si pico y placa está desactivado o no aplica al dígito).
+  const digitoPlaca = placa ? ultimoDigitoPlaca(placa) : null;
+  const diasRestriccionPlaca = digitoPlaca !== null && pp.activo
+    ? DIAS_SEMANA.filter(d => (pp.dias[d.id] ?? []).includes(digitoPlaca)).map(d => (lang === 'en' ? DIA_NOMBRE_EN[d.id] : d.nombre))
+    : [];
 
   const seleccionable = (fecha: Date, str: string) => {
     if (disabled) return false;
@@ -95,7 +116,13 @@ export default function CalendarioReserva({
     const totalDias = new Date(año, mes + 1, 0).getDate();
     const offset = (new Date(año, mes, 1).getDay() + 6) % 7;
     const nombreMes = primerDia.toLocaleDateString(c.locale, { month: 'long', year: 'numeric' });
-    const picoSet = new Set(placa ? diasPicoYPlaca(placa, año, mes) : []);
+    const picoSet = new Set<string>();
+    if (placa) {
+      for (let i = 1; i <= totalDias; i++) {
+        const d = new Date(año, mes, i);
+        if (placaRestringida(pp, placa, d)) picoSet.add(isoDate(d));
+      }
+    }
     const celdas: (Date | null)[] = [
       ...Array(offset).fill(null),
       ...Array.from({ length: totalDias }, (_, i) => new Date(año, mes, i + 1)),
@@ -156,6 +183,14 @@ export default function CalendarioReserva({
 
   return (
     <div>
+      {placa && digitoPlaca !== null && (
+        <p className="text-xs text-ink/60 mb-2">
+          {c.placaTermina} <span className="font-semibold text-ink">{digitoPlaca}</span>
+          {diasRestriccionPlaca.length > 0
+            ? <> — {c.picoPlacaDia} <span className="font-semibold text-accent">{diasRestriccionPlaca.join(lang === 'en' ? ' and ' : ' y ')}</span></>
+            : <> — {c.sinRestriccion}</>}
+        </p>
+      )}
       <div className="flex justify-between items-center mb-2">
         <button type="button" onClick={() => setBase(new Date(base.getFullYear(), base.getMonth() - 1, 1))}
           disabled={base <= new Date(hoy.getFullYear(), hoy.getMonth(), 1)}

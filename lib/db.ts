@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import bcrypt from 'bcryptjs';
+import { setConfig } from './operaciones';
 
 const DB_PATH = process.env.NODE_ENV === 'production'
   ? '/app/data/rentdrive.db'
@@ -565,6 +566,7 @@ function initDb(db: Database.Database) {
   try { db.exec("ALTER TABLE cotizaciones ADD COLUMN fecha_fin TEXT DEFAULT ''"); } catch { /* ya existe */ }
   migrarCotizacionesReservaOpcional(db);
   migrarUsuariosEstadoArchivada(db);
+  migrarPicoPlacaActivar(db);
 
   const adminExists = db.prepare("SELECT id FROM usuarios WHERE rol='admin' LIMIT 1").get();
   if (!adminExists) {
@@ -767,5 +769,27 @@ function migrarUsuariosEstadoArchivada(db: Database.Database) {
     console.error('[db] Migración usuarios.estado_cuenta archivada falló:', e instanceof Error ? e.message : e);
   } finally {
     if (fkEstabaActivo) db.pragma('foreign_keys = ON');
+  }
+}
+
+// Activa la config de pico y placa (Medellín, particulares) con la rotación vigente del
+// 3 de agosto al 31 de diciembre de 2026. SOLO siembra si la clave 'pico_placa' está vacía/
+// sin configurar todavía, para no pisar un ajuste que Victor ya haya hecho a mano desde el
+// panel admin (PicoPlacaConfig / PUT /api/config). Idempotente: en arranques siguientes,
+// como la clave ya tiene valor, esta función es un no-op.
+function migrarPicoPlacaActivar(db: Database.Database) {
+  try {
+    const row = db.prepare('SELECT valor FROM config WHERE clave = ?').get('pico_placa') as { valor: string } | undefined;
+    if (row && row.valor && row.valor.trim() !== '') return; // ya configurado (a mano o por esta migración antes)
+
+    const valor = JSON.stringify({
+      activo: true,
+      vigencia: '3 de agosto - 31 de diciembre de 2026',
+      dias: { '1': [5, 8], '2': [1, 4], '3': [0, 2], '4': [3, 6], '5': [7, 9] },
+    });
+    setConfig(db, 'pico_placa', valor);
+    console.log('[db] Migración: pico y placa Medellín activado (rotación 2° semestre 2026).');
+  } catch (e) {
+    console.error('[db] Migración pico_placa activar falló:', e instanceof Error ? e.message : e);
   }
 }
