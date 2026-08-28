@@ -882,12 +882,20 @@ export default function DashboardAdmin() {
           <h1 className="text-3xl sm:text-4xl font-bold text-ink tracking-[-0.02em]">Panel Administrador</h1>
           <p className="text-ink-soft mt-1.5">Gestión total del sistema DrivePass</p>
         </div>
-        <a href="/control" target="_blank" rel="noopener"
-          className="glow-accent inline-flex items-center gap-2 text-white font-semibold text-sm px-5 h-11 rounded-xl transition hover:-translate-y-0.5"
-          style={{ background: 'var(--gradient-accent)' }}>
-          🎛️ Panel de control interno
-          <span className="text-[10px] opacity-80">↗</span>
-        </a>
+        <div className="flex items-center gap-2 flex-wrap">
+          <a href="https://accounts.zoho.com/signin?service_language=es&servicename=VirtualOffice&signupurl=https://www.zoho.com/mail/signup.html&serviceurl=https://mail.zoho.com"
+            target="_blank" rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 text-ink font-semibold text-sm px-5 h-11 rounded-xl border border-border bg-surface-2 transition hover:bg-surface hover:-translate-y-0.5">
+            ✉️ Correo (Zoho)
+            <span className="text-[10px] opacity-60">↗</span>
+          </a>
+          <a href="/control" target="_blank" rel="noopener"
+            className="glow-accent inline-flex items-center gap-2 text-white font-semibold text-sm px-5 h-11 rounded-xl transition hover:-translate-y-0.5"
+            style={{ background: 'var(--gradient-accent)' }}>
+            🎛️ Panel de control interno
+            <span className="text-[10px] opacity-80">↗</span>
+          </a>
+        </div>
       </div>
 
       {/* Stats (StatCards del Design System) */}
