@@ -83,17 +83,24 @@ export async function POST(req: NextRequest) {
     if (porCorreo) {
       const bloqueo = accesoGoogleBloqueado(porCorreo);
       if (bloqueo) return bloqueo;
-      db.prepare('UPDATE usuarios SET google_id = ? WHERE id = ?').run(googleId, porCorreo.id);
-      user = { ...porCorreo, google_id: googleId };
+      // Google ya verificó `correo` de forma independiente (chequeado arriba con
+      // `payload.email_verified !== true`), así que vincular la cuenta también
+      // cierra cualquier verificación de correo pendiente que tuviera — no tiene
+      // sentido pedirle un código OTP a alguien cuyo dueño del correo ya probó
+      // serlo vía OAuth. Ver lib/verificacion-correo.ts.
+      db.prepare('UPDATE usuarios SET google_id = ?, correo_verificado = 1 WHERE id = ?').run(googleId, porCorreo.id);
+      user = { ...porCorreo, google_id: googleId, correo_verificado: 1 };
     }
   }
 
   if (!user) {
     esNuevo = true;
     const rolFinal = rol === 'propietario' ? 'propietario' : 'usuario';
+    // correo_verificado = 1 directo: Google ya lo verificó (email_verified === true,
+    // chequeado arriba), así que no se le pide un código adicional. Ver lib/verificacion-correo.ts.
     const result = db.prepare(`
-      INSERT INTO usuarios (nombre, correo, password, rol, google_id)
-      VALUES (?, ?, '', ?, ?)
+      INSERT INTO usuarios (nombre, correo, password, rol, google_id, correo_verificado)
+      VALUES (?, ?, '', ?, ?, 1)
     `).run(nombre, correo, rolFinal, googleId);
     user = db.prepare('SELECT * FROM usuarios WHERE id = ?').get(result.lastInsertRowid) as Record<string, unknown>;
 

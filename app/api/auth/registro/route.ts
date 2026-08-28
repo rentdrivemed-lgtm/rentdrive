@@ -5,7 +5,17 @@ import { enviarCorreo } from '@/lib/email';
 import { validarCelular, validarDocumentoIdentidad, PAIS_TEL_DEFAULT } from '@/lib/validacion';
 import { asignarCodigoReferido, vincularReferido } from '@/lib/referidos';
 import { bloqueadoPorCsrf } from '@/lib/csrf';
+import { consumirIntento, ipCliente } from '@/lib/limite-tasa';
+import { generarCodigoCorreo, expiraEnMinutos, CODIGO_VIGENCIA_MIN } from '@/lib/verificacion-correo';
 import bcrypt from 'bcryptjs';
+
+// Límite por IP: crear cuentas es gratis para quien registra pero NO para quien
+// recibe el correo de bienvenida/verificación de forma no solicitada (spam,
+// costo y reputación del dominio en Resend). 5/hora por IP es generoso para un
+// uso legítimo (una familia, una oficina) y corta el registro masivo con
+// correos ajenos. Mismo patrón que app/api/registro/extraer-documento.
+const IP_MAX_REGISTROS = 5;
+const IP_VENTANA_MS = 60 * 60 * 1000; // 1 hora
 
 function calcularEdad(fechaNac: string): number {
   if (!fechaNac) return 0;
@@ -21,6 +31,14 @@ function calcularEdad(fechaNac: string): number {
 export async function POST(req: NextRequest) {
   const csrfError = bloqueadoPorCsrf(req);
   if (csrfError) return csrfError;
+
+  const espera = consumirIntento(`registro:${ipCliente(req)}`, IP_MAX_REGISTROS, IP_VENTANA_MS);
+  if (espera !== null) {
+    return NextResponse.json(
+      { error: `Demasiados registros seguidos desde tu conexión. Intenta de nuevo en ${Math.ceil(espera / 60)} minuto(s).` },
+      { status: 429 },
+    );
+  }
 
   // Registro corto a propósito: aquí solo se piden los datos indispensables para
   // crear la cuenta. La dirección, la ciudad y el contacto de emergencia se piden
@@ -60,6 +78,13 @@ export async function POST(req: NextRequest) {
 
   const hash = bcrypt.hashSync(password, 10);
 
+  // Código de verificación de correo (activación de cuenta) — se genera y guarda
+  // ya en el INSERT, igual que leads_propietarios lo hace en su propio POST.
+  // Ver lib/verificacion-correo.ts.
+  const codigoCorreo = generarCodigoCorreo();
+  const ahora = new Date();
+  const codigoExpira = expiraEnMinutos(CODIGO_VIGENCIA_MIN, ahora);
+
   // direccion, ciudad y contacto_emergencia quedan vacíos a propósito: el flujo de
   // reserva los detecta vacíos y los pide ahí. Ojo si alguien piensa en poner
   // 'Medellín' por defecto en ciudad — eso haría que nunca se le pregunte.
@@ -67,8 +92,9 @@ export async function POST(req: NextRequest) {
     INSERT INTO usuarios
       (nombre, correo, password, rol,
        tipo_documento, documento_identidad, fecha_nacimiento,
-       celular, celular_indicativo, direccion, ciudad, numero_licencia, contacto_emergencia)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       celular, celular_indicativo, direccion, ciudad, numero_licencia, contacto_emergencia,
+       correo_verificado, correo_codigo, correo_codigo_expira, correo_codigo_generado_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
   `).run(
     nombre, correo, hash, rolFinal,
     tipo_documento || 'cedula',
@@ -80,6 +106,7 @@ export async function POST(req: NextRequest) {
     '',
     numero_licencia || '',
     '{}',
+    codigoCorreo, codigoExpira, ahora.toISOString(),
   );
 
   const nuevoId = Number(result.lastInsertRowid);
@@ -97,16 +124,26 @@ export async function POST(req: NextRequest) {
     console.error('[registro] No se pudo procesar el código de referido:', e instanceof Error ? e.message : e);
   }
 
+  // El correo de bienvenida y el código de activación van en el mismo envío (evita
+  // mandar dos correos separados). El registro NUNCA se bloquea si el envío falla —
+  // igual que leads-propietarios, si `enviarCorreo` no está configurado (falta
+  // RESEND_API_KEY) el código queda en el log del servidor para poder seguir
+  // probando, y lib/verificacion-correo.ts (`correoNoVerificado`) desactiva el gate
+  // por completo mientras el envío real no esté disponible.
   try {
     const rolLabel = rolFinal === 'propietario' ? 'propietario' : 'usuario';
-    await enviarCorreo(correo, '¡Bienvenido a RentDrive!',
-      `Hola ${nombre.split(' ')[0]}, tu cuenta de ${rolLabel} en RentDrive quedó creada con este correo. ` +
+    const bienvenida = `Hola ${nombre.split(' ')[0]}, tu cuenta de ${rolLabel} en RentDrive quedó creada con este correo. ` +
       (rolFinal === 'propietario'
         ? 'Ya puedes publicar tu vehículo y empezar a generar ingresos.'
-        : 'Ya puedes buscar y reservar vehículos en Medellín.'));
+        : 'Ya puedes buscar y reservar vehículos en Medellín.');
+    const verificacion = `\n\nPara activar tu cuenta, verifica tu correo con este código: ${codigoCorreo}. Vence en ${CODIGO_VIGENCIA_MIN} minutos.`;
+    const envio = await enviarCorreo(correo, '¡Bienvenido a RentDrive! Verifica tu correo', bienvenida + verificacion);
+    if (!envio.enviado) {
+      console.log(`[registro] Código de verificación de correo para ${correo}: ${codigoCorreo} (envío real falló: ${envio.detalle})`);
+    }
   } catch (e) {
     // No bloquear el registro si el correo falla.
-    console.error('[registro] No se pudo enviar el correo de bienvenida:', e instanceof Error ? e.message : e);
+    console.error('[registro] No se pudo enviar el correo de bienvenida/verificación:', e instanceof Error ? e.message : e);
   }
 
   const token = signToken(payload);

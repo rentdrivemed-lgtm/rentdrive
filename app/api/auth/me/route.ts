@@ -3,6 +3,7 @@ import { getCurrentUser } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { validarCelular, validarDireccion, validarDocumentoIdentidad, validarNombreContacto, validarTelefonoContacto } from '@/lib/validacion';
 import { referidoHabilitado } from '@/lib/referidos';
+import { correoNoVerificado } from '@/lib/verificacion-correo';
 
 // contacto_emergencia se devuelve para que el flujo de reserva sepa si ya lo
 // tiene guardado y no se lo vuelva a pedir. También se puede editar desde acá
@@ -14,7 +15,7 @@ import { referidoHabilitado } from '@/lib/referidos';
 // contraseña en sí) se agregaron para que el frontend detecte perfiles
 // incompletos de cuentas creadas por Google (ver app/api/auth/completar-perfil
 // y lib/perfil.ts, que es la autoridad real del lado servidor).
-const CAMPOS_SELECT = "tipo_documento, documento_identidad, fecha_nacimiento, celular, celular_indicativo, direccion, ciudad, contacto_emergencia, cedula_url, cedula_url_dorso, banco, numero_cuenta, certificado_bancario_url, codigo_referido, creditos_referido, admin_nivel, permisos_extra, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END AS password_configurada";
+const CAMPOS_SELECT = "tipo_documento, documento_identidad, fecha_nacimiento, celular, celular_indicativo, direccion, ciudad, contacto_emergencia, cedula_url, cedula_url_dorso, banco, numero_cuenta, certificado_bancario_url, codigo_referido, creditos_referido, admin_nivel, permisos_extra, correo_verificado, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END AS password_configurada";
 
 export async function GET() {
   const user = await getCurrentUser();
@@ -26,8 +27,14 @@ export async function GET() {
 
   const perfilCompleto = !!fila?.password_configurada && !!fila?.tipo_documento && !!fila?.documento_identidad && !!fila?.fecha_nacimiento;
 
+  // `correo_pendiente` reusa la MISMA función que gatea POST /api/reservas y
+  // POST /api/vehiculos (lib/verificacion-correo.ts): así el cliente nunca puede
+  // quedar desincronizado con lo que el servidor realmente exige (incluye el
+  // kill switch de emailHabilitado()===false, que desactiva el gate por completo).
+  const correoPendiente = correoNoVerificado(user.id);
+
   return NextResponse.json({
-    user: { ...user, ...(fila || {}), perfil_completo: perfilCompleto, referido_habilitado: referidoHabilitado(db) },
+    user: { ...user, ...(fila || {}), perfil_completo: perfilCompleto, correo_pendiente: correoPendiente, referido_habilitado: referidoHabilitado(db) },
   });
 }
 

@@ -1,3 +1,4 @@
+import { randomInt } from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { enviarCorreo } from '@/lib/email';
@@ -9,7 +10,9 @@ const COOLDOWN_SEGUNDOS = 30;
 type LeadRow = { id: number; nombre: string; correo: string; celular: string; canal_verificacion: string; codigo_generado_at: string; verificado: number };
 
 function generarCodigo(): string {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  // crypto.randomInt (CSPRNG) en vez de Math.random(), mismo criterio que
+  // lib/verificacion-correo.ts (generarCodigoCorreo).
+  return String(randomInt(100000, 1000000));
 }
 
 export async function POST(req: NextRequest) {
