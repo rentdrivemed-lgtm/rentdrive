@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import bcrypt from 'bcryptjs';
 import { getConfig, setConfig } from './operaciones';
+import { normalizarUrlFoto } from './moderacion';
 
 const DB_PATH = process.env.NODE_ENV === 'production'
   ? '/app/data/rentdrive.db'
@@ -465,6 +466,26 @@ function initDb(db: Database.Database) {
       created_at      TEXT DEFAULT (datetime('now', 'localtime')),
       updated_at      TEXT DEFAULT (datetime('now', 'localtime'))
     );
+
+    -- Moderación de contenido (lib/moderacion.ts) — modelo ALLOW-LIST: registro
+    -- server-side de TODA foto subida por POST /api/upload (no solo las marcadas),
+    -- con el resultado de la IA (misma llamada que detecta la placa, ver
+    -- lib/blur-placas.ts) y quién la subió. POST/PUT /api/vehiculos exige que cada
+    -- URL nueva en fotos/fotos_detalle tenga un registro aquí perteneciente al
+    -- usuario autenticado — así una URL externa inventada, o una que nunca pasó por
+    -- /api/upload, se rechaza en vez de aceptarse por defecto. url_normalizada es
+    -- la clave real de cruce (minúsculas/sin query/sin trailing slash, ver
+    -- normalizarUrlFoto) para que el chequeo no sea evadible con variaciones
+    -- triviales de la misma URL.
+    CREATE TABLE IF NOT EXISTS fotos_moderacion (
+      id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+      url                    TEXT UNIQUE NOT NULL,
+      url_normalizada        TEXT DEFAULT '',
+      usuario_id             INTEGER REFERENCES usuarios(id),
+      contenido_inapropiado  INTEGER DEFAULT 0,
+      motivo                 TEXT DEFAULT '',
+      created_at             TEXT DEFAULT (datetime('now', 'localtime'))
+    );
   `);
 
   try { db.exec("ALTER TABLE liquidaciones ADD COLUMN comprobante_url TEXT DEFAULT ''"); } catch { /* ya existe */ }
@@ -501,6 +522,21 @@ function initDb(db: Database.Database) {
   // pudo borrar de verdad al "eliminarlo" — se ocultó de listados públicos/admin pero se conserva
   // íntegro y es reversible. Ver lib/eliminar.ts.
   try { db.exec("ALTER TABLE vehiculos ADD COLUMN archivado INTEGER DEFAULT 0"); } catch { /* ya existe */ }
+  // Moderación de contenido de fotos (distinto de `disponible`, que es el toggle operativo
+  // del propietario/admin, y distinto de `archivado`): 1 = alguna de las fotos del vehículo
+  // fue marcada por la IA como posible contenido sexual/explícito al subirla — el vehículo
+  // NO se lista públicamente (GET /api/vehiculos lo excluye igual que archivado) hasta que
+  // el equipo lo revise a mano y lo apruebe (PUT { contenido_revision: 0 }). Ver lib/moderacion.ts.
+  try { db.exec("ALTER TABLE vehiculos ADD COLUMN contenido_revision INTEGER DEFAULT 0"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE vehiculos ADD COLUMN contenido_revision_motivo TEXT DEFAULT ''"); } catch { /* ya existe */ }
+
+  // fotos_moderacion — pasó de "solo registrar fotos sospechosas" a un modelo allow-list
+  // (registrar TODA foto subida, ver lib/moderacion.ts). Columnas nuevas para bases ya
+  // existentes (una base creada desde cero ya las trae en el CREATE TABLE de arriba).
+  try { db.exec("ALTER TABLE fotos_moderacion ADD COLUMN url_normalizada TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE fotos_moderacion ADD COLUMN usuario_id INTEGER REFERENCES usuarios(id)"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE fotos_moderacion ADD COLUMN contenido_inapropiado INTEGER DEFAULT 0"); } catch { /* ya existe */ }
+  migrarFotosModeracionNormalizada(db);
 
   try { db.exec("ALTER TABLE usuarios ADD COLUMN celular TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE usuarios ADD COLUMN tipo_documento TEXT DEFAULT 'cedula'"); } catch { /* ya existe */ }
@@ -824,6 +860,29 @@ function migrarPicoPlacaActivar(db: Database.Database) {
     setConfig(db, 'pico_placa_seed_v1', '1'); // marca esta corrección como hecha para siempre, pase lo que pase después
   } catch (e) {
     console.error('[db] Migración pico_placa activar falló:', e instanceof Error ? e.message : e);
+  }
+}
+
+// Backfill de `fotos_moderacion.url_normalizada` para filas creadas ANTES del modelo
+// allow-list (ver lib/moderacion.ts): esas filas solo tenían `url` (raw) y, por venir
+// todas del flujo viejo (que únicamente registraba fotos ya marcadas como sospechosas),
+// también se marcan como `contenido_inapropiado = 1` — no había forma de que una fila
+// vieja existiera sin haber sido sospechosa. Corre en cada arranque pero es un no-op
+// para filas ya migradas (url_normalizada no vacía), así que es seguro repetirlo.
+function migrarFotosModeracionNormalizada(db: Database.Database) {
+  try {
+    const pendientes = db.prepare(
+      "SELECT id, url FROM fotos_moderacion WHERE url_normalizada IS NULL OR url_normalizada = ''"
+    ).all() as { id: number; url: string }[];
+    if (pendientes.length === 0) return;
+    const upd = db.prepare('UPDATE fotos_moderacion SET url_normalizada = ?, contenido_inapropiado = 1 WHERE id = ?');
+    for (const fila of pendientes) {
+      const normalizada = normalizarUrlFoto(fila.url);
+      if (normalizada) upd.run(normalizada, fila.id);
+    }
+    console.log(`[db] Migración: ${pendientes.length} fila(s) de fotos_moderacion con url_normalizada backfilleada.`);
+  } catch (e) {
+    console.error('[db] Migración fotos_moderacion.url_normalizada falló:', e instanceof Error ? e.message : e);
   }
 }
 

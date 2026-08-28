@@ -7,6 +7,7 @@ import { precioMercadoSugerido, segmentoValido } from '@/lib/precioMercado';
 import { adminTieneArea, sinPermisoArea } from '@/lib/guard';
 import { perfilIncompleto, CODIGO_PERFIL_INCOMPLETO } from '@/lib/perfil';
 import { correoNoVerificado, CODIGO_CORREO_NO_VERIFICADO } from '@/lib/verificacion-correo';
+import { contieneLenguajeInapropiado, extraerUrlsFotos, fotosRegistradasEntre, normalizarUrlFoto } from '@/lib/moderacion';
 
 function datesInRange(start: string, end: string): string[] {
   const dates: string[] = [];
@@ -30,10 +31,14 @@ export async function GET(req: NextRequest) {
   const fechaFin     = searchParams.get('fechaFin');
   const vitrina      = searchParams.get('vitrina');
   const archivados   = searchParams.get('archivados') === '1';
+  // Cola de revisión de moderación de contenido (ver lib/moderacion.ts): igual que
+  // `archivados=1`, exclusiva del admin con la sección "vehiculos".
+  const revisionContenido = searchParams.get('revisionContenido') === '1';
 
-  // Vista de archivados: exclusiva del admin con la sección "vehiculos" (ver lib/eliminar.ts).
-  // Esta ruta es pública para el resto de casos, así que aquí sí hay que exigir sesión + permiso.
-  if (archivados) {
+  // Vista de archivados / en revisión de contenido: exclusiva del admin con la sección
+  // "vehiculos" (ver lib/eliminar.ts). Esta ruta es pública para el resto de casos, así
+  // que aquí sí hay que exigir sesión + permiso.
+  if (archivados || revisionContenido) {
     const user = await getCurrentUser();
     if (!user || user.rol !== 'admin' || !adminTieneArea(db, user.id, 'vehiculos')) return sinPermisoArea();
   }
@@ -48,6 +53,8 @@ export async function GET(req: NextRequest) {
 
   if (archivados) {
     query += ' AND v.archivado = 1';
+  } else if (revisionContenido) {
+    query += ' AND v.archivado = 0 AND v.contenido_revision = 1';
   } else {
     // Un vehículo archivado (tenía historial de negocio real al "eliminarlo") nunca debe
     // aparecer en ningún listado normal: ni público, ni panel de administración, ni el
@@ -59,10 +66,30 @@ export async function GET(req: NextRequest) {
   if (ubicacion)    { query += ' AND v.ubicacion LIKE ?';    params.push(`%${ubicacion}%`); }
   if (precioMax)    { query += ' AND v.precio_dia <= ?';     params.push(Number(precioMax)); }
   if (propietarioId){ query += ' AND v.propietario_id = ?';  params.push(Number(propietarioId)); }
-  if (!archivados) {
-    if (vitrina)      { query += ' AND v.en_vitrina = 1';      query += ' AND v.disponible = 1'; }
-    // Listado público: ocultar vehículos inactivos. El propietario sí ve los suyos (filtra por propietarioId).
-    else if (!propietarioId) query += ' AND v.disponible = 1';
+  if (!archivados && !revisionContenido) {
+    if (vitrina) {
+      query += ' AND v.en_vitrina = 1';
+      query += ' AND v.disponible = 1 AND v.contenido_revision = 0';
+    } else if (propietarioId) {
+      // Filtro por propietarioId: el propio dueño autenticado (o un admin con la sección
+      // "vehiculos") puede ver TODOS sus vehículos, incluidos los no disponibles o
+      // marcados en revisión de contenido — para saber que están pendientes. Cualquier
+      // otro visitante (sin sesión, o con sesión de otro usuario que no sea admin) solo
+      // debe ver lo mismo que ve el listado público — mismo criterio que ya aplica
+      // GET /api/vehiculos/[id] para el detalle de un vehículo en revisión.
+      let puedeVerTodos = false;
+      const user = await getCurrentUser();
+      if (user) {
+        const esDueño = user.id === Number(propietarioId);
+        const esAdminConPermiso = user.rol === 'admin' && adminTieneArea(db, user.id, 'vehiculos');
+        puedeVerTodos = esDueño || esAdminConPermiso;
+      }
+      if (!puedeVerTodos) query += ' AND v.disponible = 1 AND v.contenido_revision = 0';
+    } else {
+      // Listado público (sin propietarioId): ocultar vehículos inactivos o marcados en
+      // revisión de contenido.
+      query += ' AND v.disponible = 1 AND v.contenido_revision = 0';
+    }
   }
 
   let vehiculos = db.prepare(query).all(...params) as Record<string, unknown>[];
@@ -134,6 +161,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Faltan datos requeridos' }, { status: 400 });
   }
 
+  // Filtro de lenguaje inapropiado en la descripción (texto libre público). Se rechaza el
+  // request de una — más simple y mejor UX que mandarlo a revisión manual silenciosa (a
+  // diferencia de las fotos, que son ambiguas para un humano sin mirar; una palabra soez es
+  // inequívoca y el propietario puede corregirla al toque). Ver lib/moderacion.ts.
+  const chequeoTexto = contieneLenguajeInapropiado(descripcion);
+  if (chequeoTexto.encontrado) {
+    return NextResponse.json(
+      { error: 'Tu descripción contiene lenguaje inapropiado, por favor corrígela.' },
+      { status: 400 },
+    );
+  }
+
   // Precio automático de mercado: se deriva de la categoría + valor comercial (lib/precioMercado.ts).
   // El propietario no fija el precio a mano; se calcula solo. Si no dan valor comercial, queda 0
   // ("precio por asignar") y el equipo lo completa después.
@@ -143,11 +182,35 @@ export async function POST(req: NextRequest) {
   const precioAuto = precioMercadoSugerido(segmento, valorComercial, ajuste);
 
   const db = getDb();
+
+  // Moderación de contenido de fotos — modelo ALLOW-LIST (ver lib/moderacion.ts): cada
+  // URL en fotos/fotos_detalle debe tener un registro server-side de haber pasado por
+  // /api/upload, perteneciente a ESTE propietario. Si alguna URL no tiene registro (nunca
+  // pasó por /api/upload — p. ej. una URL externa inventada a mano) o pertenece a otro
+  // usuario, se rechaza el request completo. Esto es lo que cierra el hueco de evasión:
+  // antes solo se cruzaban las fotos marcadas como sospechosas, así que cualquier URL sin
+  // registro (incluida una externa) simplemente pasaba sin ningún chequeo.
+  const urlsFotos = extraerUrlsFotos(fotos, fotos_detalle);
+  const registradas = fotosRegistradasEntre(db, urlsFotos);
+  for (const u of urlsFotos) {
+    const registro = registradas.get(normalizarUrlFoto(u));
+    if (!registro || registro.usuarioId !== user.id) {
+      return NextResponse.json(
+        { error: 'Una o más fotos no son válidas. Vuelve a subirlas desde este formulario e intenta de nuevo.' },
+        { status: 400 },
+      );
+    }
+  }
+  const fotosMarcadas = [...registradas.values()].filter(r => r.contenidoInapropiado);
+  const contenidoRevision = fotosMarcadas.length > 0 ? 1 : 0;
+  const contenidoRevisionMotivo = fotosMarcadas.map(f => f.motivo).filter(Boolean).join(' | ');
+
   const result = await db.prepare(`
     INSERT INTO vehiculos
       (propietario_id, marca, modelo, anio, tipo, ubicacion, precio_dia, descripcion,
-       fotos, fotos_detalle, dias_disponibles, placa, valor_comercial, precio_ajuste_pct, precio_manual)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+       fotos, fotos_detalle, dias_disponibles, placa, valor_comercial, precio_ajuste_pct, precio_manual,
+       contenido_revision, contenido_revision_motivo)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
   `).run(
     user.id, marca, modelo, anio,
     segmento, ubicacion || 'Medellín',
@@ -157,6 +220,7 @@ export async function POST(req: NextRequest) {
     dias_disponibles || '[]',
     (placa || '').toString().toUpperCase().trim(),
     valorComercial, ajuste,
+    contenidoRevision, contenidoRevisionMotivo,
   );
 
   try {

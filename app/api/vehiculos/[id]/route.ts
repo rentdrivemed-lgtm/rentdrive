@@ -5,6 +5,7 @@ import { adminTieneArea, sinPermisoArea } from '@/lib/guard';
 import { precioMercadoSugerido, segmentoValido } from '@/lib/precioMercado';
 import { eliminarVehiculoInteligente } from '@/lib/eliminar';
 import { registrarAuditoria } from '@/lib/permisos';
+import { contieneLenguajeInapropiado, extraerUrlsFotos, fotosRegistradasEntre, normalizarUrlFoto } from '@/lib/moderacion';
 
 const DOC_KEYS = ['soat', 'tecno', 'tarjeta', 'todo_riesgo'] as const;
 const DOC_LABELS: Record<string, string> = {
@@ -47,9 +48,25 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     SELECT v.*, u.nombre as propietario_nombre
     FROM vehiculos v JOIN usuarios u ON v.propietario_id = u.id
     WHERE v.id = ? AND v.archivado = 0
-  `).get(Number(id));
+  `).get(Number(id)) as Record<string, unknown> | undefined;
 
   if (!vehiculo) return NextResponse.json({ error: 'No encontrado' }, { status: 404 });
+
+  // Moderación de contenido (ver lib/moderacion.ts): un vehículo marcado en revisión de
+  // contenido (contenido_revision=1) tampoco debe ser visible/accesible por esta ruta
+  // pública — antes solo GET /api/vehiculos (el listado) lo excluía; esta ruta de detalle
+  // por id se podía seguir consultando directo aunque el vehículo no apareciera listado.
+  // Mismo criterio que `archivado`, pero el propietario dueño SÍ puede seguir viendo el
+  // detalle de su propio vehículo (para ver por qué está en revisión), igual que el admin
+  // con la sección "vehiculos".
+  if (Number(vehiculo.contenido_revision) === 1) {
+    const user = await getCurrentUser();
+    const esDueño = !!user && user.rol === 'propietario' && Number(vehiculo.propietario_id) === user.id;
+    const esAdminConPermiso = !!user && user.rol === 'admin' && adminTieneArea(db, user.id, 'vehiculos');
+    if (!esDueño && !esAdminConPermiso) {
+      return NextResponse.json({ error: 'No encontrado' }, { status: 404 });
+    }
+  }
 
   // Fechas ya ocupadas por reservas activas (rango inclusivo, igual que la verificación de conflictos del POST).
   const reservas = db.prepare(
@@ -84,6 +101,20 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   }
 
   const body = await req.json();
+
+  // Filtro de lenguaje inapropiado en la descripción (texto libre público). Igual criterio
+  // que POST /api/vehiculos: se rechaza el request completo con un mensaje claro en vez de
+  // mandarlo a revisión manual silenciosa. Aplica a ambos roles (propietario y admin) porque
+  // `descripcion` es un campo visible públicamente.
+  if (body.descripcion !== undefined) {
+    const chequeoTexto = contieneLenguajeInapropiado(body.descripcion);
+    if (chequeoTexto.encontrado) {
+      return NextResponse.json(
+        { error: 'Tu descripción contiene lenguaje inapropiado, por favor corrígela.' },
+        { status: 400 },
+      );
+    }
+  }
 
   // ── Admin: review individual document ──
   if (isAdmin && body.revisar_documento) {
@@ -137,7 +168,11 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   // `archivado`: solo el admin lo toca (ni siquiera el propietario dueño), y solo para
   // DESARCHIVAR (0) — la vía normal para ENTRAR a archivado es DELETE (eliminar inteligente,
   // ver más abajo), que decide solo cuándo corresponde según el historial real del vehículo.
-  const adminOnlyFields = ['documentos_estado', 'documentos_nota', 'en_vitrina', 'precio_manual', 'archivado'];
+  // `contenido_revision`/`contenido_revision_motivo`: solo el admin los toca a mano, y solo
+  // para APROBAR (contenido_revision: 0) tras revisar manualmente una publicación marcada.
+  // La vía normal para ENTRAR a revisión es automática (ver más abajo), no este campo directo.
+  const adminOnlyFields = ['documentos_estado', 'documentos_nota', 'en_vitrina', 'precio_manual', 'archivado',
+    'contenido_revision', 'contenido_revision_motivo'];
   const allowed = isAdmin ? [...ownFields, ...adminOnlyFields] : ownFields;
 
   if (isAdmin && body.archivado !== undefined) {
@@ -147,6 +182,13 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       detalle: `${Number(body.archivado) ? 'Archivó' : 'Desarchivó'} ${vehiculo.marca} ${vehiculo.modelo} ${vehiculo.anio}`,
     });
   }
+  if (isAdmin && body.contenido_revision !== undefined) {
+    registrarAuditoria(db, user, {
+      area: 'vehiculos', accion: Number(body.contenido_revision) ? 'marcar_revision_contenido' : 'aprobar_revision_contenido',
+      entidad: 'vehiculo', entidad_id: Number(id),
+      detalle: `${Number(body.contenido_revision) ? 'Marcó en revisión de contenido' : 'Aprobó tras revisión de contenido'} ${vehiculo.marca} ${vehiculo.modelo} ${vehiculo.anio}`,
+    });
+  }
 
   const pairs: string[] = [];
   const values: unknown[] = [];
@@ -154,6 +196,50 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     if (body[f] !== undefined) {
       pairs.push(`${f} = ?`);
       values.push(body[f]);
+    }
+  }
+
+  // Moderación de contenido de fotos — modelo ALLOW-LIST (ver lib/moderacion.ts): si esta
+  // actualización trae fotos, cada URL NUEVA (que el vehículo no tenía ya guardada antes
+  // de este request) debe tener un registro server-side de haber pasado por /api/upload,
+  // perteneciente al usuario que hace este request (propietario dueño o admin) — si no,
+  // se rechaza (URL externa inventada, o subida por otra persona). Las URLs que el
+  // vehículo YA tenía guardadas antes de este cambio se dejan pasar sin este chequeo de
+  // pertenencia (compatibilidad con fotos que ya existían antes de esta migración/feature
+  // y no tienen registro propio). Además, si alguna foto (nueva o ya existente) está
+  // marcada como contenido inapropiado, se fuerza contenido_revision=1 sin importar el
+  // rol (esto NO se puede omitir desde el cliente) — gana sobre lo que haya puesto el
+  // admin en el mismo request (si mandó contenido_revision:0 para aprobar pero una foto
+  // de ese mismo request sigue marcada, prevalece la marca de la IA, así que se
+  // sobreescribe el valor ya puesto por el loop genérico en vez de duplicar la columna).
+  if (body.fotos !== undefined || body.fotos_detalle !== undefined) {
+    const urlsFotos = extraerUrlsFotos(body.fotos, body.fotos_detalle);
+    const urlsExistentes = new Set(extraerUrlsFotos(vehiculo.fotos, vehiculo.fotos_detalle).map(normalizarUrlFoto));
+    const urlsNuevas = urlsFotos.filter(u => !urlsExistentes.has(normalizarUrlFoto(u)));
+
+    if (urlsNuevas.length > 0) {
+      const registradasNuevas = fotosRegistradasEntre(db, urlsNuevas);
+      for (const u of urlsNuevas) {
+        const registro = registradasNuevas.get(normalizarUrlFoto(u));
+        if (!registro || registro.usuarioId !== user.id) {
+          return NextResponse.json(
+            { error: 'Una o más fotos no son válidas. Vuelve a subirlas desde este formulario e intenta de nuevo.' },
+            { status: 400 },
+          );
+        }
+      }
+    }
+
+    const registradasTodas = fotosRegistradasEntre(db, urlsFotos);
+    const fotosMarcadas = [...registradasTodas.values()].filter(r => r.contenidoInapropiado);
+    if (fotosMarcadas.length > 0) {
+      const motivo = fotosMarcadas.map(f => f.motivo).filter(Boolean).join(' | ');
+      const idxRevision = pairs.indexOf('contenido_revision = ?');
+      if (idxRevision !== -1) values[idxRevision] = 1;
+      else { pairs.push('contenido_revision = ?'); values.push(1); }
+      const idxMotivo = pairs.indexOf('contenido_revision_motivo = ?');
+      if (idxMotivo !== -1) values[idxMotivo] = motivo;
+      else { pairs.push('contenido_revision_motivo = ?'); values.push(motivo); }
     }
   }
 
