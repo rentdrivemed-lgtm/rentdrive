@@ -518,6 +518,13 @@ export default function DashboardPropietario() {
       setTab('vehiculos');
     } else {
       const d = await res.json();
+      // El servidor exige correo verificado antes de publicar (cuenta pendiente
+      // de activación — ver lib/verificacion-correo.ts). Se manda a verificarlo
+      // en vez de solo mostrar el error genérico.
+      if ((d as { codigo?: string }).codigo === 'correo_no_verificado') {
+        router.push(`/verificar-correo?next=${encodeURIComponent('/dashboard/propietario')}`);
+        return;
+      }
       // El servidor exige perfil completo (contraseña + documento + fecha de
       // nacimiento) antes de publicar — típico de cuentas creadas por Google.
       // Se manda a completarlo en vez de solo mostrar el error genérico.

@@ -9,6 +9,7 @@ import { consumirCreditos } from '@/lib/referidos';
 import { MIN_NOCHES_RESERVA } from '@/lib/disponibilidad-reglas';
 import { validarDireccion, validarCiudad, validarNombreContacto, validarTelefonoContacto } from '@/lib/validacion';
 import { perfilIncompleto, CODIGO_PERFIL_INCOMPLETO } from '@/lib/perfil';
+import { correoNoVerificado, CODIGO_CORREO_NO_VERIFICADO } from '@/lib/verificacion-correo';
 
 export const dynamic = 'force-dynamic';
 
@@ -93,6 +94,17 @@ export async function POST(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user || user.rol !== 'usuario') {
     return NextResponse.json({ error: 'Solo usuarios pueden reservar' }, { status: 403 });
+  }
+
+  // Gate real (server-side) de correo verificado — cuenta pendiente de activación
+  // no puede reservar. Ver lib/verificacion-correo.ts (incluye el kill switch de
+  // emailHabilitado()===false, así que si el correo no está configurado hoy este
+  // gate no bloquea a nadie).
+  if (correoNoVerificado(user.id)) {
+    return NextResponse.json(
+      { error: 'Verifica tu correo antes de reservar un vehículo.', codigo: CODIGO_CORREO_NO_VERIFICADO },
+      { status: 403 },
+    );
   }
 
   // Gate real (server-side) de perfil completo — cierra el hueco que deja el login

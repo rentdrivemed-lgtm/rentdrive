@@ -48,14 +48,20 @@ export default function LoginPage() {
     const destino = tomarDestino();
     const destinoFinal = destino || (user.rol === 'admin' ? '/dashboard/admin' : user.rol === 'propietario' ? '/dashboard/propietario' : '/dashboard/usuario');
 
-    // ¿Perfil incompleto? (típicamente cuentas creadas por Google, sin contraseña
-    // ni documento/fecha de nacimiento). Si es así, se completa antes de seguir —
-    // pero solo bloquea reservar/publicar, no navegar, así que si algo falla acá
-    // seguimos con el flujo normal (el servidor igual lo bloquea al reservar/publicar).
+    // ¿Correo sin verificar? (cuenta creada con correo+contraseña, código de
+    // activación aún no confirmado — ver lib/verificacion-correo.ts). ¿Perfil
+    // incompleto? (típicamente cuentas creadas por Google, sin contraseña ni
+    // documento/fecha de nacimiento). Cualquiera de los dos bloquea solo
+    // reservar/publicar, no navegar — si algo falla acá seguimos con el flujo
+    // normal (el servidor igual lo bloquea al reservar/publicar).
     if (user.rol !== 'admin') {
       try {
         const r = await fetch('/api/auth/me');
         const d = await r.json().catch(() => ({}));
+        if (d?.user && d.user.correo_pendiente === true) {
+          router.push(`/verificar-correo?next=${encodeURIComponent(destinoFinal)}`);
+          return;
+        }
         if (d?.user && d.user.perfil_completo === false) {
           router.push(`/completar-perfil?next=${encodeURIComponent(destinoFinal)}`);
           return;

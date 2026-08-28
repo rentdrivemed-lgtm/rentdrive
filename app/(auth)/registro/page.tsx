@@ -248,6 +248,10 @@ function RegistroForm() {
     try {
       const r = await fetch('/api/auth/me');
       const d = await r.json().catch(() => ({}));
+      if (d?.user && d.user.correo_pendiente === true) {
+        router.push(`/verificar-correo?next=${encodeURIComponent(destinoFinal)}`);
+        return;
+      }
       if (d?.user && d.user.perfil_completo === false) {
         router.push(`/completar-perfil?next=${encodeURIComponent(destinoFinal)}`);
         return;
@@ -274,8 +278,23 @@ function RegistroForm() {
       if (!res.ok) { setError(data.error || 'No pudimos completar el registro. Intenta de nuevo.'); return; }
       // Si venía de reservar, retoma el pago (solo arrendatarios).
       const destino = tomarDestino();
-      if (destino && rol === 'usuario') { router.push(destino); return; }
-      router.push(rol === 'propietario' ? '/dashboard/propietario' : '/dashboard/usuario');
+      const destinoFinal = (destino && rol === 'usuario') ? destino : (rol === 'propietario' ? '/dashboard/propietario' : '/dashboard/usuario');
+
+      // Cuenta recién creada con correo+contraseña: queda con el correo pendiente
+      // de activación (ver lib/verificacion-correo.ts) hasta que confirme el
+      // código que le mandamos por correo. No bloquea navegar, solo
+      // reservar/publicar — pero se manda primero a verificarlo para que la
+      // cuenta quede activa cuanto antes.
+      try {
+        const r = await fetch('/api/auth/me');
+        const d = await r.json().catch(() => ({}));
+        if (d?.user && d.user.correo_pendiente === true) {
+          router.push(`/verificar-correo?next=${encodeURIComponent(destinoFinal)}`);
+          return;
+        }
+      } catch { /* seguimos con el flujo normal; el servidor igual bloquea al reservar/publicar */ }
+
+      router.push(destinoFinal);
     } catch {
       setError('Sin conexión — revisa tu internet e intenta de nuevo.');
     } finally {

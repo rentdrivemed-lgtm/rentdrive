@@ -537,6 +537,19 @@ function initDb(db: Database.Database) {
   // en la primera corrida (el ALTER de arriba ya la crea antes de llegar aquí).
   try { db.exec("UPDATE usuarios SET google_id = '' WHERE rol = 'admin' AND google_id != ''"); } catch { /* noop */ }
 
+  // Verificación de correo por OTP (ver lib/verificacion-correo.ts). `correo_verificado`
+  // usa DEFAULT 1 a propósito: en SQLite, un ALTER TABLE ... ADD COLUMN ... DEFAULT
+  // también rellena las filas YA existentes con ese valor — así ninguna cuenta creada
+  // antes de esta migración queda retroactivamente bloqueada para reservar/publicar.
+  // Las cuentas nuevas creadas después (app/api/auth/registro) insertan explícitamente
+  // correo_verificado = 0 y sí pasan por el flujo de código; las creadas por Google
+  // (app/api/auth/google) insertan 1 directo, porque Google ya verificó ese correo.
+  try { db.exec("ALTER TABLE usuarios ADD COLUMN correo_verificado INTEGER DEFAULT 1"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE usuarios ADD COLUMN correo_codigo TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE usuarios ADD COLUMN correo_codigo_expira TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE usuarios ADD COLUMN correo_codigo_generado_at TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE usuarios ADD COLUMN correo_codigo_intentos INTEGER DEFAULT 0"); } catch { /* ya existe */ }
+
   try { db.exec("ALTER TABLE reservas ADD COLUMN documento_id_url TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE reservas ADD COLUMN licencia_url TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE reservas ADD COLUMN documento_id_url_dorso TEXT DEFAULT ''"); } catch { /* ya existe */ }

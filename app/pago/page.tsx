@@ -205,6 +205,13 @@ function PagoContent() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
+        // El servidor exige correo verificado antes de reservar (cuenta pendiente
+        // de activación — ver lib/verificacion-correo.ts). Se manda a verificarlo
+        // en vez de solo mostrar el error genérico.
+        if (data.codigo === 'correo_no_verificado') {
+          router.push(`/verificar-correo?next=${encodeURIComponent(window.location.pathname + window.location.search)}`);
+          return;
+        }
         // El servidor exige perfil completo (contraseña + documento + fecha de
         // nacimiento) antes de reservar — típico de cuentas creadas por Google.
         // Se manda a completarlo en vez de solo mostrar el error genérico.

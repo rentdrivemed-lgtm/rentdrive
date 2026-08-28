@@ -31,6 +31,14 @@ CREATE TABLE IF NOT EXISTS usuarios (
   contacto_emergencia   TEXT DEFAULT '{}',
   cedula_url            TEXT DEFAULT '',
   google_id             TEXT DEFAULT '',
+  -- Verificación de correo por OTP (ver lib/verificacion-correo.ts). DEFAULT 1 para que
+  -- una instalación nueva (seed.sql) no arranque con cuentas demo bloqueadas; las cuentas
+  -- reales creadas por app/api/auth/registro insertan 0 explícito.
+  correo_verificado         INTEGER DEFAULT 1,
+  correo_codigo             TEXT DEFAULT '',
+  correo_codigo_expira      TEXT DEFAULT '',
+  correo_codigo_generado_at TEXT DEFAULT '',
+  correo_codigo_intentos    INTEGER DEFAULT 0,
   created_at            TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
 );
 
