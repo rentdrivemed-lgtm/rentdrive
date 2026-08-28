@@ -616,6 +616,7 @@ function initDb(db: Database.Database) {
   migrarCotizacionesReservaOpcional(db);
   migrarUsuariosEstadoArchivada(db);
   migrarPicoPlacaActivar(db);
+  revertirFotoMalTapadaVehiculo10(db);
 
   const adminExists = db.prepare("SELECT id FROM usuarios WHERE rol='admin' LIMIT 1").get();
   if (!adminExists) {
@@ -860,6 +861,45 @@ function migrarPicoPlacaActivar(db: Database.Database) {
     setConfig(db, 'pico_placa_seed_v1', '1'); // marca esta corrección como hecha para siempre, pase lo que pase después
   } catch (e) {
     console.error('[db] Migración pico_placa activar falló:', e instanceof Error ? e.message : e);
+  }
+}
+
+// Corrección puntual: al probar /api/admin/reprocesar-placas contra un vehículo real
+// (id 10, Ford Explorer, placa MFW073), la detección de placa dio un falso positivo en
+// una foto de perfil lateral donde la placa no era visible, y el rectángulo amarillo
+// quedó tapando el edificio de fondo en vez del vehículo. Esto revierte esa única foto
+// (fotos_detalle.lado_derecho) a su URL original. Es idempotente por construcción: el
+// WHERE exige que el campo contenga la URL corrupta exacta, así que una vez corregida
+// la fila deja de calzar y la migración pasa a ser un no-op para siempre.
+function revertirFotoMalTapadaVehiculo10(db: Database.Database) {
+  try {
+    const URL_CORRUPTA = 'https://res.cloudinary.com/dvtmbf1oe/image/upload/v1787930955/uploads/reproc-placa-10-1787930954481-t1tobgufg0h.jpg';
+    const URL_ORIGINAL = 'https://res.cloudinary.com/dvtmbf1oe/image/upload/v1787885327/uploads/1787885323031-36zutopq53d.jpg';
+
+    const fila = db.prepare('SELECT id, fotos_detalle FROM vehiculos WHERE id = 10').get() as
+      { id: number; fotos_detalle: string | null } | undefined;
+    if (!fila?.fotos_detalle || !fila.fotos_detalle.includes(URL_CORRUPTA)) return; // ya corregido, o no aplica
+
+    let detalle: Record<string, string>;
+    try {
+      detalle = JSON.parse(fila.fotos_detalle);
+    } catch {
+      console.error('[db] revertirFotoMalTapadaVehiculo10: fotos_detalle no es JSON válido, se aborta sin tocar nada.');
+      return;
+    }
+
+    if (detalle.lado_derecho !== URL_CORRUPTA) {
+      // La URL corrupta aparece en el texto pero no en el campo esperado — no arriesgar
+      // una sobre-escritura genérica de todo el JSON, solo se corrige el campo exacto conocido.
+      console.error('[db] revertirFotoMalTapadaVehiculo10: la URL corrupta no está en lado_derecho como se esperaba, se aborta.');
+      return;
+    }
+
+    detalle.lado_derecho = URL_ORIGINAL;
+    db.prepare('UPDATE vehiculos SET fotos_detalle = ? WHERE id = 10').run(JSON.stringify(detalle));
+    console.log('[db] Migración: revertida foto mal tapada (falso positivo de placa) del vehículo id=10.');
+  } catch (e) {
+    console.error('[db] Migración revertirFotoMalTapadaVehiculo10 falló:', e instanceof Error ? e.message : e);
   }
 }
 
