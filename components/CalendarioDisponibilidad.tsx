@@ -1,7 +1,7 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { IconArrowL, IconArrowR } from '@/components/Icons';
-import { diasPicoYPlaca } from '@/lib/picoYPlaca';
+import { DIAS_SEMANA, fechaISOLocal as isoDate, picoPlacaVacio, placaRestringida, ultimoDigitoPlaca, type PicoPlaca } from '@/lib/pico-placa';
 
 type Props = {
   value: string[];
@@ -13,15 +13,31 @@ type Props = {
 
 const DIAS = ['Lu', 'Ma', 'Mi', 'Ju', 'Vi', 'Sá', 'Do'];
 
-function isoDate(d: Date) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
 export default function CalendarioDisponibilidad({ value, onChange, readOnly, reservedDates, placa }: Props) {
   const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
   const [base, setBase] = useState(() => new Date(hoy.getFullYear(), hoy.getMonth(), 1));
+  const [pp, setPp] = useState<PicoPlaca>(picoPlacaVacio());
+
+  useEffect(() => {
+    let cancelado = false;
+    fetch('/api/pico-placa')
+      .then(r => (r.ok ? r.json() : null))
+      .then((data: Partial<PicoPlaca> | null) => {
+        if (cancelado || !data) return;
+        setPp({ activo: !!data.activo, vigencia: data.vigencia ?? '', dias: data.dias ?? {} });
+      })
+      .catch(() => { /* si falla, no se marca ningún día — el calendario sigue funcionando */ });
+    return () => { cancelado = true; };
+  }, []);
 
   const reservedSet = new Set(reservedDates || []);
+
+  // Último dígito de la placa y, bajo la config vigente, el día de la semana en que
+  // está restringido (puede no haber ninguno si pico y placa está desactivado).
+  const digitoPlaca = placa ? ultimoDigitoPlaca(placa) : null;
+  const diasRestriccionPlaca = digitoPlaca !== null && pp.activo
+    ? DIAS_SEMANA.filter(d => (pp.dias[d.id] ?? []).includes(digitoPlaca)).map(d => d.nombre)
+    : [];
 
   const toggle = (str: string) => {
     if (readOnly) return;
@@ -54,7 +70,13 @@ export default function CalendarioDisponibilidad({ value, onChange, readOnly, re
     const totalDias = new Date(año, mes + 1, 0).getDate();
     const offset = (new Date(año, mes, 1).getDay() + 6) % 7;
     const nombreMes = primerDia.toLocaleDateString('es-CO', { month: 'long', year: 'numeric' });
-    const picoSet = new Set(placa ? diasPicoYPlaca(placa, año, mes) : []);
+    const picoSet = new Set<string>();
+    if (placa) {
+      for (let i = 1; i <= totalDias; i++) {
+        const d = new Date(año, mes, i);
+        if (placaRestringida(pp, placa, d)) picoSet.add(isoDate(d));
+      }
+    }
     const celdas: (Date | null)[] = [
       ...Array(offset).fill(null),
       ...Array.from({ length: totalDias }, (_, i) => new Date(año, mes, i + 1)),
@@ -137,6 +159,14 @@ export default function CalendarioDisponibilidad({ value, onChange, readOnly, re
 
   return (
     <div>
+      {placa && digitoPlaca !== null && (
+        <p className="text-xs text-ink/60 mb-2">
+          Placa termina en <span className="font-semibold text-ink">{digitoPlaca}</span>
+          {diasRestriccionPlaca.length > 0
+            ? <> — pico y placa: <span className="font-semibold text-accent">{diasRestriccionPlaca.join(' y ')}</span></>
+            : <> — sin restricción de pico y placa</>}
+        </p>
+      )}
       <div className="flex justify-between items-center mb-3">
         <button type="button"
           onClick={() => setBase(new Date(base.getFullYear(), base.getMonth() - 1, 1))}
