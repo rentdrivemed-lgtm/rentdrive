@@ -422,7 +422,7 @@ export default function DashboardAdmin() {
     fetch('/api/admin/usuarios').then(r => r.json()).then(d => setUsuarios(d.usuarios || [])).catch(() => setErrorListas(e => ({ ...e, usuarios: true })));
 
   const cargarVehiculos = () =>
-    fetch('/api/vehiculos').then(r => r.json()).then(d => setVehiculos(d.vehiculos || [])).catch(() => setErrorListas(e => ({ ...e, vehiculos: true })));
+    fetch('/api/vehiculos?panelAdmin=1').then(r => r.json()).then(d => setVehiculos(d.vehiculos || [])).catch(() => setErrorListas(e => ({ ...e, vehiculos: true })));
 
   const cargarReservas = () =>
     fetch('/api/reservas').then(r => r.json()).then(d => setReservas(d.reservas || [])).catch(() => setErrorListas(e => ({ ...e, reservas: true })));
@@ -1257,6 +1257,14 @@ export default function DashboardAdmin() {
             const editandoPrecio = (vid: number) => vid in precioEdit;
             const enPP = placaRestringida(picoPlaca, v.placa ?? '', new Date());
             const leftBorder = enPP ? 'border-danger' : sinPrecioV ? 'border-accent' : 'border-transparent';
+            // `disponible=0` ya se explica visualmente cuando hay un badge de documentos_estado
+            // "en revisión" o "denegado" (ver más abajo). Pero también puede estar en 0 sin
+            // documentos subidos (documentos_estado='sin_documentos', p. ej. un vehículo recién
+            // publicado) o en cualquier otro estado que no lo explique — en esos casos, sin este
+            // badge, el vehículo no tenía NINGÚN indicador visual de por qué no es visible al
+            // público (así fue como un caso real quedó invisible en las 3 pestañas del panel).
+            const noDisponibleSinExplicar = Number(v.disponible) === 0
+              && v.documentos_estado !== 'en_revision' && v.documentos_estado !== 'denegado';
 
             return (
               <div key={v.id} className={`bg-surface-2 rounded-2xl shadow-sm p-4 border-l-4 ${leftBorder} ${enPP ? 'ring-1 ring-danger/30 bg-danger/5' : ''} ${!enPP && !sinPrecioV ? 'border' : ''}`}
@@ -1274,6 +1282,9 @@ export default function DashboardAdmin() {
                       )}
                       {enPP && (
                         <span className="text-xs bg-danger/15 text-danger px-2 py-0.5 rounded-full font-bold border border-danger/30">🚦 Pico y placa hoy</span>
+                      )}
+                      {noDisponibleSinExplicar && (
+                        <span className="text-xs bg-ink/10 text-ink/60 px-2 py-0.5 rounded-full font-semibold border border-border">⛔ No disponible</span>
                       )}
                     </div>
                     <p className="text-sm text-ink/50 mt-0.5">Propietario: {v.propietario_nombre}</p>
