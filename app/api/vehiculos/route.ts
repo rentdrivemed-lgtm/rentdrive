@@ -35,6 +35,11 @@ export async function GET(req: NextRequest) {
   // Cola de revisión de moderación de contenido (ver lib/moderacion.ts): igual que
   // `archivados=1`, exclusiva del admin con la sección "vehiculos".
   const revisionContenido = searchParams.get('revisionContenido') === '1';
+  // Marca explícita de que la llamada viene del panel de administración (ver
+  // app/dashboard/admin/page.tsx), no de la home pública (app/page.tsx). Es la única forma
+  // confiable de distinguir ambos casos: el servidor no puede inferirlo solo del rol de la
+  // sesión, porque un admin también navega la home pública como cualquier usuario normal.
+  const panelAdmin = searchParams.get('panelAdmin') === '1';
 
   // Vista de archivados / en revisión de contenido: exclusiva del admin con la sección
   // "vehiculos" (ver lib/eliminar.ts). Esta ruta es pública para el resto de casos, así
@@ -87,9 +92,24 @@ export async function GET(req: NextRequest) {
       }
       if (!puedeVerTodos) query += ' AND v.disponible = 1 AND v.contenido_revision = 0';
     } else {
-      // Listado público (sin propietarioId): ocultar vehículos inactivos o marcados en
-      // revisión de contenido.
-      query += ' AND v.disponible = 1 AND v.contenido_revision = 0';
+      // Listado principal sin propietarioId: para el público (y cualquier usuario sin
+      // permiso admin) sigue ocultando vehículos inactivos o marcados en revisión de
+      // contenido. Pero el admin con la sección "vehiculos", y ÚNICAMENTE cuando la llamada
+      // viene marcada como `panelAdmin=1` (ver app/dashboard/admin/page.tsx), SÍ debe poder
+      // ver acá los vehículos con disponible=0 (p. ej. pendientes de aprobación de
+      // documentos) para poder gestionarlos — la revisión de contenido
+      // (contenido_revision=1) ya tiene su propia pestaña dedicada (revisionContenido=1
+      // arriba), así que esa sí se sigue excluyendo para no duplicar esa vista dentro de la
+      // lista principal. Sin `panelAdmin=1` (p. ej. el mismo admin navegando la home
+      // pública en app/page.tsx como cualquier usuario) el comportamiento debe ser
+      // idéntico al de un visitante sin permisos.
+      const user = await getCurrentUser();
+      const esAdminConPermiso = panelAdmin && !!user && user.rol === 'admin' && adminTieneArea(db, user.id, 'vehiculos');
+      if (esAdminConPermiso) {
+        query += ' AND v.contenido_revision = 0';
+      } else {
+        query += ' AND v.disponible = 1 AND v.contenido_revision = 0';
+      }
     }
   }
 
