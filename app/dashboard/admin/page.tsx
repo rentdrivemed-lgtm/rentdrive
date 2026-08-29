@@ -14,6 +14,7 @@ import {
   parsePermisosExtra, type AdminNivel, type PermisosExtra, type PermisosExtraDelta,
 } from '@/lib/permisos';
 import { parsePicoPlaca, picoPlacaVacio, placaRestringida, type PicoPlaca } from '@/lib/pico-placa';
+import { tecnoRequerida } from '@/lib/tecnomecanica';
 import { fechaHoraRecogida, esNoShowAplicable } from '@/lib/cancelacion';
 import { IconUser, IconCar, IconX, IconCheck, IconCalendar, IconShield } from '@/components/Icons';
 import type { VerificacionResultado } from '@/lib/verificacion-docs';
@@ -2055,6 +2056,14 @@ export default function DashboardAdmin() {
                         {/* Header row */}
                         <div className="flex items-center justify-between mb-2 gap-2">
                           <p className="text-xs font-bold text-ink">{label}</p>
+                          {/* Tecno-mecánica: exención de la Ley 2294 de 2023 (ver lib/tecnomecanica.ts) —
+                              vehículos con menos de 5 años (aprox. por año-modelo) no la requieren. Se
+                              muestra igual si el propietario subió algo (ej. tecno vencida), pero este
+                              badge aclara que NO cuenta para el estado agregado ni bloquea la publicación,
+                              sin importar si el admin la aprueba o deniega abajo. */}
+                          {key === 'tecno' && !tecnoRequerida(v.anio) && (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-ink/10 text-ink/60 border border-border whitespace-nowrap">No exigible (vehículo &lt; 5 años)</span>
+                          )}
                           {rev.estado === 'aprobado' && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-success/15 text-success border border-success/30 whitespace-nowrap">✓ Aprobado</span>}
                           {rev.estado === 'denegado' && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-danger/15 text-danger border border-danger/25 whitespace-nowrap">✗ Denegado</span>}
                           {rev.estado === 'pendiente' && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-warning/15 text-warning border border-warning/25 whitespace-nowrap">⏳ Pendiente</span>}

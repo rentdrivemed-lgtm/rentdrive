@@ -4,6 +4,7 @@ import { getCurrentUser } from '@/lib/auth';
 import { adminTieneArea, sinPermisoArea } from '@/lib/guard';
 import { tieneClaveAnthropic } from '@/lib/anthropic';
 import { verificarDocumentos, decisionHibrida, type DocEntrada } from '@/lib/verificacion-docs';
+import { tecnoRequerida } from '@/lib/tecnomecanica';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -36,8 +37,12 @@ function mensajeAmigable(e: unknown): string {
   return raw;
 }
 
-function computeEstado(docs: Record<string, { url?: string } | undefined>, revs: Record<string, { estado?: string }>): string {
-  const subidos = VEH_DOCS.map(([k]) => k).filter(k => docs[k]?.url);
+// `anio` (año-modelo, aproximación de la fecha de matrícula) decide si `tecno` cuenta dentro
+// del estado agregado — ver lib/tecnomecanica.ts (Ley 2294 de 2023). `todo_riesgo` es un
+// seguro opcional: nunca debe poder bloquear ni denegar el estado agregado, esté subido o no.
+function computeEstado(docs: Record<string, { url?: string } | undefined>, revs: Record<string, { estado?: string }>, anio: number | null | undefined): string {
+  const claves = VEH_DOCS.map(([k]) => k).filter(k => k !== 'todo_riesgo' && (k !== 'tecno' || tecnoRequerida(anio)));
+  const subidos = claves.filter(k => docs[k]?.url);
   if (subidos.length === 0) return 'sin_documentos';
   if (subidos.some(k => revs[k]?.estado === 'denegado')) return 'denegado';
   if (subidos.every(k => revs[k]?.estado === 'aprobado')) return 'aprobado';
@@ -104,7 +109,7 @@ export async function POST(req: NextRequest) {
           autoAprobados.push(d.clave);
         }
       }
-      const estado = computeEstado(docs, revs);
+      const estado = computeEstado(docs, revs, v.anio as number | null | undefined);
       db.prepare('UPDATE vehiculos SET documentos_revisiones = ?, documentos_estado = ? WHERE id = ?')
         .run(JSON.stringify(revs), estado, Number(vehiculoId));
 

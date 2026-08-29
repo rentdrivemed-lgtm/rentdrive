@@ -16,6 +16,7 @@ import { TIPO_VEHICULO_LABELS, type TipoVehiculo } from '@/lib/rentabilidad';
 import { precioMercadoSugerido, segmentoValido } from '@/lib/precioMercado';
 import FirmaCanvas from '@/components/FirmaCanvas';
 import { descargarCuentaCobroPDF } from '@/lib/contabilidad-pdf';
+import { tecnoRequerida } from '@/lib/tecnomecanica';
 
 // Opciones de categoría (mismas 6 que la calculadora de mercado) para el selector.
 const CATEGORIAS = Object.entries(TIPO_VEHICULO_LABELS) as [TipoVehiculo, string][];
@@ -101,14 +102,22 @@ function calcProgreso(v: Vehiculo): { pct: number; items: ProgresoItem[] } {
   const dias = parseJ<string[]>(v.dias_disponibles, []);
   const docs = parseJ<Record<string, { url?: string } | undefined>>(v.documentos, {});
 
+  // Tecno-mecánica: exención de la Ley 2294 de 2023 (ver lib/tecnomecanica.ts) — un vehículo
+  // con menos de 5 años de antigüedad (aprox. por año-modelo) no la requiere, así que el
+  // checklist lo marca "hecho" con una etiqueta explicativa en vez de mostrarlo pendiente.
+  const tecnoOk = tecnoRequerida(v.anio) ? !!(docs.tecno as { url?: string } | undefined)?.url : true;
+  const tecnoLabel = tecnoRequerida(v.anio) ? 'Tecno-mecánica' : 'Tecno-mecánica (no requerida, vehículo nuevo)';
   const items: ProgresoItem[] = [
     { key: 'placa',  label: 'Placa',                 done: !!v.placa?.trim() },
     { key: 'fotos',  label: `Fotos (${nFotos}/7)`,   done: nFotos >= 7 },
     { key: 'dias',   label: `Disponibilidad`,         done: dias.length > 0 },
     { key: 'soat',       label: 'SOAT',               done: !!(docs.soat as { url?: string } | undefined)?.url },
-    { key: 'tecno',      label: 'Tecno-mecánica',     done: !!(docs.tecno as { url?: string } | undefined)?.url },
+    { key: 'tecno',      label: tecnoLabel,           done: tecnoOk },
     { key: 'tarjeta',    label: 'Tarjeta propiedad (frente y dorso)',  done: !!((docs.tarjeta as { url?: string; url_dorso?: string } | undefined)?.url && (docs.tarjeta as { url?: string; url_dorso?: string } | undefined)?.url_dorso) },
-    { key: 'todo_riesgo',label: 'Todo riesgo',        done: !!(docs.todo_riesgo as { url?: string } | undefined)?.url },
+    // Seguro todo riesgo: opcional, nunca bloquea nada — se marca siempre "hecho" en el
+    // checklist (en vez de quitarlo del array) para que siga siendo visible con su
+    // etiqueta "(opcional)" pero sin restar porcentaje de progreso.
+    { key: 'todo_riesgo',label: 'Todo riesgo (opcional)', done: true },
     { key: 'aprobacion', label: 'Aprobación DrivePass', done: v.documentos_estado === 'aprobado' },
   ];
   const done = items.filter(i => i.done).length;
@@ -1582,10 +1591,10 @@ export default function DashboardPropietario() {
                 {/* Todo riesgo */}
                 <div className="bg-surface rounded-xl p-3 border border-border space-y-2">
                   <div className="flex items-center justify-between">
-                    <p className="text-xs font-semibold text-ink">Seguro todo riesgo</p>
+                    <p className="text-xs font-semibold text-ink">Seguro todo riesgo (opcional)</p>
                     {fDet.todo_riesgo && (fDet.todo_riesgo as { url?: string }).url && <span className="text-[10px] text-success font-bold">✓ Subido</span>}
                   </div>
-                  <DocUpload label="Póliza todo riesgo" value={editDocs.todo_riesgo?.url || ''} onChange={url => setEditDocs(d => ({ ...d, todo_riesgo: { ...d.todo_riesgo, url } }))} />
+                  <DocUpload label="Póliza todo riesgo (opcional)" value={editDocs.todo_riesgo?.url || ''} onChange={url => setEditDocs(d => ({ ...d, todo_riesgo: { ...d.todo_riesgo, url } }))} />
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="text-[11px] text-ink/50 block mb-1">Aseguradora</label>
