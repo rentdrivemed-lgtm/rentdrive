@@ -6,6 +6,7 @@ import { getDb } from '@/lib/db';
 import { registrarFotoModeracion } from '@/lib/moderacion';
 import { estandarizarFotoVehiculo } from '@/lib/estandarizar-foto';
 import { consumirIntento } from '@/lib/limite-tasa';
+import { correoNoVerificado } from '@/lib/verificacion-correo';
 
 export const runtime = 'nodejs';
 
@@ -37,6 +38,13 @@ export async function POST(req: NextRequest) {
   // con IA (quitar fondo + mejorar calidad) de lib/estandarizar-foto.ts. Solo lo
   // manda FotoUpload.tsx.
   const tipo = formData.get('tipo') as string | null;
+  // Enviado por FotoUpload.tsx solo al re-subir una foto que ya pasó antes por
+  // estandarizarFotoVehiculo (p. ej. al rotarla): esa imagen YA tiene el fondo de
+  // estudio de remove.bg aplicado, así que correr el paso de nuevo sería gasto extra
+  // y degradación acumulada sobre algo ya procesado. Este flag NUNCA salta moderación
+  // ni difuminado de placa (bloque de arriba) — solo decide, más abajo, si se repite
+  // o no el paso puramente cosmético de remove.bg.
+  const yaEstandarizada = formData.get('yaEstandarizada') === '1';
 
   if (!file) return NextResponse.json({ error: 'No se recibió archivo' }, { status: 400 });
 
@@ -105,7 +113,17 @@ export async function POST(req: NextRequest) {
       // rechazada, y así se evita gastar la llamada paga de remove.bg en ella).
       // Best-effort real: si falla, se sigue con `rawBuffer` tal como quedó del
       // paso anterior (ya con la placa difuminada si correspondía).
-      if (tipo === 'vehiculo' && !contenidoSospechoso) {
+      if (tipo === 'vehiculo' && !contenidoSospechoso && yaEstandarizada) {
+        console.warn(`[upload] usuario ${user.id} re-subió una foto ya estandarizada (yaEstandarizada=1) — se omite remove.bg`);
+      } else if (tipo === 'vehiculo' && !contenidoSospechoso && correoNoVerificado(user.id)) {
+        // Cuenta `propietario` autoregistrable sin KYC (ver comentario arriba de
+        // FOTO_IA_MAX_HORA): el rate-limit es por cuenta, así que sin este chequeo
+        // alguien podría multiplicar el gasto en remove.bg creando cuentas nuevas
+        // sin verificar su correo. No bloquea la subida ni la publicación — mismo
+        // criterio que al superar el rate-limit: sube la foto tal como quedó de
+        // moderación/difuminado, solo sin el paso cosmético.
+        console.warn(`[upload] usuario ${user.id} con correo sin verificar — se omite remove.bg (se sube sin procesar)`);
+      } else if (tipo === 'vehiculo' && !contenidoSospechoso) {
         // Tope por cuenta antes de gastar la llamada paga a remove.bg. Si se
         // superó, NO se bloquea la subida (la foto ya moderada/difuminada se
         // sube igual, solo sin el paso cosmético) — este límite protege el
