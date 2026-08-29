@@ -7,6 +7,7 @@ import { eliminarVehiculoInteligente } from '@/lib/eliminar';
 import { registrarAuditoria } from '@/lib/permisos';
 import { contieneLenguajeInapropiado, extraerUrlsFotos, fotosRegistradasEntre, normalizarUrlFoto } from '@/lib/moderacion';
 import { documentosConUrlsValidas } from '@/lib/storage';
+import { tecnoRequerida } from '@/lib/tecnomecanica';
 
 const DOC_KEYS = ['soat', 'tecno', 'tarjeta', 'todo_riesgo'] as const;
 const DOC_LABELS: Record<string, string> = {
@@ -17,8 +18,24 @@ const DOC_LABELS: Record<string, string> = {
 type DocRevision = { estado: string; nota: string };
 type VehicleRow = { documentos: string; documentos_revisiones: string; propietario_id: number; marca: string; modelo: string; anio: number; placa?: string; disponible: number };
 
-function computeEstado(docs: Record<string, { url?: string } | undefined>, revs: Record<string, DocRevision>): string {
-  const uploaded = DOC_KEYS.filter(k => (docs[k] as { url?: string } | undefined)?.url);
+// `anio` (año-modelo, aproximación de la fecha de matrícula) decide si `tecno` cuenta dentro
+// del estado agregado — ver lib/tecnomecanica.ts (Ley 2294 de 2023). `todo_riesgo` es un
+// seguro opcional: nunca debe poder bloquear ni denegar el estado agregado, esté subido o no.
+//
+// Compartida entre `computeEstado` (estado agregado) y la nota de rechazo que arma el admin
+// en `revisar_documento` más abajo — mismo criterio en ambos lugares (antes solo lo aplicaba
+// `computeEstado`; la nota seguía mencionando "denegado" para una clave irrelevante para ESE
+// vehículo, ej. tecno exenta o todo_riesgo, lo cual confundía al propietario sin bloquear
+// realmente la publicación).
+function clavesRelevantes(anio: number | null | undefined): (typeof DOC_KEYS)[number][] {
+  const claves: (typeof DOC_KEYS)[number][] = ['soat', 'tarjeta'];
+  if (tecnoRequerida(anio)) claves.push('tecno');
+  return claves;
+}
+
+function computeEstado(docs: Record<string, { url?: string } | undefined>, revs: Record<string, DocRevision>, anio: number | null | undefined): string {
+  const claves = clavesRelevantes(anio);
+  const uploaded = claves.filter(k => (docs[k] as { url?: string } | undefined)?.url);
   if (uploaded.length === 0) return 'sin_documentos';
   if (uploaded.some(k => revs[k]?.estado === 'denegado')) return 'denegado';
   if (uploaded.every(k => revs[k]?.estado === 'aprobado')) return 'aprobado';
@@ -117,6 +134,31 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     }
   }
 
+  // ── Validación/normalización de `anio` (ago-2026) ──
+  // A diferencia de `precio_ajuste_pct` (que se clampea silenciosamente más abajo), un año de
+  // vehículo inválido no tiene un "valor razonable más cercano" obvio, así que acá se rechaza
+  // explícito con 400 en vez de corromper el dato o dejar pasar algo raro (null, un string no
+  // numérico, un literal hexadecimal como "0x7e8" que `Number()` sí sabría parsear pero que no
+  // es una entrada legítima de este formulario, etc.). Corre ANTES de que `body.anio` se use
+  // para decidir si cambia la exigibilidad de la tecno (ver bloque de cierre de bypass más
+  // abajo) y antes del loop genérico que lo persiste — de aquí en adelante `body.anio`, si
+  // está presente, es siempre un entero limpio dentro de rango.
+  if (body.anio !== undefined) {
+    const rawAnio = body.anio;
+    let anioNum = NaN;
+    if (typeof rawAnio === 'number') {
+      anioNum = rawAnio;
+    } else if (typeof rawAnio === 'string' && /^-?\d+(\.\d+)?$/.test(rawAnio.trim())) {
+      anioNum = Number(rawAnio);
+    }
+    anioNum = Math.trunc(anioNum);
+    const anioMaxValido = new Date().getFullYear() + 2;
+    if (!Number.isFinite(anioNum) || anioNum < 1900 || anioNum > anioMaxValido) {
+      return NextResponse.json({ error: 'Año de vehículo inválido.' }, { status: 400 });
+    }
+    body.anio = anioNum;
+  }
+
   // ── Admin: review individual document ──
   if (isAdmin && body.revisar_documento) {
     const { key, estado, nota } = body.revisar_documento as { key: string; estado: string; nota: string };
@@ -130,9 +172,13 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     try { revs = JSON.parse(row.documentos_revisiones || '{}'); } catch { /* */ }
 
     revs[key] = { estado, nota: nota || '' };
-    const newEstado = computeEstado(docs, revs);
+    const newEstado = computeEstado(docs, revs, row.anio);
+    // Solo se listan en la nota las claves relevantes para ESTE vehículo (mismo criterio que
+    // `computeEstado`, ver `clavesRelevantes`) — así un rechazo de `todo_riesgo` (opcional) o
+    // de `tecno` en un vehículo exento no aparece en la nota como si bloqueara la publicación.
+    const clavesRel = clavesRelevantes(row.anio);
     const newNota = DOC_KEYS
-      .filter(k => revs[k]?.estado === 'denegado')
+      .filter(k => clavesRel.includes(k) && revs[k]?.estado === 'denegado')
       .map(k => `${DOC_LABELS[k]}: ${revs[k]?.nota || 'Sin motivo'}`)
       .join('\n');
 
@@ -141,12 +187,20 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     // más abajo en el PUT. Se apaga en la MISMA escritura, no queda "disponible" colgado con
     // un documento recién rechazado.
     const aprobadoTrasRevision = (clave: string) => !!docs[clave]?.url && revs[clave]?.estado === 'aprobado';
-    const nuevoDisponible = (row.disponible === 1 && (!aprobadoTrasRevision('soat') || !aprobadoTrasRevision('tecno')))
+    const nuevoDisponible = (row.disponible === 1 && (!aprobadoTrasRevision('soat') || (tecnoRequerida(row.anio) && !aprobadoTrasRevision('tecno'))))
       ? 0 : row.disponible;
 
     db.prepare('UPDATE vehiculos SET documentos_revisiones = ?, documentos_estado = ?, documentos_nota = ?, disponible = ? WHERE id = ?')
       .run(JSON.stringify(revs), newEstado, newNota, nuevoDisponible, Number(id));
 
+    // Nota de diseño: esta notificación individual se dispara igual aunque `key` no sea
+    // relevante para este vehículo (tecno exenta, o todo_riesgo). A diferencia de
+    // `documentos_nota`/`documentos_estado` (que sí excluyen claves irrelevantes, ver
+    // `clavesRelevantes` arriba, porque esos SÍ deciden si el vehículo puede publicarse), esta
+    // notificación es un mensaje 1-a-1 sobre el documento puntual que el admin acaba de
+    // revisar: si subieron una tecno vencida en un carro exento, el admin puede querer
+    // avisarle igual que ese documento en concreto no sirve, sin que eso implique que el
+    // vehículo está bloqueado. Se deja intacto a propósito.
     if (estado === 'aprobado' || estado === 'denegado') {
       const vLabel = `${row.marca} ${row.modelo} ${row.anio}`;
       const docLabel = DOC_LABELS[key] || key;
@@ -186,15 +240,19 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   // `disponible=1`.
   //
   // Blindaje anti-carrera entre DOS requests (ago-2026): NO reutilizamos la variable
-  // `vehiculo` leída arriba (línea ~74) para este chequeo, porque esa lectura ocurrió
+  // `vehiculo` leída arriba (línea ~108) para este chequeo, porque esa lectura ocurrió
   // ANTES del único `await` de esta función (`await req.json()`). Si dos PUT llegan casi
   // simultáneos — uno subiendo `documentos` nuevos (resetea documentos_revisiones) y otro
   // con `disponible: 1` — ambos podrían haber capturado la fila vieja antes de que el
   // primero terminara de escribir, y el segundo pasaría el gate con datos obsoletos. Por
-  // eso releemos documentos/documentos_revisiones DE LA BASE justo aquí, DESPUÉS del
+  // eso releemos documentos/documentos_revisiones/anio DE LA BASE justo aquí, DESPUÉS del
   // `await`: de aquí en adelante el resto del handler es 100% síncrono (better-sqlite3 no
   // usa promesas), así que lectura → chequeo → escritura corren en un solo turno de Node
-  // sin ninguna ventana donde otro request pueda interponerse.
+  // sin ninguna ventana donde otro request pueda interponerse. Esta relectura (`filaFresca`
+  // abajo) es la ÚNICA relectura síncrona post-`await` que usa este PUT — la comparte el
+  // gate de abajo y el cierre de bypass de `anio` que sigue (no hay una segunda lectura
+  // paralela e inconsistente: cuando ambos chequeos aplican al mismo request, corren sobre
+  // exactamente los mismos `docsFrescos`/`revsFrescos` en memoria).
   const intentaHabilitar = body.disponible !== undefined && Number(body.disponible) === 1;
   const traeDocumentosNuevos = body.documentos !== undefined;
   if (intentaHabilitar && traeDocumentosNuevos) {
@@ -202,18 +260,81 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       error: 'No puedes subir documentos nuevos y marcar el vehículo como disponible en la misma solicitud. Sube los documentos primero; una vez aprobados por DrivePass, actívalo.',
     }, { status: 400 });
   }
+
+  // ── Cierre de bypass: `anio` autodeclarado invalida la aprobación de `tecno` al cambiar
+  //    (ago-2026) ──
+  // BYPASS QUE SE CIERRA: `anio` es un campo autodeclarado por el propietario — nunca lo
+  // valida la IA de verificación de documentos (`lib/verificacion-docs.ts` solo contrasta
+  // placa y propietario, jamás año) — y es editable libremente en cualquier momento vía este
+  // mismo PUT (está en `ownFields` más abajo), incluso DESPUÉS de que la Tecno-mecánica ya
+  // fue revisada bajo el año real. Sin este bloque, el año decide si `tecno` es exigible
+  // (ver `tecnoRequerida`/`computeEstado`) pero nada revalida esa decisión cuando el año
+  // cambia, así que una aprobación (o falta de aprobación) vieja quedaba "congelada" con el
+  // año viejo aunque el año declarado hoy sea otro. Ejemplo reproducible en dos requests SIN
+  // condición de carrera: (1) PUT { anio: 2015 } sobre un vehículo real de 2015 con tecno
+  // nunca aprobada (disponible=0 por el gate de arriba) — se guardaba sin ninguna
+  // validación; (2) PUT { anio: 2024 } (año falso, "vehículo nuevo") — con el código viejo
+  // esto también se guardaba sin más, y una request posterior `disponible: 1` pasaba el gate
+  // porque `tecnoRequerida(2024)` da `false`, dejando el vehículo disponible SIN que la
+  // tecnomecánica real jamás se haya revisado. Peor aún: si el propietario luego REVERTÍA el
+  // año a su valor real (2015, ej. sin querer o porque ya lo vieron), `disponible` seguía en
+  // 1 indefinidamente — no había ningún re-chequeo retroactivo al cambiar `anio` de vuelta.
+  //
+  // LA DEFENSA: cualquier cambio de `anio` en este PUT (`body.anio` distinto al valor actual
+  // en BD) borra `revs.tecno` (si existía, aprobado o denegado — su vigencia dependía de la
+  // edad declarada anterior, que acaba de cambiar) y recalcula `documentos_estado` y
+  // `disponible` con el año NUEVO. SOAT/tarjeta/todo_riesgo no dependen de la edad del
+  // vehículo, así que no se tocan. Esto cierra el hueco retroactivo (revertir el año vuelve a
+  // apagar `disponible` si ya no cumple) sin necesitar validar `anio` contra un documento
+  // real (limitación conocida y fuera del alcance de este fix — ver lib/tecnomecanica.ts).
+  //
+  // Relectura: reutilizamos la MISMA `filaFresca` síncrona post-`await` de arriba cuando el
+  // mismo request también trae `disponible` (evita una segunda query idéntica); si el
+  // request SOLO cambia `anio` sin tocar `disponible`, esta es su propia lectura síncrona
+  // (sigue ocurriendo después del único `await` de la función, sin ningún `await` de por
+  // medio hasta el UPDATE final — mismo invariante anti-carrera documentado arriba).
+  const bodyTraeAnio = body.anio !== undefined;
+  let filaFresca: { documentos: string; documentos_revisiones: string; anio: number; disponible: number } | undefined;
+  let docsFrescos: Record<string, { url?: string } | undefined> = {};
+  let revsFrescos: Record<string, DocRevision> = {};
+  let anioEfectivo: number | null | undefined;
+  let anioCambio = false;
+  let disponibleAntesDePut = 0;
+
+  if (intentaHabilitar || bodyTraeAnio) {
+    filaFresca = db.prepare('SELECT documentos, documentos_revisiones, anio, disponible FROM vehiculos WHERE id = ?')
+      .get(Number(id)) as { documentos: string; documentos_revisiones: string; anio: number; disponible: number } | undefined;
+    if (!filaFresca) return NextResponse.json({ error: 'No encontrado' }, { status: 404 });
+    try { docsFrescos = JSON.parse(filaFresca.documentos || '{}'); } catch { /* */ }
+    try { revsFrescos = JSON.parse(filaFresca.documentos_revisiones || '{}'); } catch { /* */ }
+    anioEfectivo = filaFresca.anio;
+    disponibleAntesDePut = filaFresca.disponible;
+
+    if (bodyTraeAnio && Number(body.anio) !== Number(filaFresca.anio)) {
+      const anioNuevo = Number(body.anio);
+      // No todo cambio de `anio` altera si `tecno` es exigible (ej. corregir un typo de 2018 a
+      // 2017 sin cruzar el umbral de 5 años de `tecnoRequerida`) — solo forzamos el reset de
+      // `revs.tecno` (y el recálculo de `documentos_estado`/`disponible` que sigue más abajo)
+      // cuando el cambio de año SÍ mueve la exigibilidad, para no tirar a la basura una
+      // aprobación legítima de tecno por una corrección de año que no cambia nada real.
+      const exigibilidadCambio = tecnoRequerida(filaFresca.anio) !== tecnoRequerida(anioNuevo);
+      anioEfectivo = anioNuevo; // el año efectivo (para el gate de disponibilidad) es SIEMPRE el nuevo, cambie o no la exigibilidad
+      if (exigibilidadCambio) {
+        anioCambio = true;
+        if (revsFrescos.tecno) delete revsFrescos.tecno;
+      }
+    }
+  }
+
+  const aprobadoFresco = (clave: string) => !!docsFrescos[clave]?.url && revsFrescos[clave]?.estado === 'aprobado';
+
   if (intentaHabilitar) {
-    const filaActual = db.prepare('SELECT documentos, documentos_revisiones FROM vehiculos WHERE id = ?')
-      .get(Number(id)) as { documentos: string; documentos_revisiones: string } | undefined;
-    if (!filaActual) return NextResponse.json({ error: 'No encontrado' }, { status: 404 });
-    let docs: Record<string, { url?: string } | undefined> = {};
-    let revs: Record<string, { estado?: string }> = {};
-    try { docs = JSON.parse(filaActual.documentos || '{}'); } catch { /* */ }
-    try { revs = JSON.parse(filaActual.documentos_revisiones || '{}'); } catch { /* */ }
-    const aprobado = (clave: string) => !!docs[clave]?.url && revs[clave]?.estado === 'aprobado';
-    if (!aprobado('soat') || !aprobado('tecno')) {
+    const tecnoExigible = tecnoRequerida(anioEfectivo);
+    if (!aprobadoFresco('soat') || (tecnoExigible && !aprobadoFresco('tecno'))) {
       return NextResponse.json({
-        error: 'No puedes marcar el vehículo como disponible: el SOAT y la Tecno-mecánica deben estar aprobados por DrivePass primero.',
+        error: tecnoExigible
+          ? 'No puedes marcar el vehículo como disponible: el SOAT y la Tecno-mecánica deben estar aprobados por DrivePass primero.'
+          : 'No puedes marcar el vehículo como disponible: el SOAT debe estar aprobado por DrivePass primero.',
       }, { status: 400 });
     }
   }
@@ -315,6 +436,43 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       if (idxMotivo !== -1) values[idxMotivo] = motivo;
       else { pairs.push('contenido_revision_motivo = ?'); values.push(motivo); }
     }
+  }
+
+  // ── Aplicar a la escritura atómica el cierre de bypass de `anio` (ver comentario extenso
+  //    más arriba, junto al gate de disponibilidad) ──
+  // Si además llegaron `documentos` NUEVOS en este mismo request, el bloque de abajo
+  // (`if (body.documentos !== undefined)`) ya hace un reset MÁS fuerte — TODAS las
+  // revisiones a '{}' (no solo `tecno`) y `disponible` a 0 incondicionalmente — así que lo
+  // dejamos ganar en ese caso raro combinado, para no pisarlo con un `documentos_revisiones`
+  // parcial calculado sobre datos que esta misma request está a punto de reemplazar.
+  if (anioCambio && !traeDocumentosNuevos) {
+    const nuevoEstadoDocs = computeEstado(docsFrescos, revsFrescos, anioEfectivo);
+    const tecnoExigibleFinal = tecnoRequerida(anioEfectivo);
+    // `baseDisponible`: si este MISMO request también trae `disponible` explícito, se usa
+    // ese valor como base (ya sea el 0 que alguien pidió directamente, o el 1 que ya pasó el
+    // gate de arriba usando estos mismos `docsFrescos`/`revsFrescos`/`anioEfectivo` — así que
+    // recalcularlo acá con la misma lógica da el mismo resultado, sin pelear con el gate). Si
+    // el request NO toca `disponible`, se usa el valor que tenía en BD antes de este PUT —
+    // este es el caso del bypass retroactivo: un vehículo YA disponible=1 al que le cambian
+    // el `anio` sin pedir nada sobre `disponible`, y que debe apagarse si ya no cumple.
+    const baseDisponible = body.disponible !== undefined ? Number(body.disponible) : disponibleAntesDePut;
+    const nuevoDisponible = (baseDisponible === 1 && (!aprobadoFresco('soat') || (tecnoExigibleFinal && !aprobadoFresco('tecno'))))
+      ? 0 : baseDisponible;
+
+    // Mismo patrón "upsert" ya usado arriba para `contenido_revision`/`contenido_revision_motivo`
+    // (ver bloque de moderación de fotos): si el loop genérico de `ownFields`/`adminOnlyFields`
+    // ya iba a escribir alguno de estos 3 campos (`disponible` está en `ownFields`;
+    // `documentos_estado` en `adminOnlyFields`), este cálculo tiene la última palabra —
+    // sobrescribe el valor en `values` en vez de duplicar la columna en el `UPDATE`.
+    const upsertPair = (col: string, val: unknown) => {
+      const key = `${col} = ?`;
+      const idx = pairs.indexOf(key);
+      if (idx !== -1) values[idx] = val;
+      else { pairs.push(key); values.push(val); }
+    };
+    upsertPair('documentos_revisiones', JSON.stringify(revsFrescos));
+    upsertPair('documentos_estado', nuevoEstadoDocs);
+    upsertPair('disponible', nuevoDisponible);
   }
 
   if (body.documentos !== undefined) {
