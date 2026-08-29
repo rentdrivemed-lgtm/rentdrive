@@ -120,6 +120,12 @@ IMPORTANT: search actively for the plate at ANY angle the photo happens to show 
 - At a 3/4 or side angle, partially foreshortened, smaller, or at a slant — still look for it.
 - Sometimes partially obscured, reflective, small in the frame, or off-center — still try to find it if any part of it is legible or even just visible.
 
+EXCEPTION — full/pure side-profile photos: if the photo shows a full lateral profile of the car (the entire side of the vehicle, doors/wheels/side panels) and NEITHER the front bumper/grille NOR the rear bumper/trunk is actually visible in the frame, then the plate is physically NOT in the shot in most such photos — set plate_visible to false in that case. Only set it to true for a side-profile-looking photo if you can genuinely see a sliver of the front or rear of the car at a 3/4 angle (even a small corner of the bumper/grille/tail lights) AND the plate itself is visible on that sliver — do not infer a plate's location just because "a car should have one somewhere".
+
+CONFIDENCE: this rule exists ONLY to stop you from pointing at a BACKGROUND object (a building, sign, billboard, window, graffiti, storefront, or anything not physically attached to the car) and mistaking it for a plate — never mark plate_visible true just because "there should be a plate somewhere in this scene". It is NOT a reason to discard a plate that is genuinely mounted on the car's own bodywork just because it is small, blurry, partially cut off, reflective, or seen at a steep angle — for that case, keep applying the "search actively at ANY angle" instruction above: if you can tell that what you're looking at is a real plate panel on the vehicle itself (even if you can only make out a sliver of it, or can't read every character), set plate_visible to true with your best-estimate region rather than requiring full legibility. Only set plate_visible to false here when you cannot tell it is the vehicle's actual plate panel at all (i.e. it's ambiguous or looks like a background object) — not merely because the plate itself is hard to see clearly.
+
+SELF-CHECK before answering: re-examine the region you are about to return and confirm it sits physically ON the vehicle's own bodywork (bumper/grille/trunk/tailgate), not on the background (building, street, another object) — if the region would fall outside the car's body, set plate_visible to false instead.
+
 SEPARATELY, also check the photo for content moderation: this platform is a car rental marketplace (DrivePass, Medellín) and photos here are supposed to be regular photos of a car (exterior, interior, engine bay, etc.), sometimes with a person standing near/in the car (owner showing off the car, a normal selfie with the vehicle, someone sitting in the driver's seat, etc. — all of that is completely normal and fine). Only flag it as inappropriate if the photo clearly, unambiguously shows sexual or explicit content that has no place on a car rental listing — e.g. nudity, sexually explicit poses/acts, or pornographic material. Be conservative: a normal photo of a person (clothed, in any normal pose) near/in/around the car is NEVER inappropriate, even if they're not the main subject. When in doubt, do NOT flag it — false positives here are costly (they block a legitimate car listing), so only flag content that is obviously, unambiguously explicit.
 
 Think step by step first (reason briefly about which side of the car is shown and where the plate would be, and separately whether the content is appropriate), THEN respond with ONLY valid JSON, no markdown, as the very last part of your answer:
@@ -215,6 +221,29 @@ Rules:
   const boxTop  = (r.y_pct / 100) * imgH;
   const boxW    = (r.w_pct / 100) * imgW;
   const boxH    = (r.h_pct / 100) * imgH;
+
+  // Segunda capa de seguridad (defensa en profundidad) además del prompt: una
+  // placa colombiana real es un rectángulo horizontal con una proporción
+  // ancho:alto de aproximadamente 2:1 a 2.5:1. Si el box que devolvió Claude
+  // está muy lejos de esa forma, es más probable que haya apuntado a un objeto
+  // de fondo (edificio, aviso, ventana) que a una placa real — no lo dibujamos.
+  // Usamos el ratio en PÍXELES REALES del box (boxW/boxH), no el de x_pct/y_pct
+  // crudo: estos últimos están expresados como % del ancho/alto de la imagen
+  // por separado, así que su cociente queda sesgado por el aspect-ratio de la
+  // FOTO (p. ej. una foto vertical de celular, muy común, no es cuadrada) y no
+  // refleja la proporción física real del rectángulo detectado. El rango
+  // [1.0, 4.5] es deliberadamente amplio (conservador) para no rechazar
+  // detecciones válidas con perspectiva/ángulo pronunciado.
+  const ASPECTO_MIN = 1.0;
+  const ASPECTO_MAX = 4.5;
+  const aspecto = boxW / boxH;
+  if (!Number.isFinite(aspecto) || aspecto < ASPECTO_MIN || aspecto > ASPECTO_MAX) {
+    console.warn(
+      '[blur-placas] Región descartada por proporción implausible para una placa',
+      { x_pct: r.x_pct, y_pct: r.y_pct, w_pct: r.w_pct, h_pct: r.h_pct, boxW, boxH, aspecto }
+    );
+    return { buffer, difuminada: false, contenidoInapropiado, motivoInapropiado, moderacionEvaluada: true };
+  }
 
   // Margen extra (además del pequeño ~5% que ya se le pide a Claude) para tolerar
   // bounding boxes ligeramente desalineados y no dejar un borde de placa visible sin
