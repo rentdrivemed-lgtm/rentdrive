@@ -247,7 +247,7 @@ Rules:
 
   // Margen extra (además del pequeño ~5% que ya se le pide a Claude) para tolerar
   // bounding boxes ligeramente desalineados y no dejar un borde de placa visible sin
-  // cubrir: expandimos la caja un 10% del ANCHO/ALTO DE LA PLACA DETECTADA (boxW/boxH),
+  // cubrir: expandimos la caja un 6% del ANCHO/ALTO DE LA PLACA DETECTADA (boxW/boxH),
   // no de la imagen completa. Antes esto era `imgW * 0.08` / `imgH * 0.08` — un 8% del
   // tamaño TOTAL de la foto, que en una imagen de ~1200px de ancho agrega ~96px de
   // margen por lado a una placa que puede medir solo 150-250px de ancho: el rectángulo
@@ -257,9 +257,13 @@ Rules:
   // región devuelta — dos márgenes generosos que se componían. Ahora solo uno de los
   // dos es generoso (el del código, proporcional a la placa) y el otro (el del prompt)
   // se bajó a ~5%, solo para tolerar imprecisión del propio estimado de Claude.
+  // Se bajó de 10% a 6% tras un segundo reporte del usuario con foto real en producción
+  // (Ford Explorer): incluso con el ajuste anterior, el tapado se seguía viendo más
+  // grande de lo necesario sobre el paragolpes — este 6% es solo el colchón para
+  // imprecisión del bounding box, no para "cubrir de más" a propósito.
   // `Math.max(4, ...)` evita un margen ridículamente chico en cajas casi de 0px.
-  const padX = Math.max(4, Math.round(boxW * 0.10));
-  const padY = Math.max(4, Math.round(boxH * 0.10));
+  const padX = Math.max(4, Math.round(boxW * 0.06));
+  const padY = Math.max(4, Math.round(boxH * 0.06));
 
   const left   = Math.max(0, Math.floor(boxLeft - padX));
   const top    = Math.max(0, Math.floor(boxTop - padY));
@@ -268,37 +272,83 @@ Rules:
   const width  = Math.min(imgW - left, Math.max(20, right - left));
   const height = Math.min(imgH - top,  Math.max(10, bottom - top));
 
-  // Tapar la región de la placa con un rectángulo AMARILLO SÓLIDO (con un borde
-  // negro delgado), imitando el fondo real de una placa colombiana de vehículo
-  // particular — así el resultado se ve como una placa genérica tapada a
-  // propósito (intencional), no como un agujero negro que parece un bug.
+  // Tapar la región de la placa con un rectángulo 100% OPACO de marca DrivePass
+  // (fondo navy `#1B3356` + borde de acento naranja `#F25C2B` + el ícono del
+  // logo centrado) en vez de un bloque plano — así el tapado se ve intencional
+  // y de marca en lugar de una "cinta de censura" tosca (reporte del usuario
+  // con foto real: un rectángulo amarillo sólido grande y evidente sobre el
+  // paragolpes de un Ford Explorer). Se descartó difuminado (blur) a propósito:
+  // un blur puede en teoría ser parcialmente reversible ajustando brillo/contraste
+  // sobre la imagen resultante, mientras que un relleno 100% opaco (sin canal
+  // alfa parcial) reemplaza los píxeles originales por completo, sin importar su
+  // contraste/tamaño de fuente — garantía de ilegibilidad más fuerte.
   //
-  // El pipeline anterior pixelaba fuerte + blur y ENCIMA componía un rectángulo
-  // negro al 90% de opacidad. Con relleno 100% opaco (sin canal alfa parcial) los
-  // píxeles originales quedan completamente reemplazados sin importar su
-  // contraste/tamaño de fuente — no hace falta pixelado/blur por debajo como capa
-  // de respaldo, así que se simplificó a solo el rectángulo sólido: el resultado
-  // es idéntico en garantía de ilegibilidad y más limpio/intencional visualmente,
-  // y además evita el costo de las dos operaciones de resize+blur por foto.
-  const AMARILLO_PLACA = { r: 244, g: 196, b: 0, alpha: 1 };
-  const BORDE_NEGRO = { r: 0, g: 0, b: 0, alpha: 1 };
-  // Borde ~6% del lado más chico del rectángulo (con un piso de 2px) para que se
-  // note como un borde de placa incluso en cajas pequeñas, sin comerse el relleno.
+  // Se construye todo como UN SOLO SVG (fondo redondeado + borde + ícono
+  // vectorial), rasterizado con sharp a las dimensiones exactas `width x height`
+  // ya calculadas arriba, y se compone sobre la foto en el mismo `{left, top}`
+  // de siempre. Un solo SVG es más simple y preciso que componer varias capas
+  // rasterizadas con sharp (como hacía el diseño anterior).
+  const NAVY_MARCA = '#1B3356';
+  const NARANJA_MARCA = '#F25C2B';
+  const BLANCO_ICONO = '#F4F6FA';
+
+  // Esquinas redondeadas: ~18% del lado más chico del rectángulo (piso 4px) —
+  // notoriamente redondeado (estilo ícono de app) sin llegar a verse una
+  // píldora/óvalo completo en rectángulos muy alargados (placas 2:1–2.5:1).
+  const radio = Math.max(4, Math.round(Math.min(width, height) * 0.18));
+
+  // Borde de acento ~6% del lado más chico del rectángulo (piso 2px) — mismo
+  // criterio de proporcionalidad que ya usaba el borde del diseño anterior, para
+  // que siga notándose incluso en cajas pequeñas sin comerse el fondo.
   const borde = Math.max(2, Math.round(Math.min(width, height) * 0.06));
-  const anchoRelleno = Math.max(1, width - borde * 2);
-  const altoRelleno = Math.max(1, height - borde * 2);
 
-  const fondoConBorde = await sharp({
-    create: { width, height, channels: 4, background: BORDE_NEGRO },
-  }).png().toBuffer();
+  // Ícono del logo de DrivePass (solo las flechas, SIN el fondo navy redondeado
+  // del logo original en `public/brand/logo-mark.svg` — ese fondo ya lo pone el
+  // propio rectángulo del tapado, repetirlo duplicaría el marco). Paths copiados
+  // TAL CUAL del archivo real, en su mismo `viewBox="0 0 96 96"`.
+  const ICONO_PATHS = `
+    <path d="M26 38 H63" fill="none" stroke="${NARANJA_MARCA}" stroke-width="8" stroke-linecap="round"/>
+    <polyline points="55,29 66,38 55,47" fill="none" stroke="${NARANJA_MARCA}" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M70 58 H33" fill="none" stroke="${BLANCO_ICONO}" stroke-width="8" stroke-linecap="round"/>
+    <polyline points="41,49 30,58 41,67" fill="none" stroke="${BLANCO_ICONO}" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  `;
+  // Bounding box REAL de esos paths (con su stroke incluido) dentro del
+  // `viewBox 0 0 96 96`, medido rasterizando el ícono solo y recortando el
+  // área no transparente (`sharp().trim()`): x:[22,74] y:[25,71], es decir
+  // ancho 52 x alto 46, centrado en (48,48) — que además coincide con el
+  // centro del propio viewBox de 96x96 por el diseño simétrico del ícono.
+  const ICONO_ANCHO = 52;
+  const ICONO_ALTO = 46;
+  const ICONO_CENTRO_X = 48;
+  const ICONO_CENTRO_Y = 48;
 
-  const relleno = await sharp({
-    create: { width: anchoRelleno, height: altoRelleno, channels: 4, background: AMARILLO_PLACA },
-  }).png().toBuffer();
+  // Escalamos el ícono para que su lado más grande (52, el ancho de su bbox
+  // real) ocupe ~60% del lado MÁS CHICO del rectángulo de tapado (dentro del
+  // rango pedido de 55–65%), y lo centramos en ambos ejes con un solo
+  // `translate(...) scale(...)` sobre el grupo de paths — sin recalcular cada
+  // coordenada a mano.
+  const escala = Number(((Math.min(width, height) * 0.60) / Math.max(ICONO_ANCHO, ICONO_ALTO)).toFixed(4));
+  const tx = Number((width / 2 - escala * ICONO_CENTRO_X).toFixed(2));
+  const ty = Number((height / 2 - escala * ICONO_CENTRO_Y).toFixed(2));
 
-  const placaRegion = await sharp(fondoConBorde)
-    .composite([{ input: relleno, left: borde, top: borde }])
-    .toBuffer();
+  // El borde se dibuja como `stroke` centrado en el contorno del `rect`, con el
+  // propio `rect` inset `borde/2` por lado (x/y/width/height ajustados): así el
+  // trazo queda íntegramente dentro del lienzo `width x height` sin desbordarse
+  // ni recortarse, y el resultado es un borde de grosor exacto `borde`.
+  const rectX = Number((borde / 2).toFixed(2));
+  const rectY = Number((borde / 2).toFixed(2));
+  const rectW = Number(Math.max(1, width - borde).toFixed(2));
+  const rectH = Number(Math.max(1, height - borde).toFixed(2));
+
+  const svgPlaca = `<svg width="${Number(width)}" height="${Number(height)}" viewBox="0 0 ${Number(width)} ${Number(height)}" xmlns="http://www.w3.org/2000/svg">
+    <rect x="0" y="0" width="${Number(width)}" height="${Number(height)}" fill="${NAVY_MARCA}"/>
+    <rect x="${rectX}" y="${rectY}" width="${rectW}" height="${rectH}" rx="${Number(radio)}" fill="${NAVY_MARCA}" stroke="${NARANJA_MARCA}" stroke-width="${Number(borde)}"/>
+    <g transform="translate(${tx},${ty}) scale(${escala})">
+      ${ICONO_PATHS}
+    </g>
+  </svg>`;
+
+  const placaRegion = await sharp(Buffer.from(svgPlaca)).png().toBuffer();
 
   const resultado = await sharp(buffer)
     .composite([{ input: placaRegion, left, top }])
