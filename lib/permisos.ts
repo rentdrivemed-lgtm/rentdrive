@@ -38,6 +38,7 @@ export const AREA_NIVELES: Record<string, AdminNivel[]> = {
   contabilidad: ['principal', 'socio'],
   mercado:      ['principal', 'socio'],
   calculadora:  ['principal', 'socio'],
+  buses:        ['principal', 'socio'],
   leads:        ['principal', 'socio', 'secretaria'],
   soporte:      ['principal', 'socio', 'secretaria'],
   nfc:          ['principal', 'socio'],

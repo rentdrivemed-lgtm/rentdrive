@@ -486,6 +486,128 @@ function initDb(db: Database.Database) {
       motivo                 TEXT DEFAULT '',
       created_at             TEXT DEFAULT (datetime('now', 'localtime'))
     );
+
+    -- ═══════════════ Cotizador de Buses (viajes ocasionales) ═══════════════
+    -- Especificación completa: COTIZADOR-BUSES-SPEC.md (raíz del repo). Etapa 1 del
+    -- orden de construcción sugerido en su §11: solo esquema + permisos + lógica pura
+    -- de cotización (lib/busCotizador.ts) — todavía NO hay endpoints/UI para esto.
+
+    -- Catálogo fijo de categorías de bus por capacidad de pasajeros (§1 del spec).
+    -- Semilla de las 6 filas más abajo (INSERT OR IGNORE, idempotente). Si cambias esta
+    -- semilla, cambia también BUS_CATEGORIAS en lib/busCotizador.ts — deben quedar
+    -- sincronizadas (la tabla es la fuente para el backend, la constante es el reflejo
+    -- para que la UI cliente muestre nombres sin ir a la DB).
+    CREATE TABLE IF NOT EXISTS bus_categorias (
+      codigo TEXT PRIMARY KEY,           -- 'px12' | 'px14' | 'px16' | 'px19' | 'px22_25' | 'px30_42'
+      nombre TEXT NOT NULL,
+      capacidad_min INTEGER NOT NULL,
+      capacidad_max INTEGER NOT NULL,
+      orden INTEGER NOT NULL
+    );
+
+    -- ===== CAPA 1: referencia por categoría (admin, viene del tarifario importado, §9) =====
+
+    CREATE TABLE IF NOT EXISTS bus_tarifas_destino_ref (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      destino TEXT NOT NULL,
+      km INTEGER,
+      px12 REAL, px12_30 REAL, px14 REAL, px14_30 REAL, px16 REAL, px16_30 REAL,
+      px19 REAL, px19_30 REAL, px22_25 REAL, px22_25_30 REAL, px30_42 REAL, px30_42_30 REAL,
+      observaciones TEXT DEFAULT '',
+      activo INTEGER DEFAULT 1,
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(destino)
+    );
+
+    CREATE TABLE IF NOT EXISTS bus_tarifas_hora_ref (
+      categoria TEXT PRIMARY KEY REFERENCES bus_categorias(codigo),
+      tarifa_hora REAL NOT NULL DEFAULT 0,
+      minimo_horas REAL NOT NULL DEFAULT 4,
+      hora_adicional REAL NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS bus_valor_km_ref (
+      categoria TEXT PRIMARY KEY REFERENCES bus_categorias(codigo),
+      valor_km REAL NOT NULL DEFAULT 0,
+      tarifa_minima REAL NOT NULL DEFAULT 0,
+      calculado_de_tarifario INTEGER DEFAULT 0  -- 1 = promedio automático tarifa/km; 0 = a mano
+    );
+
+    -- ===== CAPA 2: tarifas reales de CADA bus (propietario) =====
+    -- Un bus ya tiene una categoría fija (vehiculos.bus_categoria), así que aquí solo van
+    -- los 2 precios (base y +30%) de esa categoría por destino — no las 12 columnas de la
+    -- tabla de referencia.
+
+    CREATE TABLE IF NOT EXISTS bus_tarifas_destino_veh (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      vehiculo_id INTEGER NOT NULL REFERENCES vehiculos(id),
+      destino TEXT NOT NULL,
+      km INTEGER,
+      tarifa_base REAL NOT NULL,
+      tarifa_30 REAL NOT NULL,
+      observaciones TEXT DEFAULT '',
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(vehiculo_id, destino)
+    );
+
+    CREATE TABLE IF NOT EXISTS bus_tarifas_hora_veh (
+      vehiculo_id INTEGER PRIMARY KEY REFERENCES vehiculos(id),
+      tarifa_hora REAL NOT NULL,
+      minimo_horas REAL NOT NULL,
+      hora_adicional REAL NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS bus_valor_km_veh (
+      vehiculo_id INTEGER PRIMARY KEY REFERENCES vehiculos(id),
+      valor_km REAL NOT NULL,
+      tarifa_minima REAL NOT NULL
+    );
+
+    -- ===== Cola de aprobación de cambios de tarifa (§4 del spec) =====
+    -- valor_referencia/tolerancia_aplicada (hallazgo auditor-seguridad, ronda post-QA):
+    -- cada fila queda autocontenida con el valor de referencia y el % de tolerancia vigentes
+    -- en el MOMENTO de la decisión de auto-aprobar o no -- así una auditoría posterior no
+    -- depende de reconstruir ese contexto desde la tabla 'auditoria' (que puede no tener el
+    -- detalle, o cuya config pudo cambiar después). Ambas quedan NULL cuando el cambio nunca
+    -- llegó a evaluarse contra una referencia (ej. bug, o flujo que no aplica banda).
+    CREATE TABLE IF NOT EXISTS bus_tarifas_cambios (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      vehiculo_id INTEGER NOT NULL REFERENCES vehiculos(id),
+      propietario_id INTEGER NOT NULL REFERENCES usuarios(id),
+      tipo TEXT NOT NULL CHECK(tipo IN ('destino','hora','km')),
+      destino TEXT,                       -- solo si tipo='destino'
+      categoria TEXT NOT NULL,            -- denormalizado, para comparar contra la referencia rápido
+      valor_referencia REAL,              -- valor de referencia contra el que se comparó al decidir
+      tolerancia_aplicada REAL,           -- % de tolerancia vigente al momento de la decisión
+      valor_anterior TEXT NOT NULL,       -- JSON: {tarifa_base, tarifa_30} o {tarifa_hora,...} o {valor_km,...}
+      valor_propuesto TEXT NOT NULL,      -- mismo formato
+      estado TEXT NOT NULL DEFAULT 'pendiente' CHECK(estado IN ('pendiente','auto_aprobada','aprobada','rechazada')),
+      motivo_admin TEXT DEFAULT '',
+      revisado_por INTEGER REFERENCES usuarios(id),
+      revisado_en TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      CHECK (estado NOT IN ('aprobada','rechazada') OR revisado_por IS NOT NULL)
+    );
+
+    -- Cotizaciones generadas por el cotizador público de buses (log + seguimiento
+    -- comercial, mismo espíritu que la tabla 'cotizaciones' existente para carros).
+    CREATE TABLE IF NOT EXISTS cotizaciones_bus (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      numero TEXT NOT NULL,
+      vehiculo_id INTEGER NOT NULL REFERENCES vehiculos(id),
+      categoria TEXT NOT NULL,
+      modo TEXT NOT NULL CHECK(modo IN ('destino','trayecto','horas')),
+      destino TEXT, km REAL, horas REAL,
+      con_recargo INTEGER DEFAULT 0,
+      tarifa_aplicada REAL NOT NULL,
+      recargo_valor REAL DEFAULT 0,
+      total REAL NOT NULL,
+      cliente_nombre TEXT DEFAULT '',
+      cliente_telefono TEXT DEFAULT '',
+      fecha_servicio TEXT DEFAULT '',
+      estado TEXT DEFAULT 'nueva' CHECK(estado IN ('nueva','contactada','confirmada','descartada')),
+      created_at TEXT DEFAULT (datetime('now'))
+    );
   `);
 
   try { db.exec("ALTER TABLE liquidaciones ADD COLUMN comprobante_url TEXT DEFAULT ''"); } catch { /* ya existe */ }
@@ -529,6 +651,12 @@ function initDb(db: Database.Database) {
   // el equipo lo revise a mano y lo apruebe (PUT { contenido_revision: 0 }). Ver lib/moderacion.ts.
   try { db.exec("ALTER TABLE vehiculos ADD COLUMN contenido_revision INTEGER DEFAULT 0"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE vehiculos ADD COLUMN contenido_revision_motivo TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  // Cotizador de buses (COTIZADOR-BUSES-SPEC.md §3): un bus reutiliza la tabla `vehiculos`
+  // con tipo='bus'. `bus_categoria` se CALCULA desde `capacidad_pasajeros` con
+  // categoriaPorPasajeros() (lib/busCotizador.ts) — no es editable a mano, para que un
+  // propietario no pueda declarar una categoría más barata/cara que la capacidad real.
+  try { db.exec("ALTER TABLE vehiculos ADD COLUMN capacidad_pasajeros INTEGER"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE vehiculos ADD COLUMN bus_categoria TEXT"); } catch { /* ya existe */ }
 
   // fotos_moderacion — pasó de "solo registrar fotos sospechosas" a un modelo allow-list
   // (registrar TODA foto subida, ver lib/moderacion.ts). Columnas nuevas para bases ya
@@ -616,6 +744,8 @@ function initDb(db: Database.Database) {
   migrarCotizacionesReservaOpcional(db);
   migrarUsuariosEstadoArchivada(db);
   migrarPicoPlacaActivar(db);
+  sembrarBusCategorias(db);
+  sembrarConfigBuses(db);
   revertirFotoMalTapadaVehiculo10(db);
 
   const adminExists = db.prepare("SELECT id FROM usuarios WHERE rol='admin' LIMIT 1").get();
@@ -861,6 +991,51 @@ function migrarPicoPlacaActivar(db: Database.Database) {
     setConfig(db, 'pico_placa_seed_v1', '1'); // marca esta corrección como hecha para siempre, pase lo que pase después
   } catch (e) {
     console.error('[db] Migración pico_placa activar falló:', e instanceof Error ? e.message : e);
+  }
+}
+
+// Semilla del catálogo fijo de categorías de bus (COTIZADOR-BUSES-SPEC.md §1). `INSERT OR
+// IGNORE` sobre la PRIMARY KEY (codigo) ya es idempotente por sí solo — no hace falta un
+// marcador de "ya corrida" como en migrarPicoPlacaActivar, porque este catálogo nunca se
+// edita desde la UI (no hay riesgo de pisar una decisión posterior de Victor). Si cambias
+// estos valores, cambia también BUS_CATEGORIAS en lib/busCotizador.ts (deben quedar
+// sincronizados: esta tabla es la fuente para el backend, esa constante es el reflejo que
+// usa la UI de cliente sin ir a la DB).
+function sembrarBusCategorias(db: Database.Database) {
+  try {
+    const ins = db.prepare(
+      'INSERT OR IGNORE INTO bus_categorias (codigo, nombre, capacidad_min, capacidad_max, orden) VALUES (?, ?, ?, ?, ?)'
+    );
+    const CATEGORIAS: [string, string, number, number, number][] = [
+      ['px12', 'Buseta 12 pasajeros', 1, 12, 1],
+      ['px14', 'Buseta 14 pasajeros', 13, 14, 2],
+      ['px16', 'Buseta 16 pasajeros', 15, 16, 3],
+      ['px19', 'Microbús 19 pasajeros', 17, 19, 4],
+      ['px22_25', 'Busetón 22-25 pasajeros', 20, 25, 5],
+      ['px30_42', 'Bus 30-42 pasajeros', 26, 42, 6],
+    ];
+    for (const [codigo, nombre, capacidad_min, capacidad_max, orden] of CATEGORIAS) {
+      ins.run(codigo, nombre, capacidad_min, capacidad_max, orden);
+    }
+  } catch (e) {
+    console.error('[db] Semilla bus_categorias falló:', e instanceof Error ? e.message : e);
+  }
+}
+
+// Valor por defecto de la tolerancia de auto-aprobación de tarifas de bus (COTIZADOR-BUSES-
+// SPEC.md §4). Mismo patrón de lectura con fallback que `comisionPlataforma()` en
+// lib/contabilidad.ts: NO se sobrescribe si el admin ya la cambió (getConfig no vacío), así
+// que esto es un no-op seguro en cada arranque después de la primera vez. Se guarda como
+// string numérico en PORCENTAJE ENTERO ('20' = ±20%), NO como fracción — a diferencia de
+// `comision_plataforma_pct` (que sí es fracción, 0.35). Ver el comentario en
+// lib/busCotizador.ts (dentroDeBanda) para la misma convención en el lado de la lógica pura.
+function sembrarConfigBuses(db: Database.Database) {
+  try {
+    if (!getConfig(db, 'TOLERANCIA_TARIFA_BUS')) {
+      setConfig(db, 'TOLERANCIA_TARIFA_BUS', '20');
+    }
+  } catch (e) {
+    console.error('[db] Semilla TOLERANCIA_TARIFA_BUS falló:', e instanceof Error ? e.message : e);
   }
 }
 

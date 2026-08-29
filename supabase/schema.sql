@@ -305,3 +305,147 @@ CREATE TABLE IF NOT EXISTS nfc_cards (
   created_at      TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
   updated_at      TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
 );
+
+-- ═══════════════ Cotizador de Buses (viajes ocasionales) ═══════════════
+-- Especificación completa: COTIZADOR-BUSES-SPEC.md (raíz del repo), §3. Reflejo en
+-- Postgres del bloque equivalente de lib/db.ts (mismo orden, para comparar lado a lado).
+-- Etapa 1 del orden de construcción del spec (§11): solo esquema — todavía no hay
+-- endpoints/UI para esto.
+--
+-- ⚠️ IMPORTANTE (paridad SQLite↔Supabase, gap YA EXISTENTE antes de este cambio, ver nota
+-- de `fotos_moderacion` más arriba): este archivo NO tiene `CREATE TABLE vehiculos`, ni
+-- `CREATE TABLE config`, ni `CREATE TABLE reservas`. Las tablas de abajo (igual que
+-- `cotizaciones`/`remisiones`/`facturas` ya existentes en este archivo) declaran
+-- `REFERENCES vehiculos(id)` / `REFERENCES usuarios(id)` siguiendo la misma convención que
+-- el resto del archivo, pero ejecutar este script contra un Supabase realmente vacío
+-- fallará por la FK a `vehiculos` (tabla inexistente aquí) igual que ya le pasaría hoy a
+-- `cotizaciones`/`remisiones`/`facturas`. Esto NO es un problema introducido por este
+-- cambio — es el mismo gap preexistente, documentado aquí para que no se repita la
+-- sorpresa. Si en algún momento se reconstruye `CREATE TABLE vehiculos` para Supabase,
+-- agregar ahí también estas 2 columnas nuevas (COTIZADOR-BUSES-SPEC.md §3):
+--   ALTER TABLE vehiculos ADD COLUMN IF NOT EXISTS capacidad_pasajeros INTEGER;
+--   ALTER TABLE vehiculos ADD COLUMN IF NOT EXISTS bus_categoria TEXT;
+-- Y si se reconstruye `CREATE TABLE config` (clave/valor), sembrar ahí la clave
+-- TOLERANCIA_TARIFA_BUS con valor por defecto '20' (ver lib/db.ts → sembrarConfigBuses).
+
+-- Catálogo fijo de categorías de bus por capacidad de pasajeros (§1 del spec). Semilla de
+-- las 6 filas: en Supabase se inserta a mano una sola vez (a diferencia de SQLite, este
+-- archivo no corre en cada arranque del proceso), por ejemplo con
+-- `INSERT INTO bus_categorias VALUES (...) ON CONFLICT (codigo) DO NOTHING;` — ver la
+-- semilla real en lib/db.ts → sembrarBusCategorias() y BUS_CATEGORIAS en
+-- lib/busCotizador.ts (las 3 deben quedar sincronizadas).
+CREATE TABLE IF NOT EXISTS bus_categorias (
+  codigo         TEXT PRIMARY KEY,
+  nombre         TEXT NOT NULL,
+  capacidad_min  INTEGER NOT NULL,
+  capacidad_max  INTEGER NOT NULL,
+  orden          INTEGER NOT NULL
+);
+
+-- ===== CAPA 1: referencia por categoría (admin, viene del tarifario importado, §9) =====
+
+CREATE TABLE IF NOT EXISTS bus_tarifas_destino_ref (
+  id             SERIAL PRIMARY KEY,
+  destino        TEXT NOT NULL UNIQUE,
+  km             INTEGER,
+  px12           REAL, px12_30    REAL,
+  px14           REAL, px14_30    REAL,
+  px16           REAL, px16_30    REAL,
+  px19           REAL, px19_30    REAL,
+  px22_25        REAL, px22_25_30 REAL,
+  px30_42        REAL, px30_42_30 REAL,
+  observaciones  TEXT DEFAULT '',
+  activo         INTEGER DEFAULT 1,
+  updated_at     TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+);
+
+CREATE TABLE IF NOT EXISTS bus_tarifas_hora_ref (
+  categoria       TEXT PRIMARY KEY REFERENCES bus_categorias(codigo),
+  tarifa_hora     REAL NOT NULL DEFAULT 0,
+  minimo_horas    REAL NOT NULL DEFAULT 4,
+  hora_adicional  REAL NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS bus_valor_km_ref (
+  categoria               TEXT PRIMARY KEY REFERENCES bus_categorias(codigo),
+  valor_km                REAL NOT NULL DEFAULT 0,
+  tarifa_minima           REAL NOT NULL DEFAULT 0,
+  calculado_de_tarifario  INTEGER DEFAULT 0   -- 1 = promedio automático tarifa/km; 0 = a mano
+);
+
+-- ===== CAPA 2: tarifas reales de CADA bus (propietario) =====
+-- Un bus ya tiene una categoría fija (vehiculos.bus_categoria), así que aquí solo van los 2
+-- precios (base y +30%) de esa categoría por destino — no las 12 columnas de la referencia.
+
+CREATE TABLE IF NOT EXISTS bus_tarifas_destino_veh (
+  id             SERIAL PRIMARY KEY,
+  vehiculo_id    INTEGER NOT NULL REFERENCES vehiculos(id),
+  destino        TEXT NOT NULL,
+  km             INTEGER,
+  tarifa_base    REAL NOT NULL,
+  tarifa_30      REAL NOT NULL,
+  observaciones  TEXT DEFAULT '',
+  updated_at     TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
+  UNIQUE (vehiculo_id, destino)
+);
+
+CREATE TABLE IF NOT EXISTS bus_tarifas_hora_veh (
+  vehiculo_id     INTEGER PRIMARY KEY REFERENCES vehiculos(id),
+  tarifa_hora     REAL NOT NULL,
+  minimo_horas    REAL NOT NULL,
+  hora_adicional  REAL NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS bus_valor_km_veh (
+  vehiculo_id    INTEGER PRIMARY KEY REFERENCES vehiculos(id),
+  valor_km       REAL NOT NULL,
+  tarifa_minima  REAL NOT NULL
+);
+
+-- ===== Cola de aprobación de cambios de tarifa (§4 del spec) =====
+-- `valor_referencia`/`tolerancia_aplicada` (hallazgo auditor-seguridad, ronda post-QA): cada
+-- fila queda autocontenida con el valor de referencia y el % de tolerancia vigentes en el
+-- MOMENTO de la decisión de auto-aprobar o no — así una auditoría posterior no depende de
+-- reconstruir ese contexto desde la tabla `auditoria` (que puede no tener el detalle, o cuya
+-- config pudo cambiar después). Ambas quedan NULL cuando el cambio nunca llegó a evaluarse
+-- contra una referencia (ej. bug, o flujo que no aplica banda).
+CREATE TABLE IF NOT EXISTS bus_tarifas_cambios (
+  id                    SERIAL PRIMARY KEY,
+  vehiculo_id           INTEGER NOT NULL REFERENCES vehiculos(id),
+  propietario_id        INTEGER NOT NULL REFERENCES usuarios(id),
+  tipo                  TEXT NOT NULL CHECK (tipo IN ('destino','hora','km')),
+  destino               TEXT,                 -- solo si tipo='destino'
+  categoria             TEXT NOT NULL,        -- denormalizado, para comparar contra la referencia rápido
+  valor_referencia      REAL,                 -- valor de referencia contra el que se comparó al decidir
+  tolerancia_aplicada   REAL,                 -- % de tolerancia vigente al momento de la decisión
+  valor_anterior        TEXT NOT NULL,        -- JSON: {tarifa_base, tarifa_30} o {tarifa_hora,...} o {valor_km,...}
+  valor_propuesto       TEXT NOT NULL,        -- mismo formato
+  estado                TEXT NOT NULL DEFAULT 'pendiente' CHECK (estado IN ('pendiente','auto_aprobada','aprobada','rechazada')),
+  motivo_admin          TEXT DEFAULT '',
+  revisado_por          INTEGER REFERENCES usuarios(id),
+  revisado_en           TEXT,
+  created_at            TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
+  CHECK (estado NOT IN ('aprobada','rechazada') OR revisado_por IS NOT NULL)
+);
+
+-- Cotizaciones generadas por el cotizador público de buses (log + seguimiento comercial,
+-- mismo espíritu que la tabla `cotizaciones` existente para carros).
+CREATE TABLE IF NOT EXISTS cotizaciones_bus (
+  id               SERIAL PRIMARY KEY,
+  numero           TEXT NOT NULL,
+  vehiculo_id      INTEGER NOT NULL REFERENCES vehiculos(id),
+  categoria        TEXT NOT NULL,
+  modo             TEXT NOT NULL CHECK (modo IN ('destino','trayecto','horas')),
+  destino          TEXT,
+  km               REAL,
+  horas            REAL,
+  con_recargo      INTEGER DEFAULT 0,
+  tarifa_aplicada  REAL NOT NULL,
+  recargo_valor    REAL DEFAULT 0,
+  total            REAL NOT NULL,
+  cliente_nombre   TEXT DEFAULT '',
+  cliente_telefono TEXT DEFAULT '',
+  fecha_servicio   TEXT DEFAULT '',
+  estado           TEXT DEFAULT 'nueva' CHECK (estado IN ('nueva','contactada','confirmada','descartada')),
+  created_at       TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+);
