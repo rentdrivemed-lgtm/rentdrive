@@ -638,6 +638,32 @@ export default function DashboardAdmin() {
     }
   };
 
+  // Activa/desactiva `disponible` directamente desde el panel de admin (antes solo se podía
+  // desde el dashboard del propietario). El servidor (app/api/vehiculos/[id]/route.ts) ya
+  // rechaza con 400 el intento de activar si el SOAT o la Tecno-mecánica no están aprobados,
+  // y también rechaza mandar `documentos` junto con `disponible: 1` — por eso el body de este
+  // PUT va siempre solo con `{ disponible }`, sin ningún campo extra.
+  const toggleDisponible = async (v: Vehiculo) => {
+    const nuevo = v.disponible ? 0 : 1;
+    try {
+      const res = await fetch(`/api/vehiculos/${v.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ disponible: nuevo }),
+      });
+      if (res.ok) {
+        setVehiculos(vs => vs.map(x => x.id === v.id ? { ...x, disponible: nuevo } : x));
+      } else {
+        // Ej. el gate de SOAT/Tecno-mecánica: el servidor no deja marcar disponible=1
+        // hasta que ambos documentos estén aprobados por DrivePass.
+        const d = await res.json().catch(() => ({}));
+        alert((d as { error?: string }).error || 'No se pudo cambiar la disponibilidad.');
+      }
+    } catch {
+      alert('Sin conexión — intenta de nuevo.');
+    }
+  };
+
   const cargarVehiculosArchivados = () =>
     fetch('/api/vehiculos?archivados=1').then(r => r.json()).then(d => setVehiculosArchivados(d.vehiculos || [])).catch(() => {});
 
@@ -1336,6 +1362,15 @@ export default function DashboardAdmin() {
                           : 'border-border text-ink/60 hover:bg-surface'
                       }`}>
                       ⭐ {v.en_vitrina ? 'En vitrina' : 'Vitrina'}
+                    </button>
+                    <button onClick={() => toggleDisponible(v)}
+                      title={v.disponible ? 'Desactivar (se oculta del catálogo público)' : 'Activar (requiere SOAT y Tecno-mecánica aprobados)'}
+                      className={`flex items-center gap-1 text-xs border px-2.5 py-1.5 rounded-xl transition font-medium ${
+                        v.disponible
+                          ? 'border-success/30 bg-success/10 text-success hover:bg-success/15'
+                          : 'border-border text-ink/60 hover:bg-surface'
+                      }`}>
+                      {v.disponible ? '✓ Activo' : 'Activar'}
                     </button>
                     <button onClick={() => setFotoModal({ v })}
                       className="flex items-center gap-1 text-xs border border-accent/30 text-accent px-2.5 py-1.5 rounded-xl hover:bg-accent-light transition font-medium">
