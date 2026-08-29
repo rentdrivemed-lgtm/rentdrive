@@ -163,26 +163,40 @@ export async function estandarizarFotoVehiculo(
     const carW = autoInfo.width;
     const carH = autoInfo.height;
 
-    // Márgenes proporcionales al tamaño del auto ya recortado: 8% a los lados, 10%
-    // arriba (aire para la cabeza), 22% abajo (espacio para que la sombra respire sin
-    // quedar pegada al borde del lienzo).
+    // Márgenes proporcionales al tamaño del auto ya recortado: 8% a los lados, 12%
+    // arriba (aire para la cabeza), 24% abajo (espacio para que la sombra respire sin
+    // quedar pegada al borde del lienzo, y para que la marca de agua del logo en la
+    // esquina inferior derecha no quede encima del auto).
     const padSide = Math.round(carW * 0.08);
-    const padTop = Math.round(carH * 0.10);
-    const padBottom = Math.round(carH * 0.22);
+    const padTop = Math.round(carH * 0.12);
+    const padBottom = Math.round(carH * 0.24);
     const width = carW + padSide * 2;
     const height = carH + padTop + padBottom;
 
+    // Fondo "estudio navy corporativo" con marca de agua del logo DrivePass: Victor
+    // aprobó este estilo tras ver 4 mockups reales (con un cutout real de remove.bg)
+    // — reemplaza el fondo gris genérico anterior por el degradado navy de marca, y
+    // agrega el ícono de la marca (flechas de intercambio, estilo del logo) como
+    // marca de agua discreta en la esquina inferior derecha. El `<g transform>` del
+    // ícono está calibrado visualmente (centra el viewBox 96x96 del ícono a 30px del
+    // borde inferior derecho, escalado a 0.26) — no simplificar esos números.
     const svg = `
       <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
         <defs>
-          <radialGradient id="bg" cx="50%" cy="30%" r="80%">
-            <stop offset="0%" stop-color="#f4f4f5"/>
-            <stop offset="100%" stop-color="#dcdde0"/>
+          <radialGradient id="bg" cx="50%" cy="28%" r="85%">
+            <stop offset="0%" stop-color="#2c4a73"/>
+            <stop offset="100%" stop-color="#111f34"/>
           </radialGradient>
-          <filter id="blur"><feGaussianBlur stdDeviation="${Math.round(carW * 0.018)}"/></filter>
+          <filter id="blur"><feGaussianBlur stdDeviation="${Math.round(carW * 0.02)}"/></filter>
         </defs>
         <rect width="100%" height="100%" fill="url(#bg)"/>
-        <ellipse cx="${width / 2}" cy="${padTop + carH - carH * 0.02}" rx="${carW * 0.38}" ry="${carH * 0.035}" fill="#00000035" filter="url(#blur)"/>
+        <ellipse cx="${width / 2}" cy="${padTop + carH - carH * 0.02}" rx="${carW * 0.38}" ry="${carH * 0.035}" fill="#00000060" filter="url(#blur)"/>
+        <g transform="translate(${width - 30 - 48 * 0.26},${height - 30 - 48 * 0.26}) scale(0.26)">
+          <path d="M26 38 H63" fill="none" stroke="#F25C2B" stroke-width="8" stroke-linecap="round"/>
+          <polyline points="55,29 66,38 55,47" fill="none" stroke="#F25C2B" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M70 58 H33" fill="none" stroke="#F4F6FA" stroke-width="8" stroke-linecap="round"/>
+          <polyline points="41,49 30,58 41,67" fill="none" stroke="#F4F6FA" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+        </g>
       </svg>
     `;
     const fondo = await sharp(Buffer.from(svg)).png().toBuffer();
