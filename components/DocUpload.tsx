@@ -107,7 +107,7 @@ export default function DocUpload({ label, value, onChange, required }: Props) {
       <input
         ref={inputRef}
         type="file"
-        accept="image/jpeg,image/png,image/webp,application/pdf"
+        accept="image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf"
         className="hidden"
         onChange={handleFile}
       />
