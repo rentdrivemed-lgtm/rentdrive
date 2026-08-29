@@ -74,13 +74,46 @@ export async function estandarizarFotoVehiculo(
       kernel: sharp.kernel.lanczos3,
     });
 
-    const mejorada = await pipeline
+    // `.clahe()` corre DESPUÉS del `.resize()` de arriba, así que su rejilla debe
+    // calcularse sobre las dimensiones YA REDIMENSIONADAS (máx. `TARGET`px de lado
+    // mayor), no sobre `w`/`h` del buffer ORIGINAL: usar las del original (bug real
+    // encontrado por revisor de código) infla el tile 2-4× para cualquier foto de
+    // celular moderna (>1600px), y en aspectos muy anchos/altos el tile pedido puede
+    // superar directamente el lado menor de la imagen procesada y hacer que sharp
+    // LANCE ("hist_local: window too large") — esa excepción, atrapada por el
+    // try/catch general, descarta TODO el procesamiento (mejora + remove.bg) y
+    // degrada en silencio a la foto cruda justo para esa clase de imágenes.
+    // Por eso acá se materializa primero el resize (+ flatten) en un buffer real y
+    // se lee su tamaño real con `info` antes de decidir el tile.
+    const { data: resizedBuf, info: resizedInfo } = await pipeline
       .flatten({ background: '#ffffff' }) // por si el PNG de entrada trae alfa real
-      .normalise()
-      .clahe({ width: 16, height: 16, maxSlope: 3 }) // recupera detalle en sombras/luces
-      .modulate({ brightness: 1.02, saturation: 1.07 })
-      .gamma(1.04)
-      .sharpen({ sigma: 0.6 })
+      .toBuffer({ resolveWithObject: true });
+    const anchoProcesado = resizedInfo.width;
+    const altoProcesado = resizedInfo.height;
+    const ladoMenorProcesado = Math.min(anchoProcesado, altoProcesado);
+
+    // Tile ~1/8 del lado mayor YA redimensionado (mínimo 64px), NO un tamaño fijo
+    // pequeño: con tiles de solo 16px (el valor anterior) el realce de contraste
+    // local queda hiper-granular y produce halos/posterizado tipo "HDR barato" (bug
+    // real reportado por el usuario con una foto de producción, reproducido y
+    // confirmado antes de este fix). Con tiles ~1/8 del lado mayor y maxSlope bajo (1,
+    // el mínimo permitido por sharp), el realce de sombras/luces queda sutil e
+    // imperceptible como "efecto", en vez de dominar la imagen. Se quitó `.normalise()`
+    // (estiramiento global de histograma) porque competía con clahe y sumaba dureza.
+    // Techo defensivo al 90% del lado MENOR real (deja margen, no el 100% exacto):
+    // aunque el cálculo de arriba ya usa las dimensiones correctas, este clamp
+    // garantiza en profundidad que el tile nunca pueda igualar/superar el límite que
+    // hace lanzar a sharp, incluso ante algún caso borde no contemplado. Si el techo
+    // quedara por debajo del piso de 64 (imagen resultante muy chica), se prefiere
+    // relajar el piso hacia abajo (usar el techo) antes que arriesgar una excepción.
+    const tileClaheDeseado = Math.round(Math.max(anchoProcesado, altoProcesado) / 8);
+    const techoDefensivo = Math.max(1, Math.floor(ladoMenorProcesado * 0.9));
+    const tileClahe = Math.min(Math.max(64, tileClaheDeseado), techoDefensivo);
+    const mejorada = await sharp(resizedBuf)
+      .clahe({ width: tileClahe, height: tileClahe, maxSlope: 1 })
+      .modulate({ brightness: 1.02, saturation: 1.06 })
+      .gamma(1.02)
+      .sharpen({ sigma: 0.5 })
       .jpeg({ quality: 92 })
       .toBuffer();
 
@@ -113,30 +146,51 @@ export async function estandarizarFotoVehiculo(
 
     const cutout = Buffer.from(await res.arrayBuffer()); // PNG RGBA, fondo transparente
 
-    // 3) Fondo de estudio gris claro con sombra suave, del mismo tamaño real
-    //    que devolvió remove.bg (no asumimos que coincide con lo enviado).
-    const cutoutMeta = await sharp(cutout).metadata();
-    const width = cutoutMeta.width ?? 1600;
-    const height = cutoutMeta.height ?? 1600;
+    // 3) `crop: 'false'` (más abajo, en el form-data a remove.bg) deja el recorte con
+    //    RGBA en las mismas dimensiones/posición que la foto enviada — el auto puede
+    //    quedar en cualquier parte del cuadro (arriba, a un lado), y componerlo tal
+    //    cual sobre el fondo de estudio con una sombra a una altura fija (bug real
+    //    reportado: el auto quedaba "flotando", con la sombra sin alinear a las
+    //    llantas). Por eso primero se recorta al bounding box REAL del contenido no
+    //    transparente (`trim`), y luego se arma un lienzo nuevo con márgenes
+    //    proporcionales consistentes alrededor del auto ya recortado — así todos los
+    //    vehículos quedan con el mismo encuadre tipo catálogo, y la sombra se calcula
+    //    respecto al borde inferior real del auto, no a un porcentaje fijo del lienzo
+    //    original.
+    const { data: autoRecortado, info: autoInfo } = await sharp(cutout)
+      .trim({ threshold: 10 })
+      .toBuffer({ resolveWithObject: true });
+    const carW = autoInfo.width;
+    const carH = autoInfo.height;
+
+    // Márgenes proporcionales al tamaño del auto ya recortado: 8% a los lados, 10%
+    // arriba (aire para la cabeza), 22% abajo (espacio para que la sombra respire sin
+    // quedar pegada al borde del lienzo).
+    const padSide = Math.round(carW * 0.08);
+    const padTop = Math.round(carH * 0.10);
+    const padBottom = Math.round(carH * 0.22);
+    const width = carW + padSide * 2;
+    const height = carH + padTop + padBottom;
 
     const svg = `
       <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
         <defs>
-          <radialGradient id="bg" cx="50%" cy="35%" r="75%">
+          <radialGradient id="bg" cx="50%" cy="30%" r="80%">
             <stop offset="0%" stop-color="#f4f4f5"/>
             <stop offset="100%" stop-color="#dcdde0"/>
           </radialGradient>
-          <filter id="blur"><feGaussianBlur stdDeviation="${Math.round(width * 0.02)}"/></filter>
+          <filter id="blur"><feGaussianBlur stdDeviation="${Math.round(carW * 0.018)}"/></filter>
         </defs>
         <rect width="100%" height="100%" fill="url(#bg)"/>
-        <ellipse cx="${width / 2}" cy="${height * 0.92}" rx="${width * 0.35}" ry="${height * 0.05}" fill="#00000030" filter="url(#blur)"/>
+        <ellipse cx="${width / 2}" cy="${padTop + carH - carH * 0.02}" rx="${carW * 0.38}" ry="${carH * 0.035}" fill="#00000035" filter="url(#blur)"/>
       </svg>
     `;
     const fondo = await sharp(Buffer.from(svg)).png().toBuffer();
 
-    // 4) Componer el recorte sobre el fondo de estudio y codificar en WebP.
+    // 4) Componer el auto recortado sobre el fondo de estudio (posicionado con los
+    //    márgenes ya calculados) y codificar en WebP.
     const finalBuffer = await sharp(fondo)
-      .composite([{ input: cutout }])
+      .composite([{ input: autoRecortado, left: padSide, top: padTop }])
       .webp({ quality: 90 })
       .toBuffer();
 
