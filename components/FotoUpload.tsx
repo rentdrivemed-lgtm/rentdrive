@@ -41,7 +41,10 @@ export default function FotoUpload({ label, value, onChange, required }: Props) 
     fd.append('file', fileOrBlob, filename);
     // La detección de placa y la moderación de contenido ya NO dependen de ningún campo
     // que mande el cliente — /api/upload las ejecuta siempre para toda imagen (ver el
-    // fix de seguridad documentado ahí y en lib/moderacion.ts).
+    // fix de seguridad documentado ahí y en lib/moderacion.ts). `tipo=vehiculo` es aparte
+    // y puramente cosmético: activa la estandarización con IA (quitar fondo + mejorar
+    // calidad) en lib/estandarizar-foto.ts, que nunca gatea moderación ni difuminado.
+    fd.append('tipo', 'vehiculo');
     let res: Response;
     try {
       res = await fetch('/api/upload', { method: 'POST', body: fd });
