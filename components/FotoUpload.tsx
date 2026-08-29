@@ -36,7 +36,7 @@ export default function FotoUpload({ label, value, onChange, required }: Props) 
   const [difuminada, setDifuminada] = useState(false);
   const [sospechoso, setSospechoso] = useState(false);
 
-  const subirArchivo = async (fileOrBlob: File | Blob, filename: string) => {
+  const subirArchivo = async (fileOrBlob: File | Blob, filename: string, yaEstandarizada = false) => {
     const fd = new FormData();
     fd.append('file', fileOrBlob, filename);
     // La detección de placa y la moderación de contenido ya NO dependen de ningún campo
@@ -45,6 +45,12 @@ export default function FotoUpload({ label, value, onChange, required }: Props) 
     // y puramente cosmético: activa la estandarización con IA (quitar fondo + mejorar
     // calidad) en lib/estandarizar-foto.ts, que nunca gatea moderación ni difuminado.
     fd.append('tipo', 'vehiculo');
+    // Solo se manda en `true` desde handleRotate: la imagen que se re-sube viene de
+    // rotar una URL que YA pasó por estandarizarFotoVehiculo (fondo de estudio de
+    // remove.bg + mejoras), así que /api/upload evita repetir esa llamada paga sobre
+    // algo ya procesado. NO afecta moderación ni difuminado de placa (esos siguen
+    // corriendo siempre, ver /api/upload).
+    if (yaEstandarizada) fd.append('yaEstandarizada', '1');
     let res: Response;
     try {
       res = await fetch('/api/upload', { method: 'POST', body: fd });
@@ -87,7 +93,10 @@ export default function FotoUpload({ label, value, onChange, required }: Props) 
     setRotando(true);
     try {
       const blob = await rotarImagenUrl(value);
-      await subirArchivo(blob, 'rotada.jpg');
+      // `value` ya es una foto de vehículo subida antes por esta misma ruta, así que
+      // si tenía el paso de remove.bg aplicado, no hace falta repetirlo — ver el
+      // comentario de `yaEstandarizada` en subirArchivo.
+      await subirArchivo(blob, 'rotada.jpg', true);
     } catch {
       setError('No se pudo rotar la foto — intenta de nuevo.');
     } finally {
