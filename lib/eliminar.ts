@@ -171,12 +171,36 @@ export function eliminarUsuarioInteligente(db: DB, usuarioId: number): Resultado
 
 // ── Vehículos ────────────────────────────────────────────────────────────────
 
-/** ¿Este vehículo tiene reservas (historial de negocio real) que impidan borrarlo de verdad? */
+/**
+ * ¿Este vehículo tiene reservas (historial de negocio real) que impidan borrarlo de verdad?
+ * Para buses (tipo='bus'), además reconoce como "historial" cualquier fila ligada en las
+ * tablas de tarifas/cambios/cotizaciones de bus (hallazgo QA/revisor-código, ronda post-Etapa
+ * 2: antes esta función no las miraba, así que la decisión de archivar-en-vez-de-borrar un bus
+ * con tarifas propias o cotizaciones reales dependía implícitamente de que el DELETE fallara
+ * por una excepción de FK y cayera al `catch` genérico de `eliminarVehiculoInteligente` — acá
+ * queda como un chequeo explícito).
+ *
+ * Detecta el tipo consultando `vehiculos` en vez de recibirlo por parámetro: así la firma no
+ * cambia para el llamador existente (DELETE /api/vehiculos/[id]) y solo se pagan las 5 queries
+ * extra cuando el vehículo en cuestión de verdad es un bus.
+ */
 export function tieneHistorialVehiculo(db: DB, vehiculoId: number): boolean {
-  // reservas.vehiculo_id es la única FK "de negocio" real hacia vehiculos(id); remisiones,
-  // liquidaciones y facturas cuelgan de la reserva (reserva_id), no directamente del vehículo,
-  // así que quedan cubiertas transitivamente al bloquear cualquier vehículo con reservas.
-  return existe(db, 'SELECT 1 FROM reservas WHERE vehiculo_id = ?', vehiculoId);
+  // reservas.vehiculo_id es la única FK "de negocio" real hacia vehiculos(id) para autos;
+  // remisiones, liquidaciones y facturas cuelgan de la reserva (reserva_id), no directamente
+  // del vehículo, así que quedan cubiertas transitivamente al bloquear cualquier vehículo con
+  // reservas.
+  if (existe(db, 'SELECT 1 FROM reservas WHERE vehiculo_id = ?', vehiculoId)) return true;
+
+  const v = db.prepare("SELECT tipo FROM vehiculos WHERE id = ?").get(vehiculoId) as { tipo: string } | undefined;
+  if (v?.tipo !== 'bus') return false;
+
+  return (
+    existe(db, 'SELECT 1 FROM bus_tarifas_destino_veh WHERE vehiculo_id = ?', vehiculoId) ||
+    existe(db, 'SELECT 1 FROM bus_tarifas_hora_veh WHERE vehiculo_id = ?', vehiculoId) ||
+    existe(db, 'SELECT 1 FROM bus_valor_km_veh WHERE vehiculo_id = ?', vehiculoId) ||
+    existe(db, 'SELECT 1 FROM bus_tarifas_cambios WHERE vehiculo_id = ?', vehiculoId) ||
+    existe(db, 'SELECT 1 FROM cotizaciones_bus WHERE vehiculo_id = ?', vehiculoId)
+  );
 }
 
 /**
