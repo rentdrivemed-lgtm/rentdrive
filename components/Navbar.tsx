@@ -119,6 +119,7 @@ export default function Navbar() {
   ];
 
   const publicLinks = [
+    { href: '/buses', label: t.nav.buses },
     { href: '/terminos', label: t.nav.terms },
   ];
 
