@@ -17,6 +17,7 @@ import { precioMercadoSugerido, segmentoValido } from '@/lib/precioMercado';
 import FirmaCanvas from '@/components/FirmaCanvas';
 import { descargarCuentaCobroPDF } from '@/lib/contabilidad-pdf';
 import { tecnoRequerida } from '@/lib/tecnomecanica';
+import MisBusesPanel from '@/components/buses/MisBusesPanel';
 
 // Opciones de categoría (mismas 6 que la calculadora de mercado) para el selector.
 const CATEGORIAS = Object.entries(TIPO_VEHICULO_LABELS) as [TipoVehiculo, string][];
@@ -131,7 +132,7 @@ export default function DashboardPropietario() {
   const [reservas, setReservas] = useState<Reserva[]>([]);
   const [loadingReservas, setLoadingReservas] = useState(false);
   const [errorReservas, setErrorReservas] = useState('');
-  const [tab, setTab] = useState<'vehiculos' | 'reservas' | 'cuentas_cobro' | 'nuevo' | 'perfil' | 'editar'>('vehiculos');
+  const [tab, setTab] = useState<'vehiculos' | 'reservas' | 'cuentas_cobro' | 'nuevo' | 'buses' | 'perfil' | 'editar'>('vehiculos');
 
   // Nuevo vehículo
   const [form, setForm] = useState(FORM_INICIAL);
@@ -650,6 +651,7 @@ export default function DashboardPropietario() {
     { key: 'reservas',  label: loadingReservas ? 'Reservas…' : `Reservas (${reservas.length})` },
     { key: 'cuentas_cobro', label: cuentasPendientes.length > 0 ? `Cuentas de cobro (${cuentasPendientes.length})` : 'Cuentas de cobro' },
     { key: 'nuevo',     label: '+ Publicar vehículo' },
+    { key: 'buses',     label: '🚌 Buses' },
     { key: 'perfil',    label: 'Mi perfil' },
   ] as const;
 
@@ -1265,6 +1267,19 @@ export default function DashboardPropietario() {
               {publicando ? 'Publicando…' : 'Publicar y completar perfil →'}
             </button>
           </form>
+        </div>
+      )}
+
+      {/* ── MIS BUSES (Cotizador de Buses, Etapa 4 — ver COTIZADOR-BUSES-SPEC.md §6) ────── */}
+      {/* Flujo de alta SEPARADO del formulario de carros de arriba: un bus no es un
+          TipoVehiculo de lib/rentabilidad.ts (no tiene precio_dia/valor_comercial/categoría
+          de rentabilidad), así que reutilizar ese formulario con ifs lo habría complicado
+          sin necesidad. MisBusesPanel gestiona su propio fetch/estado end a end (alta, lista,
+          toggle disponible, tarifas por destino/hora/km del bus seleccionado e historial de
+          cambios), usando solo los endpoints ya existentes de app/api/buses/*. */}
+      {tab === 'buses' && (
+        <div className="space-y-4">
+          <MisBusesPanel propietarioId={user.id} />
         </div>
       )}
 
