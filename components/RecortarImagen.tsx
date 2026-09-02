@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Cropper, { type Area } from 'react-easy-crop';
 import { recortarImagen } from '@/lib/imagenRecorte';
 import { IconX, IconCheck } from '@/components/Icons';
@@ -19,6 +19,22 @@ export default function RecortarImagen({ imagenUrl, onConfirmar, onCancelar }: P
   const [areaPixeles, setAreaPixeles] = useState<Area | null>(null);
   const [procesando, setProcesando] = useState(false);
   const [error, setError] = useState('');
+  // El recuadro de recorte debe respetar la orientación real de la foto fuente:
+  // con `aspect` fijo en 4/3, una foto vertical (portrait) queda mal recortable
+  // (el recuadro no cabe). Detectamos el tamaño real de la imagen al cargarla y
+  // ajustamos el aspecto; mientras no se conoce, usamos 4/3 (comportamiento
+  // previo) para no dar un salto en el primer render.
+  const [aspecto, setAspecto] = useState(4 / 3);
+  useEffect(() => {
+    let cancelado = false;
+    const img = new window.Image();
+    img.onload = () => {
+      if (cancelado) return;
+      setAspecto(img.naturalHeight > img.naturalWidth ? 3 / 4 : 4 / 3);
+    };
+    img.src = imagenUrl;
+    return () => { cancelado = true; };
+  }, [imagenUrl]);
 
   const onCropComplete = useCallback((_area: Area, areaPx: Area) => setAreaPixeles(areaPx), []);
 
@@ -51,7 +67,7 @@ export default function RecortarImagen({ imagenUrl, onConfirmar, onCancelar }: P
           crop={crop}
           zoom={zoom}
           rotation={rotacion}
-          aspect={4 / 3}
+          aspect={aspecto}
           onCropChange={setCrop}
           onZoomChange={setZoom}
           onCropComplete={onCropComplete}
