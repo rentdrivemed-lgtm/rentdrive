@@ -8,7 +8,7 @@ import { useLang } from '@/contexts/LanguageContext';
 import { useSession } from '@/contexts/SessionContext';
 import {
   IconDashboard, IconChat, IconHistory, IconLogout,
-  IconBell, IconBellOff, IconMenu, IconX, IconKey, IconUser, IconGlobe, IconInbox,
+  IconBell, IconBellOff, IconMenu, IconX, IconUser, IconGlobe, IconInbox,
   IconHome, IconCar, IconBuilding, IconCoin,
 } from '@/components/Icons';
 
@@ -467,15 +467,6 @@ export default function Navbar() {
           </div>
         )}
       </nav>
-
-      {/* Tagline strip */}
-      <div className="bg-accent/10 border-b border-accent/20 text-center py-1.5 hidden sm:block">
-        <p className="text-xs text-ink font-medium tracking-wide flex items-center justify-center gap-2">
-          <IconKey size={12} className="text-accent inline-block" />
-          {t.footer.tagline}
-          <IconKey size={12} className="text-accent inline-block" />
-        </p>
-      </div>
     </>
   );
 }

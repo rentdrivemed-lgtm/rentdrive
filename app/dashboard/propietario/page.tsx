@@ -160,6 +160,15 @@ export default function DashboardPropietario() {
   const [tarjetaFrente, setTarjetaFrente] = useState<File | null>(null);
   const [tarjetaReverso, setTarjetaReverso] = useState<File | null>(null);
   const [leyendoTarjeta, setLeyendoTarjeta] = useState(false);
+  // Tope de 3 intentos + cooldown de 13s entre lecturas: la IA cuesta dinero por
+  // llamada y evita que alguien machaque el botón sin necesidad. Se reinicia al
+  // publicar (es "por cada registro de un vehículo"), ver `publicar`.
+  const [intentosLecturaTarjeta, setIntentosLecturaTarjeta] = useState(0);
+  const [cooldownTarjeta, setCooldownTarjeta] = useState(0);
+  const cooldownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    return () => { if (cooldownIntervalRef.current) clearInterval(cooldownIntervalRef.current); };
+  }, []);
   const [errorTarjetaIA, setErrorTarjetaIA] = useState('');
   const [avisoTarjetaIA, setAvisoTarjetaIA] = useState('');
   const [camposTarjetaIA, setCamposTarjetaIA] = useState<Set<'marca' | 'modelo' | 'anio' | 'placa' | 'tipo'>>(new Set());
@@ -421,6 +430,19 @@ export default function DashboardPropietario() {
       setErrorTarjetaIA('Sin conexión — revisa tu internet o llena el formulario a mano.');
     } finally {
       setLeyendoTarjeta(false);
+      setIntentosLecturaTarjeta(i => i + 1);
+      if (cooldownIntervalRef.current) clearInterval(cooldownIntervalRef.current);
+      setCooldownTarjeta(13);
+      cooldownIntervalRef.current = setInterval(() => {
+        setCooldownTarjeta(s => {
+          if (s <= 1) {
+            if (cooldownIntervalRef.current) clearInterval(cooldownIntervalRef.current);
+            cooldownIntervalRef.current = null;
+            return 0;
+          }
+          return s - 1;
+        });
+      }, 1000);
     }
   };
 
@@ -574,6 +596,9 @@ export default function DashboardPropietario() {
       setMsg('✅ Vehículo publicado. Ahora completa el perfil para activarlo.');
       setForm(FORM_INICIAL); setFotos(FOTOS_VACIAS); setDiasDisponibles([]);
       setTarjetaFrente(null); setTarjetaReverso(null); setCamposTarjetaIA(new Set()); setAvisoTarjetaIA(''); setErrorTarjetaIA(''); setTarjetaDocumento(null);
+      // Nuevo registro de vehículo → reinicia el tope de 3 intentos y el cooldown.
+      if (cooldownIntervalRef.current) { clearInterval(cooldownIntervalRef.current); cooldownIntervalRef.current = null; }
+      setIntentosLecturaTarjeta(0); setCooldownTarjeta(0);
       if (user) {
         const vs = await cargarVehiculos(user.id);
         const nuevo = vs.find(v => v.id === d.id);
@@ -1119,7 +1144,13 @@ export default function DashboardPropietario() {
               vehículo sea del propietario — eso lo sigue haciendo el equipo con
               los documentos reales que se suben después. */}
           {tarjetaIADisponible && (
-            <div className="rounded-2xl border-2 border-dashed border-accent/40 bg-accent-light/50 p-4 mb-5">
+            <div className="relative rounded-2xl border-2 border-dashed border-accent/40 bg-accent-light/50 p-4 mb-5">
+              {leyendoTarjeta && (
+                <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded-2xl bg-surface-2/90 text-center px-4">
+                  <span className="inline-block w-7 h-7 border-2 border-accent/30 border-t-accent rounded-full animate-spin" />
+                  <p className="text-sm text-ink/70 font-medium">Estamos leyendo y procesando las imágenes de tu tarjeta de propiedad…</p>
+                </div>
+              )}
               <div className="flex items-start gap-2.5">
                 <div className="w-9 h-9 rounded-xl bg-accent/15 text-accent flex items-center justify-center flex-shrink-0">
                   <IconPhoto size={18} />
@@ -1148,9 +1179,15 @@ export default function DashboardPropietario() {
 
               <button type="button"
                 onClick={leerTarjetaPropiedad}
-                disabled={!tarjetaFrente || !tarjetaReverso || leyendoTarjeta}
+                disabled={!tarjetaFrente || !tarjetaReverso || leyendoTarjeta || cooldownTarjeta > 0 || intentosLecturaTarjeta >= 3}
                 className="w-full mt-3 flex items-center justify-center gap-2 bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold py-2.5 px-3 rounded-xl transition">
-                {leyendoTarjeta ? 'Leyendo tu tarjeta de propiedad…' : 'Leer y completar el formulario'}
+                {leyendoTarjeta
+                  ? 'Leyendo tu tarjeta de propiedad…'
+                  : intentosLecturaTarjeta >= 3
+                  ? 'Ya usaste tus 3 intentos — completa el formulario abajo a mano'
+                  : cooldownTarjeta > 0
+                  ? `Puedes volver a intentarlo en ${cooldownTarjeta}s`
+                  : 'Leer y completar el formulario'}
               </button>
 
               {avisoTarjetaIA && (
@@ -1159,7 +1196,11 @@ export default function DashboardPropietario() {
                 </p>
               )}
               {errorTarjetaIA && <p className="text-[11px] text-danger mt-2">{errorTarjetaIA}</p>}
-              <p className="text-[11px] text-ink/45 mt-2">¿Prefieres escribirlo tú? Llena el formulario de abajo, es igual de válido.</p>
+              {intentosLecturaTarjeta >= 3 ? (
+                <p className="text-[11px] text-ink/45 mt-2">Ya usaste tus 3 intentos de lectura automática para este vehículo. Llena el formulario de abajo a mano, es igual de válido.</p>
+              ) : (
+                <p className="text-[11px] text-ink/45 mt-2">¿Prefieres escribirlo tú? Llena el formulario de abajo, es igual de válido.</p>
+              )}
             </div>
           )}
 
