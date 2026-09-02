@@ -90,6 +90,7 @@ export function esAreaAsignable(area: string): boolean {
 export const AREA_LABEL: Record<string, string> = {
   usuarios: 'Usuarios',
   vehiculos: 'Vehículos',
+  buses: 'Buses',
   reservas: 'Reservas',
   contabilidad: 'Contabilidad',
   mercado: 'Mercado',
@@ -118,7 +119,7 @@ export function areaLabel(area: string): string {
 // asignable que no se haya listado arriba, para que nunca quede una sección oculta
 // si se agrega una nueva a AREA_NIVELES.
 const GRUPOS_BASE: { titulo: string; areas: string[] }[] = [
-  { titulo: 'Panel de administración', areas: ['usuarios', 'vehiculos', 'reservas', 'contabilidad', 'mercado', 'calculadora', 'leads', 'soporte', 'nfc', 'config', 'auditoria'] },
+  { titulo: 'Panel de administración', areas: ['usuarios', 'vehiculos', 'buses', 'reservas', 'contabilidad', 'mercado', 'calculadora', 'leads', 'soporte', 'nfc', 'config', 'auditoria'] },
   { titulo: 'Panel de control del equipo', areas: ['panel', 'operaciones', 'tareas', 'calendario', 'documentos', 'tableros'] },
   { titulo: 'Acciones sensibles', areas: ['config_editar_operativo', 'config_editar_financiero'] },
 ];
