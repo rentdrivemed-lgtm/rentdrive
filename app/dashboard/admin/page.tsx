@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import CalendarioReservas, { type ReservaCalendario } from '@/components/CalendarioReservas';
 import PicoPlacaConfig from '@/components/PicoPlacaConfig';
 import ContabilidadPanel from '@/components/ContabilidadPanel';
+import BusesPanel from '@/components/buses/BusesPanel';
 import SoportePanel from '@/components/SoportePanel';
 import LeadsPropietariosPanel from '@/components/LeadsPropietariosPanel';
 import AuditoriaPanel from '@/components/AuditoriaPanel';
@@ -275,7 +276,7 @@ function PermisosSecciones({ u, draft, baseline, onToggle, onReset, onGuardar, g
 }
 
 export default function DashboardAdmin() {
-  const [tab, setTab] = useState<'usuarios' | 'vehiculos' | 'reservas' | 'contabilidad' | 'mercado' | 'calculadora' | 'leads' | 'soporte' | 'nfc' | 'config' | 'auditoria'>('usuarios');
+  const [tab, setTab] = useState<'usuarios' | 'vehiculos' | 'buses' | 'reservas' | 'contabilidad' | 'mercado' | 'calculadora' | 'leads' | 'soporte' | 'nfc' | 'config' | 'auditoria'>('usuarios');
   const [miNivel, setMiNivel] = useState<AdminNivel>('principal');
   const [miId, setMiId] = useState<number | null>(null);
   // Excepciones de permisos de MI cuenta (solo para pintar pestañas; el gating real es del servidor).
@@ -357,7 +358,7 @@ export default function DashboardAdmin() {
   // Si el nivel actual no puede ver la pestaña seleccionada, lo mandamos a la primera permitida.
   useEffect(() => {
     if (!puede(miNivel, tab, misPermisos)) {
-      const orden = ['reservas', 'leads', 'soporte', 'usuarios', 'vehiculos', 'contabilidad', 'mercado', 'calculadora', 'nfc', 'config', 'auditoria'] as const;
+      const orden = ['reservas', 'leads', 'soporte', 'usuarios', 'vehiculos', 'buses', 'contabilidad', 'mercado', 'calculadora', 'nfc', 'config', 'auditoria'] as const;
       const primera = orden.find(k => puede(miNivel, k, misPermisos));
       if (primera) setTab(primera);
     }
@@ -988,6 +989,7 @@ export default function DashboardAdmin() {
         {([
           { key: 'usuarios',  label: `Usuarios (${usuarios.length})` },
           { key: 'vehiculos', label: `Vehículos (${vehiculos.length})` },
+          { key: 'buses', label: '🚌 Buses' },
           { key: 'reservas',  label: `Reservas (${reservas.length})`, badge: pendientesCount },
           { key: 'contabilidad', label: '💰 Contabilidad' },
           { key: 'mercado', label: '📊 Mercado' },
@@ -1402,6 +1404,9 @@ export default function DashboardAdmin() {
           })}
         </div>
       )}
+
+      {/* ── BUSES ── */}
+      {tab === 'buses' && <BusesPanel />}
 
       {/* ── RESERVAS ── */}
       {tab === 'reservas' && (
