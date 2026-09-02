@@ -38,6 +38,9 @@ export const IconHome      = ({ size, className }: IconProps) => <svg {...d(size
 export const IconInbox     = ({ size, className }: IconProps) => <svg {...d(size, className)}><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/></svg>;
 export const IconNfc       = ({ size, className }: IconProps) => <svg {...d(size, className)}><rect x="3" y="7" width="7" height="10" rx="1.5"/><path d="M13.5 8.5a5 5 0 010 7"/><path d="M17 5.5a9 9 0 010 13"/><path d="M20.3 3a13 13 0 010 18"/></svg>;
 export const IconRotate    = ({ size, className }: IconProps) => <svg {...d(size, className)}><path d="M21 12a9 9 0 11-3.5-7.14"/><polyline points="21 3 21 9 15 9"/></svg>;
+// Bus (vitrina pública del Cotizador de Buses, ver app/buses/page.tsx) — mismo lenguaje
+// visual (trazo redondeado) que IconCar de arriba, silueta de bus en vez de carro.
+export const IconBus       = ({ size, className }: IconProps) => <svg {...d(size, className)}><rect x="3" y="4" width="18" height="13" rx="2.5"/><line x1="3" y1="10.5" x2="21" y2="10.5"/><circle cx="7.5" cy="19.5" r="1.6"/><circle cx="16.5" cy="19.5" r="1.6"/><line x1="6" y1="7" x2="9" y2="7"/></svg>;
 
 // ── Set Medellín (identidad local) ──
 export const IconMetrocable  = ({ size, className }: IconProps) => <svg {...d(size, className)}><line x1="2" y1="6" x2="22" y2="10"/><circle cx="12" cy="8" r="1.3" fill="currentColor" stroke="none"/><line x1="12" y1="9.3" x2="12" y2="13"/><path d="M8 13h8l-1.5 6h-5z"/><line x1="9.5" y1="16" x2="14.5" y2="16"/></svg>;
