@@ -125,6 +125,19 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     body.placa = String(body.placa || '').toUpperCase().trim();
   }
 
+  // Coerción de `disponible` a 0/1 (hallazgo QA, ronda post-Etapa 6): better-sqlite3 solo
+  // acepta number/string/bigint/buffer/null como binding — un booleano JS (`true`/`false`,
+  // forma natural de mandarlo desde cualquier cliente) revienta el UPDATE con un 500 crudo
+  // en vez de un 400 controlado. Se acepta boolean o 0/1 y se normaliza; cualquier otra cosa
+  // (string, número fuera de 0/1, etc.) se rechaza explícitamente.
+  if (body.disponible !== undefined) {
+    if (typeof body.disponible === 'boolean') {
+      body.disponible = body.disponible ? 1 : 0;
+    } else if (body.disponible !== 0 && body.disponible !== 1) {
+      return NextResponse.json({ error: 'disponible debe ser 0, 1 o un booleano.' }, { status: 400 });
+    }
+  }
+
   // ── Campos editables ──
   // `bus_categoria` no se expone aquí: se deriva de `capacidad_pasajeros` (ver arriba), nunca
   // se recibe directo del cliente. `precio_dia` tampoco aplica a buses (queda en 0, ver
