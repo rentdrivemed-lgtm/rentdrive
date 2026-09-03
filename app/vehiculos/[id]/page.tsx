@@ -6,7 +6,7 @@ import CalendarioReserva from '@/components/CalendarioReserva';
 import GaleriaVehiculo from '@/components/GaleriaVehiculo';
 import LugarSelector from '@/components/LugarSelector';
 import { useLang } from '@/contexts/LanguageContext';
-import { IconArrowL, IconCalendar, IconPin, IconKey } from '@/components/Icons';
+import { IconArrowL, IconCalendar, IconPin, IconKey, IconBus } from '@/components/Icons';
 import {
   LUGAR_VACIO, calcularRecargo, lugarValido, cargarLugares, guardarLugares, guardarDestino, type Lugar,
 } from '@/lib/lugares';
@@ -26,6 +26,9 @@ const T = {
     msgRecogida: 'Completa el lugar y la hora de recogida.', msgEntrega: 'Completa el lugar y la hora de entrega.',
     dia1: (n: number) => `${n} día${n !== 1 ? 's' : ''}`,
     errorVehiculo: 'No pudimos cargar este vehículo. Revisa tu conexión.', reintentar: 'Reintentar',
+    esUnBusTitulo: 'Este vehículo es un bus',
+    esUnBusTexto: 'Los buses se cotizan por destino, trayecto u horas de disponibilidad en nuestra sección dedicada, no aquí.',
+    esUnBusBoton: 'Cotizar este bus',
   },
   en: {
     cargando: 'Loading...', volver: 'Back to home', publicadoPor: 'Listed by',
@@ -40,6 +43,9 @@ const T = {
     msgRecogida: 'Complete the pickup place and time.', msgEntrega: 'Complete the drop-off place and time.',
     dia1: (n: number) => `${n} day${n !== 1 ? 's' : ''}`,
     errorVehiculo: 'We could not load this vehicle. Check your connection.', reintentar: 'Retry',
+    esUnBusTitulo: 'This vehicle is a bus',
+    esUnBusTexto: 'Buses are quoted by destination, trip or availability hours in our dedicated section, not here.',
+    esUnBusBoton: 'Quote this bus',
   },
 };
 
@@ -118,6 +124,37 @@ export default function VehiculoDetalle() {
   if (!vehiculo) return (
     <div className="text-center py-20 text-ink/50">{c.cargando}</div>
   );
+
+  // Defensa en profundidad: GET /api/vehiculos (sin `tipo=bus` explícito) ya excluye los
+  // buses de la vitrina pública y del listado del panel admin (ver app/api/vehiculos/route.ts),
+  // pero esta ficha se carga por id directo (GET /api/vehiculos/[id]) y alguien puede llegar
+  // acá igual con un link viejo/compartido. El flujo de abajo (calendario, pico y placa,
+  // recogida/entrega, precio por día) está hecho para carros — un bus siempre tiene
+  // `precio_dia=0` por diseño y se cotiza distinto (por destino/trayecto/horas), así que en
+  // vez de mostrar ese flujo roto mandamos a la sección dedicada (ver app/buses/page.tsx, que
+  // soporta el deep-link `?id=` para abrir directo el cotizador de este bus).
+  if (vehiculo.tipo === 'bus') {
+    return (
+      <div className="max-w-2xl mx-auto px-3 sm:px-4 py-4 sm:py-8">
+        <Link href="/" className="inline-flex items-center gap-1.5 text-accent hover:text-accent-hover text-sm mb-5 font-medium transition">
+          <IconArrowL size={14} /> {c.volver}
+        </Link>
+        <div className="bg-surface-2 rounded-3xl shadow-sm border border-border p-8 text-center">
+          <div className="w-14 h-14 rounded-2xl bg-accent-light flex items-center justify-center mx-auto mb-4">
+            <IconBus size={26} className="text-accent" />
+          </div>
+          <h1 className="text-xl font-bold text-ink mb-2">{c.esUnBusTitulo}</h1>
+          <p className="text-ink/60 text-sm mb-6">{c.esUnBusTexto}</p>
+          <Link
+            href={`/buses?id=${vehiculo.id}`}
+            className="inline-flex items-center justify-center gap-2 bg-accent hover:bg-accent-hover text-white py-2.5 px-5 rounded-xl font-bold transition shadow-md shadow-accent/20 text-sm"
+          >
+            <IconBus size={15} /> {c.esUnBusBoton}
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   let fotos: string[] = [];
   try { fotos = JSON.parse(vehiculo.fotos); } catch { fotos = []; }
