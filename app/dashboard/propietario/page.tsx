@@ -1,6 +1,6 @@
 'use client';
-import { useEffect, useState, useCallback, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useEffect, useState, useCallback, useRef } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import FotoUpload from '@/components/FotoUpload';
 import DocUpload from '@/components/DocUpload';
@@ -127,13 +127,27 @@ function calcProgreso(v: Vehiculo): { pct: number; items: ProgresoItem[] } {
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
+const TABS_PROPIETARIO = ['vehiculos', 'reservas', 'cuentas_cobro', 'nuevo', 'buses', 'perfil', 'editar'] as const;
+type TabPropietario = typeof TABS_PROPIETARIO[number];
+
+// useSearchParams exige un límite <Suspense> alrededor del componente que lo usa (mismo
+// patrón que ya sigue app/pago/page.tsx) — se usa para preseleccionar pestaña/vehículo
+// cuando se llega desde una notificación clicable del Navbar (destinoDeNotificacion).
 export default function DashboardPropietario() {
+  return (
+    <Suspense fallback={<div className="text-center py-20 text-ink/50">Cargando…</div>}>
+      <DashboardPropietarioInner />
+    </Suspense>
+  );
+}
+
+function DashboardPropietarioInner() {
   const [user, setUser] = useState<User | null>(null);
   const [vehiculos, setVehiculos] = useState<Vehiculo[]>([]);
   const [reservas, setReservas] = useState<Reserva[]>([]);
   const [loadingReservas, setLoadingReservas] = useState(false);
   const [errorReservas, setErrorReservas] = useState('');
-  const [tab, setTab] = useState<'vehiculos' | 'reservas' | 'cuentas_cobro' | 'nuevo' | 'buses' | 'perfil' | 'editar'>('vehiculos');
+  const [tab, setTab] = useState<TabPropietario>('vehiculos');
 
   // Nuevo vehículo
   const [form, setForm] = useState(FORM_INICIAL);
@@ -221,6 +235,17 @@ export default function DashboardPropietario() {
   const [popupNotif, setPopupNotif] = useState<{ tipo: 'aprobado' | 'denegado' | 'pago'; titulo: string; mensaje: string } | null>(null);
 
   const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // Preselección de pestaña al llegar desde una notificación clicable del Navbar (ver
+  // destinoDeNotificacion en components/Navbar.tsx, ?tab=<clave>). Solo una vez al montar.
+  const urlTabAplicado = useRef(false);
+  useEffect(() => {
+    if (urlTabAplicado.current) return;
+    urlTabAplicado.current = true;
+    const tabParam = searchParams.get('tab');
+    if (tabParam && (TABS_PROPIETARIO as readonly string[]).includes(tabParam)) setTab(tabParam as TabPropietario);
+  }, [searchParams]);
 
   // ── Data loaders ──────────────────────────────────────────────────────────
   const cargarVehiculos = useCallback(async (uid: number): Promise<Vehiculo[]> => {
@@ -519,6 +544,19 @@ export default function DashboardPropietario() {
     setSeccionMsg({});
     setTab('editar');
   };
+
+  // Abre directo el editor de un vehículo puntual al llegar desde una notificación
+  // (?vehiculo=<id>, ver destinoDeNotificacion en components/Navbar.tsx) — solo una vez,
+  // cuando la lista de vehículos ya cargó.
+  const urlVehiculoAplicado = useRef(false);
+  useEffect(() => {
+    if (urlVehiculoAplicado.current || vehiculos.length === 0) return;
+    const vehiculoParam = searchParams.get('vehiculo');
+    if (!vehiculoParam) { urlVehiculoAplicado.current = true; return; }
+    const v = vehiculos.find(x => x.id === Number(vehiculoParam));
+    if (v) abrirEditar(v);
+    urlVehiculoAplicado.current = true;
+  }, [vehiculos, searchParams]);
 
   // ── Section savers in edit mode ────────────────────────────────────────────
   const guardarSeccion = async (seccion: string, body: Record<string, unknown>): Promise<boolean> => {

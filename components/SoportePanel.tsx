@@ -16,7 +16,11 @@ const ESTADO_BADGE: Record<string, string> = {
 };
 const ESTADO_LABEL: Record<string, string> = { escalada: '🆘 Necesita intervención', ia: '🤖 Asistente', resuelta: '✅ Resuelta' };
 
-export default function SoportePanel() {
+// `focusConvId` — abre directo esta conversación al llegar desde una notificación clicable
+// del Navbar (?conv=<id>, ver destinoDeNotificacion en components/Navbar.tsx). Se aplica
+// una sola vez, cuando la lista de conversaciones ya cargó (para no pisar la selección
+// manual del admin si vuelve a montarse el panel).
+export default function SoportePanel({ focusConvId }: { focusConvId?: number | null } = {}) {
   const [conversaciones, setConversaciones] = useState<ConversacionFila[]>([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState('');
@@ -65,6 +69,15 @@ export default function SoportePanel() {
     } catch { /* el usuario puede reintentar abriendo de nuevo */ }
     finally { setCargandoDetalle(false); }
   };
+
+  // Abre `focusConvId` (llegó desde una notificación) una sola vez, cuando la lista de
+  // conversaciones ya cargó y esa conversación existe entre las visibles.
+  const focusAplicado = useRef(false);
+  useEffect(() => {
+    if (focusAplicado.current || cargando) return;
+    focusAplicado.current = true;
+    if (focusConvId && conversaciones.some(c => c.id === focusConvId)) abrir(focusConvId);
+  }, [cargando, conversaciones, focusConvId]);
 
   const enviar = async (e: React.FormEvent) => {
     e.preventDefault();

@@ -5,7 +5,9 @@ type Board = { id: number; titulo: string; created_by: number; created_by_nombre
 type Colab = { id: number; nombre: string };
 type El = { id: number; tipo: string; x: number; y: number; w: number; h: number; contenido: string; color: string };
 type Miembro = { id: number; nombre: string };
-type Props = { pushToast: (t: string) => void; onEvento: () => void };
+// `focusId` — abre este tablero directo al llegar desde una notificación clicable del
+// Navbar (?tablero=<id>, ver destinoDeNotificacion en components/Navbar.tsx).
+type Props = { pushToast: (t: string) => void; onEvento: () => void; focusId?: number | null };
 
 const HERRAMIENTAS: { key: string; label: string }[] = [
   { key: 'select', label: 'Mover' }, { key: 'pen', label: 'Lápiz' }, { key: 'text', label: 'Texto' },
@@ -13,11 +15,12 @@ const HERRAMIENTAS: { key: string; label: string }[] = [
 ];
 const iniciales = (n: string) => n.trim().slice(0, 2).toUpperCase();
 
-export default function TablerosBoard({ pushToast, onEvento }: Props) {
+export default function TablerosBoard({ pushToast, onEvento, focusId }: Props) {
   const [vista, setVista] = useState<'galeria' | 'lienzo'>('galeria');
   const [tableros, setTableros] = useState<Board[]>([]);
   const [equipo, setEquipo] = useState<Miembro[]>([]);
   const [cargando, setCargando] = useState(true);
+  const focusAplicado = useRef(false);
 
   const [bid, setBid] = useState<number | null>(null);
   const [titulo, setTitulo] = useState('');
@@ -62,6 +65,15 @@ export default function TablerosBoard({ pushToast, onEvento }: Props) {
     setBid(id); setTitulo(d.tablero.titulo); setColabs(d.colaboradores || []); setEls(d.elementos || []);
     setPan({ x: 0, y: 0 }); setScale(1); setTool('select'); setVista('lienzo');
   };
+
+  // Abre `focusId` (llegó desde una notificación) una sola vez, cuando la galería ya
+  // cargó y el tablero está entre los visibles/invitados para este usuario.
+  useEffect(() => {
+    if (focusAplicado.current || cargando) return;
+    focusAplicado.current = true;
+    if (focusId != null && tableros.some(t => t.id === focusId)) abrir(focusId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cargando, tableros, focusId]);
   const cerrar = () => { setVista('galeria'); setBid(null); cargarGaleria(); };
 
   // Refresco suave mientras esté abierto (colaborativo) — solo si nadie está interactuando.
