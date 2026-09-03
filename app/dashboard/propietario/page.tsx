@@ -17,6 +17,7 @@ import { precioMercadoSugerido, segmentoValido } from '@/lib/precioMercado';
 import FirmaCanvas from '@/components/FirmaCanvas';
 import { descargarCuentaCobroPDF } from '@/lib/contabilidad-pdf';
 import { tecnoRequerida } from '@/lib/tecnomecanica';
+import { urlDescarga } from '@/lib/cloudinary-descarga';
 import MisBusesPanel from '@/components/buses/MisBusesPanel';
 
 // Opciones de categoría (mismas 6 que la calculadora de mercado) para el selector.
@@ -1614,6 +1615,12 @@ export default function DashboardPropietario() {
                     {fDet.soat && (fDet.soat as { url?: string }).url && <span className="text-[10px] text-success font-bold">✓ Subido</span>}
                   </div>
                   <DocUpload label="Documento SOAT" value={(editDocs.soat?.url) || ''} onChange={url => setEditDocs(d => ({ ...d, soat: { ...d.soat, url } }))} />
+                  {(fDet.soat as { url?: string } | undefined)?.url && (
+                    <a href={urlDescarga((fDet.soat as { url?: string }).url as string)} download
+                      className="flex items-center gap-1 text-[11px] font-medium text-ink/50 hover:text-accent transition">
+                      <IconExport size={11} /> Descargar
+                    </a>
+                  )}
                   <div>
                     <label className="text-[11px] text-ink/50 block mb-1">Fecha de vencimiento</label>
                     <input type="date" value={editDocs.soat?.vence || ''}
@@ -1629,6 +1636,12 @@ export default function DashboardPropietario() {
                     {fDet.tecno && (fDet.tecno as { url?: string }).url && <span className="text-[10px] text-success font-bold">✓ Subido</span>}
                   </div>
                   <DocUpload label="Revisión tecno-mecánica" value={editDocs.tecno?.url || ''} onChange={url => setEditDocs(d => ({ ...d, tecno: { ...d.tecno, url } }))} />
+                  {(fDet.tecno as { url?: string } | undefined)?.url && (
+                    <a href={urlDescarga((fDet.tecno as { url?: string }).url as string)} download
+                      className="flex items-center gap-1 text-[11px] font-medium text-ink/50 hover:text-accent transition">
+                      <IconExport size={11} /> Descargar
+                    </a>
+                  )}
                   <div>
                     <label className="text-[11px] text-ink/50 block mb-1">Fecha de vencimiento</label>
                     <input type="date" value={editDocs.tecno?.vence || ''}
@@ -1647,6 +1660,26 @@ export default function DashboardPropietario() {
                     valueFrente={editDocs.tarjeta?.url || ''} valueDorso={editDocs.tarjeta?.url_dorso || ''}
                     onChangeFrente={url => setEditDocs(d => ({ ...d, tarjeta: { url, url_dorso: d.tarjeta?.url_dorso || '' } }))}
                     onChangeDorso={url_dorso => setEditDocs(d => ({ ...d, tarjeta: { url: d.tarjeta?.url || '', url_dorso } }))} />
+                  {(() => {
+                    const t = fDet.tarjeta as { url?: string; url_dorso?: string } | undefined;
+                    if (!t?.url && !t?.url_dorso) return null;
+                    return (
+                      <div className="flex items-center gap-3 flex-wrap">
+                        {t?.url && (
+                          <a href={urlDescarga(t.url)} download
+                            className="flex items-center gap-1 text-[11px] font-medium text-ink/50 hover:text-accent transition">
+                            <IconExport size={11} /> Descargar frente
+                          </a>
+                        )}
+                        {t?.url_dorso && (
+                          <a href={urlDescarga(t.url_dorso)} download
+                            className="flex items-center gap-1 text-[11px] font-medium text-ink/50 hover:text-accent transition">
+                            <IconExport size={11} /> Descargar dorso
+                          </a>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Todo riesgo */}
@@ -1656,6 +1689,12 @@ export default function DashboardPropietario() {
                     {fDet.todo_riesgo && (fDet.todo_riesgo as { url?: string }).url && <span className="text-[10px] text-success font-bold">✓ Subido</span>}
                   </div>
                   <DocUpload label="Póliza todo riesgo (opcional)" value={editDocs.todo_riesgo?.url || ''} onChange={url => setEditDocs(d => ({ ...d, todo_riesgo: { ...d.todo_riesgo, url } }))} />
+                  {(fDet.todo_riesgo as { url?: string } | undefined)?.url && (
+                    <a href={urlDescarga((fDet.todo_riesgo as { url?: string }).url as string)} download
+                      className="flex items-center gap-1 text-[11px] font-medium text-ink/50 hover:text-accent transition">
+                      <IconExport size={11} /> Descargar
+                    </a>
+                  )}
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="text-[11px] text-ink/50 block mb-1">Aseguradora</label>
