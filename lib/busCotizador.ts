@@ -162,6 +162,25 @@ export function anioBusValido(raw: unknown): number | null {
   return anioNum;
 }
 
+// ─── Normalización de destino para BÚSQUEDA/comparación (no para guardar) ──────────────────
+//
+// El cotizador público (POST /api/buses/cotizar, modo 'destino') recibe el destino como texto
+// libre escrito por un cliente real, que puede variar en mayúsculas/tildes respecto a como
+// quedó cargado el destino en `bus_tarifas_destino_veh`/`bus_tarifas_destino_ref` (ej. cliente
+// escribe "guatape", la tarifa está cargada como "Guatapé"). `COLLATE NOCASE` de SQLite
+// resuelve mayúsculas pero NO tildes/diacríticos, así que la normalización se hace en JS antes
+// de comparar. Patrón estándar: `normalize('NFD')` descompone cada carácter acentuado en su
+// letra base + un carácter combinador de diacrítico separado (ej. "é" -> "e" + U+0301), y el
+// rango `̀-ͯ` (bloque Unicode "Combining Diacritical Marks") los elimina.
+//
+// Úsala SOLO para comparar/buscar contra lo que escribió el cliente — el valor original
+// (sin normalizar) sigue siendo el que se guarda en `cotizaciones_bus.destino` y el que
+// determina el match exacto de la escritura/upsert de tarifas (PUT /api/buses/tarifas-*),
+// donde la regla de UNIQUE(destino) exacto queda fuera de alcance de este helper a propósito.
+export function normalizarDestino(s: string): string {
+  return s.trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
 // ─── Helpers de servidor compartidos por los endpoints de Etapa 2 (app/api/buses/*) ────────
 //
 // ⚠️ A diferencia del resto de este archivo, `adminsConAreaBuses` SÍ toca BD (recibe la
