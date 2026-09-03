@@ -17,8 +17,9 @@ import {
 import { parsePicoPlaca, picoPlacaVacio, placaRestringida, type PicoPlaca } from '@/lib/pico-placa';
 import { tecnoRequerida } from '@/lib/tecnomecanica';
 import { fechaHoraRecogida, esNoShowAplicable } from '@/lib/cancelacion';
-import { IconUser, IconCar, IconX, IconCheck, IconCalendar, IconShield } from '@/components/Icons';
+import { IconUser, IconCar, IconX, IconCheck, IconCalendar, IconShield, IconExport } from '@/components/Icons';
 import type { VerificacionResultado } from '@/lib/verificacion-docs';
+import { urlDescarga } from '@/lib/cloudinary-descarga';
 
 type Usuario = {
   id: number; nombre: string; correo: string;
@@ -2076,17 +2077,33 @@ export default function DashboardAdmin() {
 
                         {/* Preview */}
                         {isPdf ? (
-                          <a href={data.url} target="_blank" rel="noopener noreferrer"
-                            className="flex items-center gap-2 text-accent hover:text-accent-hover text-sm font-medium mb-2">
-                            <span className="text-xl">📄</span> Ver PDF
-                          </a>
+                          <div className="flex items-center gap-3 flex-wrap mb-2">
+                            <a href={data.url} target="_blank" rel="noopener noreferrer"
+                              className="flex items-center gap-2 text-accent hover:text-accent-hover text-sm font-medium">
+                              <span className="text-xl">📄</span> Ver PDF
+                            </a>
+                            <a href={urlDescarga(data.url)} download
+                              className="flex items-center gap-1 text-[11px] font-medium text-ink/60 hover:text-accent transition">
+                              <IconExport size={12} /> Descargar
+                            </a>
+                          </div>
                         ) : (
-                          <img src={data.url} alt={label} className="w-full h-24 object-cover rounded-lg border border-border mb-2" />
+                          <div className="mb-2">
+                            <img src={data.url} alt={label} className="w-full h-24 object-cover rounded-lg border border-border" />
+                            <a href={urlDescarga(data.url)} download
+                              className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-ink/60 hover:text-accent transition">
+                              <IconExport size={12} /> Descargar
+                            </a>
+                          </div>
                         )}
                         {key === 'tarjeta' && 'url_dorso' in data && (data as { url_dorso?: string }).url_dorso && (
                           <div className="mb-2">
                             <p className="text-[10px] text-ink/50 mb-1">Dorso</p>
                             <img src={(data as { url_dorso?: string }).url_dorso} alt={`${label} (dorso)`} className="w-full h-24 object-cover rounded-lg border border-border" />
+                            <a href={urlDescarga((data as { url_dorso?: string }).url_dorso as string)} download
+                              className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-ink/60 hover:text-accent transition">
+                              <IconExport size={12} /> Descargar
+                            </a>
                           </div>
                         )}
                         {key === 'tarjeta' && !('url_dorso' in data && (data as { url_dorso?: string }).url_dorso) && (
