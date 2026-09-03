@@ -225,7 +225,12 @@ export default function DashboardPropietario() {
   const cargarVehiculos = useCallback(async (uid: number): Promise<Vehiculo[]> => {
     const res = await fetch(`/api/vehiculos?propietarioId=${uid}`);
     const data = await res.json();
-    const vs: Vehiculo[] = data.vehiculos || [];
+    // Los vehículos convertidos a bus (tipo === 'bus') tienen su propia sección
+    // "🚌 Buses" (ver MisBusesPanel más abajo) — se excluyen acá, en el único punto
+    // donde se carga el estado `vehiculos`, para que no aparezcan duplicados ni
+    // editables como carro (checklist de SOAT/Tecno, selector de categoría, etc.
+    // no tienen sentido para un bus).
+    const vs: Vehiculo[] = (data.vehiculos || []).filter((v: Vehiculo) => v.tipo !== 'bus');
     setVehiculos(vs);
     return vs;
   }, []);
