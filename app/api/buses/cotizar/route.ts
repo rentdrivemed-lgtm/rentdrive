@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { notificarUsuarios } from '@/lib/panel';
 import { consumirIntento, ipCliente } from '@/lib/limite-tasa';
-import { cotizarTrayecto, cotizarHoras, adminsConAreaBuses, COL_DESTINO, type CategoriaBus } from '@/lib/busCotizador';
+import { cotizarTrayecto, cotizarHoras, adminsConAreaBuses, normalizarDestino, COL_DESTINO, type CategoriaBus } from '@/lib/busCotizador';
 
 export const dynamic = 'force-dynamic';
 
@@ -75,16 +75,26 @@ export async function POST(req: NextRequest) {
     destino = String(body.destino || '').trim().slice(0, 200);
     if (!destino) return NextResponse.json({ error: 'Falta el destino' }, { status: 400 });
 
-    let fila = db.prepare('SELECT tarifa_base, tarifa_30 FROM bus_tarifas_destino_veh WHERE vehiculo_id = ? AND destino = ?')
-      .get(vehiculoId, destino) as { tarifa_base: number; tarifa_30: number } | undefined;
+    // Búsqueda insensible a mayúsculas/tildes: se trae todo lo cargado para este bus (volumen
+    // pequeño por bus) y se compara en JS con `normalizarDestino` — `COLLATE NOCASE` de SQLite
+    // no resuelve tildes/diacríticos, solo mayúsculas ASCII, así que no alcanza aquí. Ver
+    // comentario de `normalizarDestino` en lib/busCotizador.ts.
+    const destinoNorm = normalizarDestino(destino);
+    const filasVeh = db.prepare('SELECT destino, tarifa_base, tarifa_30 FROM bus_tarifas_destino_veh WHERE vehiculo_id = ?')
+      .all(vehiculoId) as { destino: string; tarifa_base: number; tarifa_30: number }[];
+    let fila = filasVeh.find(f => normalizarDestino(f.destino) === destinoNorm) as
+      { tarifa_base: number; tarifa_30: number } | undefined;
 
     if (!fila) {
       // Sin tarifa propia para este destino: se cotiza contra la referencia de su
       // categoría (§7.2 del spec), marcada como referencial ("sujeta a confirmación del
-      // propietario") en la respuesta.
+      // propietario") en la respuesta. Mismo criterio de normalización que arriba: se traen
+      // todas las referencias activas (~300 filas, aceptable para un endpoint público con
+      // rate-limit de 20/hora) y se compara en JS.
       const col = COL_DESTINO[categoria];
-      const ref = db.prepare(`SELECT ${col.base} AS tarifa_base, ${col.recargo} AS tarifa_30 FROM bus_tarifas_destino_ref WHERE destino = ? AND activo = 1`)
-        .get(destino) as { tarifa_base: number | null; tarifa_30: number | null } | undefined;
+      const refs = db.prepare(`SELECT destino, ${col.base} AS tarifa_base, ${col.recargo} AS tarifa_30 FROM bus_tarifas_destino_ref WHERE activo = 1`)
+        .all() as { destino: string; tarifa_base: number | null; tarifa_30: number | null }[];
+      const ref = refs.find(r => normalizarDestino(r.destino) === destinoNorm);
       if (!ref || ref.tarifa_base == null) {
         return NextResponse.json(
           { error: 'No hay tarifa cargada para ese destino todavía. Prueba con "Por trayecto" o "Por horas".' },
