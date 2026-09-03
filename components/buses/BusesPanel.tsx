@@ -16,12 +16,20 @@ const SUBTABS: { key: SubTab; label: string }[] = [
   { key: 'config', label: 'Configuración' },
 ];
 
+const SUBTAB_KEYS: readonly string[] = SUBTABS.map(t => t.key);
+
 // Panel admin de Buses (Etapa 3, ver COTIZADOR-BUSES-SPEC.md §5). Cada sub-sección gestiona
 // su propio fetch/estado de forma independiente (ver components/buses/*Tab.tsx) — este
 // componente solo orquesta las pestañas internas, mismo patrón de sub-tabs que ya usa
 // ContabilidadPanel/SoportePanel.
-export default function BusesPanel() {
-  const [subTab, setSubTab] = useState<SubTab>('flota');
+//
+// `initialSubTab` — preselección al llegar desde una notificación clicable del Navbar
+// (?sub=<clave>, ver destinoDeNotificacion en components/Navbar.tsx); se aplica una sola
+// vez al montar, si es una clave válida.
+export default function BusesPanel({ initialSubTab }: { initialSubTab?: string | null } = {}) {
+  const [subTab, setSubTab] = useState<SubTab>(
+    initialSubTab && SUBTAB_KEYS.includes(initialSubTab) ? (initialSubTab as SubTab) : 'flota'
+  );
 
   return (
     <div className="space-y-5">

@@ -1,6 +1,6 @@
 'use client';
-import { Fragment, useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Fragment, Suspense, useEffect, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import CalendarioReservas, { type ReservaCalendario } from '@/components/CalendarioReservas';
 import PicoPlacaConfig from '@/components/PicoPlacaConfig';
 import ContabilidadPanel from '@/components/ContabilidadPanel';
@@ -275,8 +275,22 @@ function PermisosSecciones({ u, draft, baseline, onToggle, onReset, onGuardar, g
   );
 }
 
+// useSearchParams exige un límite <Suspense> alrededor del componente que lo usa (mismo
+// patrón que ya sigue app/pago/page.tsx) — se usa para preseleccionar pestaña/ítem cuando
+// se llega desde una notificación clicable del Navbar (ver destinoDeNotificacion).
 export default function DashboardAdmin() {
-  const [tab, setTab] = useState<'usuarios' | 'vehiculos' | 'buses' | 'reservas' | 'contabilidad' | 'mercado' | 'calculadora' | 'leads' | 'soporte' | 'nfc' | 'config' | 'auditoria'>('usuarios');
+  return (
+    <Suspense fallback={<div className="text-center py-20 text-ink/50">Cargando…</div>}>
+      <DashboardAdminInner />
+    </Suspense>
+  );
+}
+
+const TABS_ADMIN = ['usuarios', 'vehiculos', 'buses', 'reservas', 'contabilidad', 'mercado', 'calculadora', 'leads', 'soporte', 'nfc', 'config', 'auditoria'] as const;
+type TabAdmin = typeof TABS_ADMIN[number];
+
+function DashboardAdminInner() {
+  const [tab, setTab] = useState<TabAdmin>('usuarios');
   const [miNivel, setMiNivel] = useState<AdminNivel>('principal');
   const [miId, setMiId] = useState<number | null>(null);
   // Excepciones de permisos de MI cuenta (solo para pintar pestañas; el gating real es del servidor).
@@ -330,6 +344,18 @@ export default function DashboardAdmin() {
   const [confirmarElimComp, setConfirmarElimComp] = useState<number | null>(null);
 
   const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // Preselección de pestaña al llegar desde una notificación clicable del Navbar (ver
+  // destinoDeNotificacion en components/Navbar.tsx, ?tab=<clave>). Solo una vez al montar,
+  // para no pelear con los clics manuales del usuario en las pestañas.
+  const urlTabAplicado = useRef(false);
+  useEffect(() => {
+    if (urlTabAplicado.current) return;
+    urlTabAplicado.current = true;
+    const tabParam = searchParams.get('tab');
+    if (tabParam && (TABS_ADMIN as readonly string[]).includes(tabParam)) setTab(tabParam as TabAdmin);
+  }, [searchParams]);
 
   useEffect(() => {
     fetch('/api/auth/me').then(r => r.json()).then(d => {
@@ -758,6 +784,19 @@ export default function DashboardAdmin() {
     setIaCargando(false);
     setDocModal({ v });
   };
+
+  // Abre el modal de documentos de un vehículo puntual al llegar desde una notificación
+  // (?vehiculo=<id>, ver destinoDeNotificacion en components/Navbar.tsx) — solo una vez,
+  // cuando la lista de vehículos ya cargó.
+  const urlVehiculoAplicado = useRef(false);
+  useEffect(() => {
+    if (urlVehiculoAplicado.current || vehiculos.length === 0) return;
+    const vehiculoParam = searchParams.get('vehiculo');
+    if (!vehiculoParam) { urlVehiculoAplicado.current = true; return; }
+    const v = vehiculos.find(x => x.id === Number(vehiculoParam));
+    if (v) abrirDocModal(v);
+    urlVehiculoAplicado.current = true;
+  }, [vehiculos, searchParams]);
 
   const revisarDocIndividual = async (vid: number, key: string, estado: string, nota: string) => {
     setDocAccionando(key);
@@ -1406,7 +1445,7 @@ export default function DashboardAdmin() {
       )}
 
       {/* ── BUSES ── */}
-      {tab === 'buses' && <BusesPanel />}
+      {tab === 'buses' && <BusesPanel initialSubTab={searchParams.get('sub')} />}
 
       {/* ── RESERVAS ── */}
       {tab === 'reservas' && (
@@ -1821,7 +1860,7 @@ export default function DashboardAdmin() {
       {/* ── CONFIGURACIÓN (pico y placa) ── */}
       {tab === 'leads' && <LeadsPropietariosPanel />}
 
-      {tab === 'soporte' && <SoportePanel />}
+      {tab === 'soporte' && <SoportePanel focusConvId={searchParams.get('conv') ? Number(searchParams.get('conv')) : null} />}
 
       {tab === 'nfc' && <NfcCardsPanel />}
 

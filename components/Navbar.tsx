@@ -32,6 +32,72 @@ function tipoIcono(tipo: string) {
   return '🔔';
 }
 
+// A dónde debe llevar un clic sobre esta notificación, según su tipo/referencia y el rol
+// del usuario que la ve. `null` = la notificación no tiene una pantalla clara a la que
+// llevar (queda solo informativa, como hoy). No inventar destinos: solo se mapean los
+// `referencia_tipo` que el backend realmente emite (ver grep de `notificarUsuarios`/
+// `notificarEquipo`/`INSERT INTO notificaciones` en app/api/**).
+function destinoDeNotificacion(n: Notif, rol?: string): string | null {
+  const rid = n.referencia_id;
+  switch (n.referencia_tipo) {
+    case 'vehiculo':
+      if (rid == null) return null;
+      // Caso especial: aviso de que las tarifas de un bus se resetearon por cambio de
+      // categoría (POST /api/buses/[id]) — no es un documento de vehículo normal, así
+      // que no tiene sentido abrir el modal de "Docs"; se manda a la sección Buses.
+      if (n.tipo === 'bus_tarifas_reseteadas') return rol === 'admin' ? '/dashboard/admin?tab=buses' : null;
+      if (rol === 'admin') return `/dashboard/admin?tab=vehiculos&vehiculo=${rid}`;
+      if (rol === 'propietario') return `/dashboard/propietario?tab=vehiculos&vehiculo=${rid}`;
+      return null;
+    case 'documento':
+      return rol === 'admin' ? '/control?tab=documentos' : null;
+    case 'tablero':
+      if (rol !== 'admin') return null;
+      return rid != null ? `/control?tab=tableros&tablero=${rid}` : '/control?tab=tableros';
+    case 'evento':
+      return rol === 'admin' ? '/control?tab=calendario' : null;
+    case 'tarea':
+      return rol === 'admin' ? '/control?tab=tareas' : null;
+    case 'soporte':
+      if (rid == null) return null;
+      if (rol === 'admin') return `/dashboard/admin?tab=soporte&conv=${rid}`;
+      if (rol === 'propietario' || rol === 'usuario') return '/soporte';
+      return null;
+    case 'operacion':
+      return rol === 'admin' ? '/control?tab=operaciones' : null;
+    case 'reserva':
+      // Dos orígenes reales, ambos apuntando a una reserva (referencia_id = reserva_id):
+      // 'pico_placa' (POST /api/pico-placa/alertas — se notifica tanto al usuario como al
+      // propietario) y 'pago_realizado' (POST /api/contabilidad/liquidaciones — solo al
+      // propietario). El propietario tiene una pestaña "Reservas" clara en su dashboard; el
+      // usuario no tiene un dashboard con pestañas/`?tab=` (su vista de reservas es la página
+      // completa, sin querystring que la seleccione), así que para ese rol se deja sin destino
+      // en vez de inventar una ruta.
+      return rol === 'propietario' ? '/dashboard/propietario?tab=reservas' : null;
+    case 'remision':
+      // Solo lo emite notificarNuevaCuentaCobro en lib/contabilidad.ts (tipo
+      // 'cuenta_cobro_pendiente'), siempre al propietario, con referencia_id = remisión.id.
+      return rol === 'propietario' ? '/dashboard/propietario?tab=cuentas_cobro' : null;
+    case 'bus_tarifas_cambios':
+      // Solo llega a admins con el área "buses" (ver notificarUsuarios en
+      // app/api/buses/tarifas-vehiculo/route.ts y app/api/buses/cambios/route.ts) —
+      // el propietario nunca recibe este tipo, confirmado por grep.
+      return rol === 'admin' ? '/dashboard/admin?tab=buses&sub=cambios' : null;
+    case 'cotizacion_bus':
+      if (rol === 'admin') return '/dashboard/admin?tab=buses&sub=cotizaciones';
+      // El propietario sí recibe este tipo (ver POST /api/buses/cotizar), pero hoy no
+      // existe una vista de "cotizaciones de mi bus" en su dashboard (solo la API lo
+      // soporta) — construirla es desproporcionado para este cambio, así que lo llevamos
+      // a la pestaña Buses general en vez de inventar una ruta que no existe.
+      if (rol === 'propietario') return '/dashboard/propietario?tab=buses';
+      return null;
+    default:
+      // p. ej. 'mercado_actualizado' (nunca trae referencia_id/referencia_tipo) u otros
+      // tipos futuros sin mapear — se queda como notificación solo informativa.
+      return null;
+  }
+}
+
 function relTime(ts: string) {
   const diff = Date.now() - new Date(ts).getTime();
   const m = Math.floor(diff / 60000);
@@ -107,6 +173,19 @@ export default function Navbar() {
       fetch('/api/notificaciones', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
       setNoNotifs(0);
     }
+  };
+
+  // Clic sobre una notificación clicable: marca solo esa (PUT /api/notificaciones ya
+  // soporta { ids: [...] } además de "marcar todo leído" con {}), cierra el dropdown y
+  // navega a su destino (ver destinoDeNotificacion).
+  const irANotificacion = (n: Notif, href: string) => {
+    if (!n.leida) {
+      fetch('/api/notificaciones', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: [n.id] }) });
+      setNotifList(l => l.map(x => x.id === n.id ? { ...x, leida: 1 } : x));
+      setNoNotifs(Math.max(0, noNotifs - 1));
+    }
+    setNotifOpen(false);
+    router.push(href);
   };
 
   const dashHref =
@@ -251,8 +330,9 @@ export default function Navbar() {
                         <p className="text-center text-ink/50 py-10 text-sm">Cargando…</p>
                       ) : notifList.length === 0 ? (
                         <p className="text-center text-ink/50 py-10 text-sm">Sin notificaciones</p>
-                      ) : notifList.map(n => (
-                        <div key={n.id} className={`px-4 py-3 transition ${!n.leida ? 'bg-accent/5' : 'hover:bg-surface'}`}>
+                      ) : notifList.map(n => {
+                        const href = destinoDeNotificacion(n, user?.rol);
+                        const contenido = (
                           <div className="flex items-start gap-2.5">
                             <span className="text-base flex-shrink-0 mt-0.5 leading-none">{tipoIcono(n.tipo)}</span>
                             <div className="min-w-0 flex-1">
@@ -262,8 +342,21 @@ export default function Navbar() {
                             </div>
                             {!n.leida && <span className="w-2 h-2 rounded-full bg-accent flex-shrink-0 mt-1.5"/>}
                           </div>
-                        </div>
-                      ))}
+                        );
+                        if (href) {
+                          return (
+                            <button key={n.id} onClick={() => irANotificacion(n, href)}
+                              className={`w-full text-left px-4 py-3 transition cursor-pointer ${!n.leida ? 'bg-accent/5 hover:bg-accent/10' : 'hover:bg-surface'}`}>
+                              {contenido}
+                            </button>
+                          );
+                        }
+                        return (
+                          <div key={n.id} className={`px-4 py-3 transition ${!n.leida ? 'bg-accent/5' : 'hover:bg-surface'}`}>
+                            {contenido}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 )}

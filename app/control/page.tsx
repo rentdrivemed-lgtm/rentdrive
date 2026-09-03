@@ -1,5 +1,6 @@
 'use client';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { normalizarNivel, parsePermisosExtra, puede, NIVEL_LABEL, type AdminNivel, type PermisosExtra } from '@/lib/permisos';
 import PanelHoy from '@/components/control/PanelHoy';
 import TareasBoard from '@/components/control/TareasBoard';
@@ -20,7 +21,18 @@ const NAV: { key: Seccion; label: string; listo: boolean }[] = [
   { key: 'tableros', label: 'Tableros', listo: true },
 ];
 
-export default function ControlApp() {
+// useSearchParams exige un límite <Suspense> alrededor del componente que lo usa (mismo
+// patrón que ya sigue app/pago/page.tsx) — se usa para preseleccionar sección/tablero
+// cuando se llega desde una notificación clicable del Navbar (destinoDeNotificacion).
+export default function ControlPage() {
+  return (
+    <Suspense fallback={null}>
+      <ControlApp />
+    </Suspense>
+  );
+}
+
+function ControlApp() {
   const [nivel, setNivel] = useState<AdminNivel>('secretaria');
   const [permisos, setPermisos] = useState<PermisosExtra>({});
   const [nombre, setNombre] = useState('');
@@ -30,6 +42,22 @@ export default function ControlApp() {
   const [toasts, setToasts] = useState<{ id: number; text: string }[]>([]);
   const lastNotifId = useRef<number | null>(null);
   const toastSeq = useRef(0);
+  const searchParams = useSearchParams();
+
+  // Preselección de sección al llegar desde una notificación clicable del Navbar
+  // (?tab=<clave>, ver destinoDeNotificacion en components/Navbar.tsx). Solo una vez.
+  const urlTabAplicado = useRef(false);
+  useEffect(() => {
+    if (urlTabAplicado.current) return;
+    urlTabAplicado.current = true;
+    const tabParam = searchParams.get('tab') as Seccion | null;
+    if (tabParam && NAV.some(n => n.key === tabParam)) setSeccion(tabParam);
+  }, [searchParams]);
+
+  const tableroFocusId = (() => {
+    const raw = searchParams.get('tablero');
+    return raw ? Number(raw) : null;
+  })();
 
   const pushToast = useCallback((text: string) => {
     const id = ++toastSeq.current;
@@ -149,7 +177,7 @@ export default function ControlApp() {
               <div className="op-embed"><OperacionesPanel /></div>
             </>
           )}
-          {seccionActiva === 'tableros' && <TablerosBoard pushToast={pushToast} onEvento={cargarNotifs} />}
+          {seccionActiva === 'tableros' && <TablerosBoard pushToast={pushToast} onEvento={cargarNotifs} focusId={tableroFocusId} />}
           {navVisible.length === 0 && (
             <div className="section-head"><div>
               <div className="section-title">Sin módulos asignados</div>
