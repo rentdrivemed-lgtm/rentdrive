@@ -111,6 +111,20 @@ export async function GET(req: NextRequest) {
         query += ' AND v.disponible = 1 AND v.contenido_revision = 0';
       }
     }
+
+    // Los buses (tipo='bus') tienen su propio cotizador dedicado en app/buses/ (ver
+    // components/buses/CotizadorPublico.tsx) — la ficha de un vehículo normal
+    // (app/vehiculos/[id]/page.tsx) no sabe cotizar un bus (precio_dia=0 por diseño), así
+    // que nunca deben aparecer mezclados en la vitrina pública ni en el listado del panel
+    // admin (que ya tiene su propia pestaña "🚌 Buses" con BusesPanel/`/api/buses`). Esto
+    // solo aplica al listado "general" (sin `propietarioId`): el propio dueño (o un admin
+    // con permiso) consultando `propietarioId=` sigue viendo también sus buses — ver el
+    // filtro client-side ya existente en app/dashboard/propietario/page.tsx. Y si alguien
+    // pide `tipo=` explícito (incluido `tipo=bus`), se respeta tal cual sin forzar esta
+    // exclusión.
+    if (!propietarioId && !tipo) {
+      query += " AND v.tipo != 'bus'";
+    }
   }
 
   let vehiculos = db.prepare(query).all(...params) as Record<string, unknown>[];

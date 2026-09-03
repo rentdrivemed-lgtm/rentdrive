@@ -1,5 +1,6 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { IconBus, IconX, IconUsers } from '@/components/Icons';
 import { BUS_CATEGORIAS } from '@/lib/busCotizador';
 import BusVitrinaCard, { type BusPublico } from '@/components/buses/BusVitrinaCard';
@@ -10,13 +11,29 @@ import CotizadorPublico from '@/components/buses/CotizadorPublico';
 // endpoint ya filtra a disponible=1 AND contenido_revision=0, ver app/api/buses/route.ts) y
 // POST /api/buses/cotizar (también público). No se toca ningún endpoint ni tabla — solo se
 // consume lo que ya existe.
-export default function BusesPage() {
+function BusesContent() {
+  const searchParams = useSearchParams();
+  const busIdParam = searchParams.get('id');
+
   const [buses, setBuses] = useState<BusPublico[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorCarga, setErrorCarga] = useState('');
   const [categoria, setCategoria] = useState('');
   const [pasajeros, setPasajeros] = useState('');
   const [seleccionado, setSeleccionado] = useState<BusPublico | null>(null);
+  // Deep-link `/buses?id=<vehiculoId>` (ver app/vehiculos/[id]/page.tsx): mientras se resuelve
+  // el bus puntual, no mostramos la vitrina filtrable de fondo para evitar el parpadeo de
+  // "vitrina completa -> cotizador de un solo bus".
+  const [cargandoDeepLink, setCargandoDeepLink] = useState(!!busIdParam);
+
+  useEffect(() => {
+    if (!busIdParam) return;
+    fetch(`/api/buses/${busIdParam}`)
+      .then(r => r.json())
+      .then(d => { if (d.bus) setSeleccionado(d.bus); })
+      .catch(() => {})
+      .finally(() => setCargandoDeepLink(false));
+  }, [busIdParam]);
 
   const cargar = async () => {
     setLoading(true);
@@ -50,6 +67,10 @@ export default function BusesPage() {
         <CotizadorPublico bus={seleccionado} onVolver={() => setSeleccionado(null)} />
       </div>
     );
+  }
+
+  if (cargandoDeepLink) {
+    return <div className="text-center py-20 text-ink/50">Cargando...</div>;
   }
 
   return (
@@ -126,5 +147,13 @@ export default function BusesPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function BusesPage() {
+  return (
+    <Suspense fallback={<div className="text-center py-20 text-ink/50">Cargando...</div>}>
+      <BusesContent />
+    </Suspense>
   );
 }
