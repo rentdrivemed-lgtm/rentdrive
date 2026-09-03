@@ -15,6 +15,13 @@ const FORM_INICIAL = {
   capacidad_pasajeros: '', ubicacion: 'Medellín', descripcion: '',
 };
 
+// Vehículo del propietario candidato a convertirse en bus (subset de lo que devuelve
+// GET /api/vehiculos — no se inventa ningún campo que ese endpoint no exponga).
+type VehiculoConvertible = {
+  id: number; marca: string; modelo: string; anio: number;
+  placa?: string; tipo: string;
+};
+
 // Sección "🚌 Buses" del dashboard del propietario (COTIZADOR-BUSES-SPEC.md §6, Etapa 4).
 // A diferencia del formulario de carros (fuertemente acoplado a precio_dia/valor_comercial/
 // categorías de rentabilidad de lib/rentabilidad.ts), este es un flujo de alta SEPARADO y
@@ -35,10 +42,19 @@ export default function MisBusesPanel({ propietarioId }: { propietarioId: number
 
   // Alta de bus
   const [formAbierto, setFormAbierto] = useState(false);
+  const [modoAlta, setModoAlta] = useState<'nuevo' | 'convertir'>('nuevo');
   const [form, setForm] = useState(FORM_INICIAL);
   const [publicando, setPublicando] = useState(false);
   const [msg, setMsg] = useState('');
-  const [exito, setExito] = useState<{ marca: string; modelo: string; categoria: string } | null>(null);
+  const [exito, setExito] = useState<{ marca: string; modelo: string; categoria: string; modo: 'nuevo' | 'convertir' } | null>(null);
+
+  // Convertir un vehículo ya registrado (carro) en bus — evita repetir marca/modelo/placa/año
+  // desde cero cuando el propietario ya lo tenía registrado como carro (pedido de Victor).
+  const [vehiculosConvertibles, setVehiculosConvertibles] = useState<VehiculoConvertible[]>([]);
+  const [cargandoVehiculos, setCargandoVehiculos] = useState(false);
+  const [vehiculoAConvertirId, setVehiculoAConvertirId] = useState<number | null>(null);
+  const [capacidadConvertir, setCapacidadConvertir] = useState('');
+  const [convirtiendo, setConvirtiendo] = useState(false);
 
   const cargar = async () => {
     setCargando(true);
@@ -89,7 +105,7 @@ export default function MisBusesPanel({ propietarioId }: { propietarioId: number
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) { setMsg(d.error || 'No se pudo registrar el bus.'); return; }
-      setExito({ marca: form.marca.trim(), modelo: form.modelo.trim(), categoria: categoriaLabel(d.bus_categoria) });
+      setExito({ marca: form.marca.trim(), modelo: form.modelo.trim(), categoria: categoriaLabel(d.bus_categoria), modo: 'nuevo' });
       setForm(FORM_INICIAL);
       setFormAbierto(false);
       await cargar();
@@ -98,6 +114,63 @@ export default function MisBusesPanel({ propietarioId }: { propietarioId: number
       setMsg('Sin conexión — intenta de nuevo.');
     } finally {
       setPublicando(false);
+    }
+  };
+
+  // Trae los vehículos del propietario y filtra client-side los que YA son bus (mismo
+  // contrato que ya usa app/dashboard/propietario/page.tsx: GET /api/vehiculos?propietarioId=
+  // devuelve TODOS los vehículos del dueño autenticado, incluidos no disponibles/en revisión).
+  const cargarVehiculosConvertibles = async () => {
+    setCargandoVehiculos(true);
+    try {
+      const res = await fetch(`/api/vehiculos?propietarioId=${propietarioId}`, { cache: 'no-store' });
+      const d = await res.json().catch(() => ({}));
+      const vs: VehiculoConvertible[] = (d.vehiculos || []).filter((v: VehiculoConvertible) => v.tipo !== 'bus');
+      setVehiculosConvertibles(vs);
+      setVehiculoAConvertirId(prev => (prev && vs.some(v => v.id === prev)) ? prev : (vs[0]?.id ?? null));
+    } catch {
+      setMsg('No pudimos cargar tus vehículos.');
+    } finally {
+      setCargandoVehiculos(false);
+    }
+  };
+
+  const capacidadConvertirNum = Number(capacidadConvertir);
+  const categoriaEstimadaConvertir = Number.isInteger(capacidadConvertirNum) && capacidadConvertirNum >= CAPACIDAD_MIN_PASAJEROS && capacidadConvertirNum <= CAPACIDAD_MAX_PASAJEROS
+    ? categoriaPorPasajeros(capacidadConvertirNum)
+    : null;
+
+  const convertirVehiculo = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setMsg('');
+    setExito(null);
+    if (!vehiculoAConvertirId) {
+      setMsg('Selecciona el vehículo que quieres convertir en bus.');
+      return;
+    }
+    if (!Number.isInteger(capacidadConvertirNum) || capacidadConvertirNum < CAPACIDAD_MIN_PASAJEROS || capacidadConvertirNum > CAPACIDAD_MAX_PASAJEROS) {
+      setMsg(`La capacidad de pasajeros debe ser un número entero entre ${CAPACIDAD_MIN_PASAJEROS} y ${CAPACIDAD_MAX_PASAJEROS}.`);
+      return;
+    }
+    const vehiculo = vehiculosConvertibles.find(v => v.id === vehiculoAConvertirId);
+    setConvirtiendo(true);
+    try {
+      const res = await fetch('/api/buses/convertir', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vehiculoId: vehiculoAConvertirId, capacidad_pasajeros: capacidadConvertirNum }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { setMsg(d.error || 'No se pudo convertir el vehículo a bus.'); return; }
+      setExito({ marca: vehiculo?.marca || '', modelo: vehiculo?.modelo || '', categoria: categoriaLabel(d.bus_categoria), modo: 'convertir' });
+      setCapacidadConvertir('');
+      setFormAbierto(false);
+      await cargar();
+      setSeleccionadoId(vehiculoAConvertirId);
+      setVehiculosConvertibles(vs => vs.filter(v => v.id !== vehiculoAConvertirId));
+    } catch {
+      setMsg('Sin conexión — intenta de nuevo.');
+    } finally {
+      setConvirtiendo(false);
     }
   };
 
@@ -140,7 +213,12 @@ export default function MisBusesPanel({ propietarioId }: { propietarioId: number
           <h2 className="font-bold text-ink text-lg flex items-center gap-2">🚌 Mis buses</h2>
           <p className="text-sm text-ink/50">Registra tus buses para el cotizador de viajes ocasionales y ajusta sus tarifas.</p>
         </div>
-        <button onClick={() => { setFormAbierto(v => !v); setMsg(''); setExito(null); }}
+        <button onClick={() => {
+          const abriendo = !formAbierto;
+          setFormAbierto(abriendo);
+          setMsg(''); setExito(null);
+          if (abriendo && modoAlta === 'convertir') cargarVehiculosConvertibles();
+        }}
           className="glow-accent inline-flex items-center gap-2 text-white font-semibold px-5 h-11 rounded-xl text-sm transition hover:-translate-y-0.5"
           style={{ background: 'var(--gradient-accent)' }}>
           <IconCheck size={16} /> {formAbierto ? 'Cancelar' : '+ Registrar bus'}
@@ -149,7 +227,7 @@ export default function MisBusesPanel({ propietarioId }: { propietarioId: number
 
       {exito && (
         <div className="bg-success/10 border border-success/25 rounded-2xl p-4">
-          <p className="text-success font-semibold text-sm">✅ {exito.marca} {exito.modelo} registrado — categoría asignada: {exito.categoria}.</p>
+          <p className="text-success font-semibold text-sm">✅ {exito.marca} {exito.modelo} {exito.modo === 'convertir' ? 'convertido a bus' : 'registrado'} — categoría asignada: {exito.categoria}.</p>
           <p className="text-xs text-ink/60 mt-1">
             Sus tarifas iniciales ya se copiaron de la referencia de esa categoría, así que arranca con precios razonables. Puedes ajustarlas en &quot;Tarifas de mi bus&quot; más abajo. El bus queda como &quot;No disponible&quot; hasta que lo actives.
           </p>
@@ -157,56 +235,122 @@ export default function MisBusesPanel({ propietarioId }: { propietarioId: number
       )}
 
       {formAbierto && (
-        <form onSubmit={registrarBus} className="bg-surface-2 border border-border rounded-2xl p-4 space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="text-[11px] text-ink/50 block mb-1">Marca</label>
-              <input value={form.marca} onChange={e => setForm(f => ({ ...f, marca: e.target.value }))}
-                placeholder="Ej. Chevrolet" className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
-            </div>
-            <div>
-              <label className="text-[11px] text-ink/50 block mb-1">Modelo</label>
-              <input value={form.modelo} onChange={e => setForm(f => ({ ...f, modelo: e.target.value }))}
-                placeholder="Ej. NPR Buseta" className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
-            </div>
-            <div>
-              <label className="text-[11px] text-ink/50 block mb-1">Año</label>
-              <input type="number" value={form.anio} onChange={e => setForm(f => ({ ...f, anio: e.target.value }))}
-                placeholder="Ej. 2020" className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
-            </div>
-            <div>
-              <label className="text-[11px] text-ink/50 block mb-1">Placa</label>
-              <input value={form.placa} onChange={e => setForm(f => ({ ...f, placa: e.target.value.toUpperCase() }))}
-                placeholder="Ej. PWY837" className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
-            </div>
-            <div>
-              <label className="text-[11px] text-ink/50 block mb-1">Capacidad de pasajeros</label>
-              <input type="number" value={form.capacidad_pasajeros} onChange={e => setForm(f => ({ ...f, capacidad_pasajeros: e.target.value }))}
-                placeholder="Ej. 19" className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
-              {categoriaEstimada && (
-                <p className="text-[11px] text-accent mt-1">Categoría estimada: {categoriaLabel(categoriaEstimada)}</p>
+        <div className="space-y-3">
+          {/* Toggle: bus nuevo desde cero vs. convertir un vehículo que ya tiene registrado
+              (pedido de Victor: "cuando le doy en bus me pide registro de nuevo"). */}
+          <div className="inline-flex bg-surface-2 border border-border rounded-xl p-1 gap-1">
+            <button type="button"
+              onClick={() => { setModoAlta('nuevo'); setMsg(''); }}
+              className={`text-xs font-semibold px-3.5 py-1.5 rounded-lg transition ${
+                modoAlta === 'nuevo' ? 'bg-accent text-white' : 'text-ink/60 hover:bg-surface'
+              }`}>
+              Bus nuevo
+            </button>
+            <button type="button"
+              onClick={() => { setModoAlta('convertir'); setMsg(''); cargarVehiculosConvertibles(); }}
+              className={`text-xs font-semibold px-3.5 py-1.5 rounded-lg transition ${
+                modoAlta === 'convertir' ? 'bg-accent text-white' : 'text-ink/60 hover:bg-surface'
+              }`}>
+              Convertir un vehículo que ya tengo registrado
+            </button>
+          </div>
+
+          {modoAlta === 'nuevo' ? (
+            <form onSubmit={registrarBus} className="bg-surface-2 border border-border rounded-2xl p-4 space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[11px] text-ink/50 block mb-1">Marca</label>
+                  <input value={form.marca} onChange={e => setForm(f => ({ ...f, marca: e.target.value }))}
+                    placeholder="Ej. Chevrolet" className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                </div>
+                <div>
+                  <label className="text-[11px] text-ink/50 block mb-1">Modelo</label>
+                  <input value={form.modelo} onChange={e => setForm(f => ({ ...f, modelo: e.target.value }))}
+                    placeholder="Ej. NPR Buseta" className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                </div>
+                <div>
+                  <label className="text-[11px] text-ink/50 block mb-1">Año</label>
+                  <input type="number" value={form.anio} onChange={e => setForm(f => ({ ...f, anio: e.target.value }))}
+                    placeholder="Ej. 2020" className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                </div>
+                <div>
+                  <label className="text-[11px] text-ink/50 block mb-1">Placa</label>
+                  <input value={form.placa} onChange={e => setForm(f => ({ ...f, placa: e.target.value.toUpperCase() }))}
+                    placeholder="Ej. PWY837" className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                </div>
+                <div>
+                  <label className="text-[11px] text-ink/50 block mb-1">Capacidad de pasajeros</label>
+                  <input type="number" value={form.capacidad_pasajeros} onChange={e => setForm(f => ({ ...f, capacidad_pasajeros: e.target.value }))}
+                    placeholder="Ej. 19" className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                  {categoriaEstimada && (
+                    <p className="text-[11px] text-accent mt-1">Categoría estimada: {categoriaLabel(categoriaEstimada)}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="text-[11px] text-ink/50 block mb-1">Ubicación</label>
+                  <input value={form.ubicacion} onChange={e => setForm(f => ({ ...f, ubicacion: e.target.value }))}
+                    className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                </div>
+              </div>
+              <div>
+                <label className="text-[11px] text-ink/50 block mb-1">Descripción (opcional)</label>
+                <textarea rows={2} value={form.descripcion} onChange={e => setForm(f => ({ ...f, descripcion: e.target.value }))}
+                  placeholder="Cuéntale a los clientes sobre tu bus: comodidades, estado, etc."
+                  className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink resize-none" />
+              </div>
+
+              {msg && <p className="text-xs text-danger">{msg}</p>}
+
+              <button disabled={publicando}
+                className="text-sm font-semibold bg-accent hover:bg-accent-hover text-white px-4 py-2 rounded-xl transition disabled:opacity-60">
+                {publicando ? 'Registrando…' : 'Registrar bus'}
+              </button>
+            </form>
+          ) : (
+            <div className="bg-surface-2 border border-border rounded-2xl p-4 space-y-3">
+              {cargandoVehiculos ? (
+                <p className="text-sm text-ink/50 py-4 text-center">Cargando tus vehículos…</p>
+              ) : vehiculosConvertibles.length === 0 ? (
+                <>
+                  <p className="text-sm text-ink/50 py-4 text-center">
+                    No tienes vehículos disponibles para convertir (o ya son todos buses, o todavía no has registrado ningún carro). Usa &quot;Bus nuevo&quot; para registrar uno desde cero.
+                  </p>
+                  {msg && <p className="text-xs text-danger text-center">{msg}</p>}
+                </>
+              ) : (
+                <form onSubmit={convertirVehiculo} className="space-y-3">
+                  <div>
+                    <label className="text-[11px] text-ink/50 block mb-1">Vehículo a convertir</label>
+                    <select value={vehiculoAConvertirId ?? ''} onChange={e => setVehiculoAConvertirId(Number(e.target.value) || null)}
+                      className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink">
+                      {vehiculosConvertibles.map(v => (
+                        <option key={v.id} value={v.id}>
+                          {v.marca} {v.modelo} {v.anio}{v.placa ? ` — ${v.placa}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-[11px] text-ink/40 mt-1">Marca, modelo, año, placa y ubicación se mantienen tal cual — solo falta la capacidad de pasajeros.</p>
+                  </div>
+                  <div className="max-w-xs">
+                    <label className="text-[11px] text-ink/50 block mb-1">Capacidad de pasajeros</label>
+                    <input type="number" value={capacidadConvertir} onChange={e => setCapacidadConvertir(e.target.value)}
+                      placeholder="Ej. 19" className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                    {categoriaEstimadaConvertir && (
+                      <p className="text-[11px] text-accent mt-1">Categoría estimada: {categoriaLabel(categoriaEstimadaConvertir)}</p>
+                    )}
+                  </div>
+
+                  {msg && <p className="text-xs text-danger">{msg}</p>}
+
+                  <button disabled={convirtiendo}
+                    className="text-sm font-semibold bg-accent hover:bg-accent-hover text-white px-4 py-2 rounded-xl transition disabled:opacity-60">
+                    {convirtiendo ? 'Convirtiendo…' : 'Convertir a bus'}
+                  </button>
+                </form>
               )}
             </div>
-            <div>
-              <label className="text-[11px] text-ink/50 block mb-1">Ubicación</label>
-              <input value={form.ubicacion} onChange={e => setForm(f => ({ ...f, ubicacion: e.target.value }))}
-                className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
-            </div>
-          </div>
-          <div>
-            <label className="text-[11px] text-ink/50 block mb-1">Descripción (opcional)</label>
-            <textarea rows={2} value={form.descripcion} onChange={e => setForm(f => ({ ...f, descripcion: e.target.value }))}
-              placeholder="Cuéntale a los clientes sobre tu bus: comodidades, estado, etc."
-              className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink resize-none" />
-          </div>
-
-          {msg && <p className="text-xs text-danger">{msg}</p>}
-
-          <button disabled={publicando}
-            className="text-sm font-semibold bg-accent hover:bg-accent-hover text-white px-4 py-2 rounded-xl transition disabled:opacity-60">
-            {publicando ? 'Registrando…' : 'Registrar bus'}
-          </button>
-        </form>
+          )}
+        </div>
       )}
 
       {cargando ? (

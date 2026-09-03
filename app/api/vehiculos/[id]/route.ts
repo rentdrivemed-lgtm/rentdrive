@@ -108,6 +108,20 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   const vehiculo = db.prepare('SELECT * FROM vehiculos WHERE id = ?').get(Number(id)) as Record<string, unknown> | undefined;
   if (!vehiculo) return NextResponse.json({ error: 'No encontrado' }, { status: 404 });
 
+  // Guard temprano — defensa en profundidad: un vehículo convertido a bus (tipo === 'bus',
+  // ver POST /api/buses/convertir) NO se edita desde este endpoint (columnas de carro como
+  // `precio_dia`/documentos SOAT-Tecno no aplican; escribir acá sobre él dejaría huérfanos
+  // `bus_categoria`/`capacidad_pasajeros`/`bus_tarifas_*_veh` sin limpiarlos). El frontend ya
+  // no debería mandar este PUT (ver app/dashboard/propietario/page.tsx, filtra tipo==='bus'
+  // fuera de "Mis vehículos"), pero se rechaza acá también por si algún otro camino llega a
+  // intentarlo. Va ANTES de cualquier otra lógica de escritura del endpoint.
+  if (vehiculo.tipo === 'bus') {
+    return NextResponse.json(
+      { error: 'Este vehículo es un bus — edítalo desde el panel de Buses, no desde aquí.' },
+      { status: 400 },
+    );
+  }
+
   // Ruta compartida: la usan el propietario dueño del carro Y el admin.
   // Rama admin -> se le exige la sección "vehiculos" (nivel + excepciones por empleado);
   // rama propietario -> sigue mandando la pertenencia, sin tocar permisos de admin.
