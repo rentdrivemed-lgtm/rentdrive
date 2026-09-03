@@ -68,7 +68,7 @@ export async function POST(req: NextRequest) {
   let destino: string | null = null;
   let km: number | null = null;
   let horas: number | null = null;
-  let referencial = false; // solo aplica en modo 'destino' cuando no hay tarifa propia del bus
+  let referencial = false; // se marca true cuando el bus no tiene tarifa propia y se usó la referencia de su categoría
 
   if (modo === 'destino') {
     // Mismo límite de largo que clienteNombre (texto libre público, ver arriba).
@@ -104,9 +104,23 @@ export async function POST(req: NextRequest) {
     if (!Number.isFinite(km) || km <= 0) return NextResponse.json({ error: 'Kilómetros inválidos' }, { status: 400 });
     if (km > KM_MAXIMO) return NextResponse.json({ error: `Los kilómetros no pueden superar ${KM_MAXIMO}.` }, { status: 400 });
 
-    const fila = db.prepare('SELECT valor_km, tarifa_minima FROM bus_valor_km_veh WHERE vehiculo_id = ?')
+    let fila = db.prepare('SELECT valor_km, tarifa_minima FROM bus_valor_km_veh WHERE vehiculo_id = ?')
       .get(vehiculoId) as { valor_km: number; tarifa_minima: number } | undefined;
-    if (!fila) return NextResponse.json({ error: 'Este bus todavía no tiene tarifa por kilómetro configurada.' }, { status: 404 });
+
+    if (!fila) {
+      // Sin tarifa propia de km para este bus: se cotiza contra la referencia de su
+      // categoría, marcada como referencial en la respuesta (mismo patrón que 'destino').
+      const ref = db.prepare('SELECT valor_km, tarifa_minima FROM bus_valor_km_ref WHERE categoria = ?')
+        .get(categoria) as { valor_km: number | null; tarifa_minima: number | null } | undefined;
+      if (!ref || !ref.valor_km) {
+        return NextResponse.json(
+          { error: 'No hay tarifa por kilómetro cargada todavía para este bus. Prueba con "Por destino" o "Por horas".' },
+          { status: 404 },
+        );
+      }
+      fila = { valor_km: ref.valor_km, tarifa_minima: ref.tarifa_minima ?? 0 };
+      referencial = true;
+    }
 
     const sinRecargo = Math.round(Math.max(km * fila.valor_km, fila.tarifa_minima));
     total = cotizarTrayecto(km, fila.valor_km, fila.tarifa_minima, conRecargo);
@@ -117,9 +131,23 @@ export async function POST(req: NextRequest) {
     if (!Number.isFinite(horas) || horas <= 0) return NextResponse.json({ error: 'Horas inválidas' }, { status: 400 });
     if (horas > HORAS_MAXIMO) return NextResponse.json({ error: `Las horas no pueden superar ${HORAS_MAXIMO}.` }, { status: 400 });
 
-    const fila = db.prepare('SELECT tarifa_hora, minimo_horas FROM bus_tarifas_hora_veh WHERE vehiculo_id = ?')
+    let fila = db.prepare('SELECT tarifa_hora, minimo_horas FROM bus_tarifas_hora_veh WHERE vehiculo_id = ?')
       .get(vehiculoId) as { tarifa_hora: number; minimo_horas: number } | undefined;
-    if (!fila) return NextResponse.json({ error: 'Este bus todavía no tiene tarifa por hora configurada.' }, { status: 404 });
+
+    if (!fila) {
+      // Sin tarifa propia de hora para este bus: se cotiza contra la referencia de su
+      // categoría, marcada como referencial en la respuesta (mismo patrón que 'destino').
+      const ref = db.prepare('SELECT tarifa_hora, minimo_horas FROM bus_tarifas_hora_ref WHERE categoria = ?')
+        .get(categoria) as { tarifa_hora: number | null; minimo_horas: number | null } | undefined;
+      if (!ref || !ref.tarifa_hora) {
+        return NextResponse.json(
+          { error: 'No hay tarifa por hora cargada todavía para este bus. Prueba con "Por destino" o "Por trayecto".' },
+          { status: 404 },
+        );
+      }
+      fila = { tarifa_hora: ref.tarifa_hora, minimo_horas: ref.minimo_horas ?? 4 };
+      referencial = true;
+    }
 
     const horasEfectivas = Math.max(horas, fila.minimo_horas);
     const sinRecargo = Math.round(horasEfectivas * fila.tarifa_hora);
