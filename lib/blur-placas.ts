@@ -61,58 +61,23 @@ export type ResultadoDeteccion = {
   motivoInapropiado?: string;
   /**
    * false si, por CUALQUIER motivo (sin API key, error de red/API, o respuesta sin JSON
-   * válido), la IA NO llegó a evaluar el contenido de esta foto — en ese caso
-   * `contenidoInapropiado` queda en `false` en el valor que devuelve ESTA función (para no
-   * inventar un resultado de moderación que nunca se produjo), pero eso NO es lo mismo que
-   * "la IA revisó la foto y la encontró apropiada". Esta misma función ya deja rastro
-   * distintivo en el log en cada uno de esos casos (ver los `console.error(...
-   * [MODERACION-NO-EVALUADA]...)` más abajo). El call site (app/api/upload/route.ts) debe
-   * leer este campo y tratarlo FAIL-CLOSED — igual que si `contenidoInapropiado` fuera
-   * `true` (a revisión manual) — en vez de fail-open (aprobada en silencio).
+   * válido) en LOS 2 "slots" de detección independientes que hace esta función (cada uno con
+   * su propio reintento técnico — ver `detectarYDifuminarPlaca` más abajo), la IA NO llegó a
+   * evaluar el contenido de esta foto — en ese caso `contenidoInapropiado` queda en `false` en
+   * el valor que devuelve ESTA función (para no inventar un resultado de moderación que nunca
+   * se produjo), pero eso NO es lo mismo que "la IA revisó la foto y la encontró
+   * apropiada". Basta con que UNO solo de los 2 slots tenga éxito técnico para que
+   * `moderacionEvaluada` sea `true` (la moderación de esa llamada sí es un dato real), aunque
+   * el otro slot haya fallado. Esta misma función ya deja rastro distintivo en el log en cada
+   * uno de esos casos (ver los `console.error(...[MODERACION-NO-EVALUADA]...)` más abajo). El
+   * call site (app/api/upload/route.ts) debe leer este campo y tratarlo FAIL-CLOSED — igual
+   * que si `contenidoInapropiado` fuera `true` (a revisión manual) — en vez de fail-open
+   * (aprobada en silencio).
    */
   moderacionEvaluada: boolean;
 };
 
-export async function detectarYDifuminarPlaca(
-  bufferOriginal: Buffer,
-  mediaType: 'image/jpeg' | 'image/png' | 'image/webp' = 'image/jpeg'
-): Promise<ResultadoDeteccion> {
-  // Corregir orientación EXIF primero: tanto la imagen que ve Claude como la
-  // región que recortamos/componemos deben trabajar sobre los mismos píxeles
-  // "derechos", si no el % de región que calcula Claude (sobre la imagen ya
-  // rotada) no coincide con las coordenadas de un buffer sin rotar.
-  const buffer = await normalizarOrientacion(bufferOriginal, mediaType);
-
-  if (!process.env.ANTHROPIC_API_KEY) {
-    console.error('[blur-placas][MODERACION-NO-EVALUADA] ANTHROPIC_API_KEY no configurada — foto subida SIN evaluar contenido ni difuminar placa (fail-open: se trata como apropiada por defecto)');
-    return { buffer, difuminada: false, contenidoInapropiado: false, moderacionEvaluada: false };
-  }
-
-  // Normalizar a JPEG para base64 (menor tamaño)
-  const jpegBuf = await sharp(buffer).jpeg({ quality: 85 }).toBuffer();
-  const base64 = jpegBuf.toString('base64');
-
-  let deteccion: PlacaDeteccion = { plate_visible: false, inappropriate_content: false };
-
-  let text = '';
-  let stopReason: string | null | undefined;
-  try {
-    const resp = await client.messages.create({
-      model: 'claude-opus-4-8',
-      // Se pide razonar en prosa antes del JSON final (ver prompt más abajo),
-      // así que dejamos margen extra sobre el mínimo previo (1024) para que
-      // ese razonamiento no trunque la respuesta antes de cerrar el JSON.
-      max_tokens: 2048,
-      messages: [{
-        role: 'user',
-        content: [
-          {
-            type: 'image',
-            source: { type: 'base64', media_type: 'image/jpeg', data: base64 },
-          },
-          {
-            type: 'text',
-            text: `You are inspecting a photo of a car (this is one photo out of a set: front, back, sides, interior) to find and locate its license plate (Colombian plate, e.g. "KZR957" — yellow background with black bold characters for private cars).
+const PROMPT_DETECCION = `You are inspecting a photo of a car (this is one photo out of a set: front, back, sides, interior) to find and locate its license plate (Colombian plate, e.g. "KZR957" — yellow background with black bold characters for private cars).
 
 IMPORTANT: search actively for the plate at ANY angle the photo happens to show — do NOT assume the car is facing front. Colombian plates can appear:
 - On the FRONT of the car, usually mounted below the grille/logo, above or on the front bumper.
@@ -137,7 +102,41 @@ Rules:
 - If a plate IS visible, return a TIGHT bounding box around the plate's actual edges, with only a small ~5% padding on every side to account for imprecision in your own estimate — do NOT return a box much larger than the plate itself (e.g. do not include large parts of the bumper/grille around it). The code that consumes this region adds its own additional safety margin afterward, so your box should track the plate closely, not be generous
 - Do not skip the back of the car just because it's not the "obvious" angle — the plate is just as often on the back as on the front
 - inappropriate_content: true ONLY for clearly explicit/sexual content as described above; false for every normal car/interior/person photo (this should be false the vast majority of the time)
-- inappropriate_reason: a short (one sentence) explanation ONLY if inappropriate_content is true; omit or leave empty otherwise`,
+- inappropriate_reason: a short (one sentence) explanation ONLY if inappropriate_content is true; omit or leave empty otherwise`;
+
+/**
+ * Resultado de UNA llamada a Claude para detección de placa/moderación, ya con el
+ * parseo de JSON aplicado. Separado de `detectarYDifuminarPlaca` porque ahora se invoca hasta
+ * 4 veces por foto (2 "slots" de detección SIEMPRE independientes, cada uno con hasta 2
+ * intentos técnicos — ver esa función) con exactamente la misma lógica de llamada + parseo —
+ * antes este bloque estaba duplicado sería doble mantenimiento.
+ */
+type LlamadaClaudeResultado =
+  | { ok: true; deteccion: PlacaDeteccion }
+  | { ok: false; motivo: 'api_error'; error: unknown }
+  | { ok: false; motivo: 'sin_json'; stopReason: string | null | undefined; textoRespuesta: string }
+  | { ok: false; motivo: 'json_invalido'; error: unknown; stopReason: string | null | undefined; textoRespuesta: string };
+
+async function llamarClaudeDeteccionPlaca(base64: string): Promise<LlamadaClaudeResultado> {
+  let text = '';
+  let stopReason: string | null | undefined;
+  try {
+    const resp = await client.messages.create({
+      model: 'claude-opus-4-8',
+      // Se pide razonar en prosa antes del JSON final (ver prompt más abajo),
+      // así que dejamos margen extra sobre el mínimo previo (1024) para que
+      // ese razonamiento no trunque la respuesta antes de cerrar el JSON.
+      max_tokens: 2048,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: 'image/jpeg', data: base64 },
+          },
+          {
+            type: 'text',
+            text: PROMPT_DETECCION,
           },
         ],
       }],
@@ -146,8 +145,7 @@ Rules:
     text = resp.content[0].type === 'text' ? resp.content[0].text.trim() : '';
     stopReason = resp.stop_reason;
   } catch (err) {
-    console.error('[blur-placas][MODERACION-NO-EVALUADA] Error llamando a la API de Anthropic — foto subida SIN evaluar contenido ni difuminar placa (fail-open: se trata como apropiada por defecto):', err);
-    return { buffer, difuminada: false, contenidoInapropiado: false, moderacionEvaluada: false };
+    return { ok: false, motivo: 'api_error', error: err };
   }
 
   try {
@@ -182,68 +180,76 @@ Rules:
       jsonStr = match ? match[0] : null;
     }
     if (jsonStr) {
-      deteccion = JSON.parse(jsonStr) as PlacaDeteccion;
-    } else {
-      // Sin JSON reconocible: no se pudo leer NI la placa NI la moderación de esta
-      // respuesta — tratamos ambas como no evaluadas (fail-open), y lo marcamos
-      // distintivo porque, a diferencia del resto de los warn de este módulo, este
-      // caso específicamente deja la foto sin evaluación real de contenido.
-      console.error('[blur-placas][MODERACION-NO-EVALUADA] Respuesta de Claude sin JSON reconocible — foto subida SIN evaluar contenido ni difuminar placa (fail-open: se trata como apropiada por defecto). stop_reason:', stopReason, 'Respuesta:', text.slice(0, 300));
-      return { buffer, difuminada: false, contenidoInapropiado: false, moderacionEvaluada: false };
+      const deteccion = JSON.parse(jsonStr) as PlacaDeteccion;
+      return { ok: true, deteccion };
     }
+    // Sin JSON reconocible: no se pudo leer NI la placa NI la moderación de esta
+    // respuesta puntual.
+    return { ok: false, motivo: 'sin_json', stopReason, textoRespuesta: text };
   } catch (err) {
-    console.error('[blur-placas][MODERACION-NO-EVALUADA] JSON inválido en la respuesta de Claude — foto subida SIN evaluar contenido ni difuminar placa (fail-open: se trata como apropiada por defecto):', err, 'stop_reason:', stopReason, 'Respuesta:', text.slice(0, 300));
-    return { buffer, difuminada: false, contenidoInapropiado: false, moderacionEvaluada: false };
+    return { ok: false, motivo: 'json_invalido', error: err, stopReason, textoRespuesta: text };
   }
+}
 
-  // El chequeo de contenido inapropiado es independiente del de la placa: aplica
-  // sin importar si se encontró o no una placa visible en la foto. Si llegamos hasta
-  // acá, la IA sí devolvió un JSON válido con `inappropriate_content`, así que la
-  // moderación SÍ se evaluó de verdad (a diferencia de los casos fail-open de arriba).
-  const contenidoInapropiado = deteccion.inappropriate_content === true;
-  const motivoInapropiado = contenidoInapropiado ? (deteccion.inappropriate_reason || 'Contenido marcado como inapropiado por la IA') : undefined;
-  if (contenidoInapropiado) {
-    console.warn('[blur-placas] Foto marcada por la IA como contenido inapropiado:', motivoInapropiado);
+/** Log final (fail-open, agotados ambos intentos) para un fallo de tipo API/JSON. */
+function logFalloDefinitivo(r: Extract<LlamadaClaudeResultado, { ok: false }>) {
+  if (r.motivo === 'api_error') {
+    console.error('[blur-placas][MODERACION-NO-EVALUADA] Error llamando a la API de Anthropic (tras agotar reintento) — foto subida SIN evaluar contenido ni difuminar placa (fail-open: se trata como apropiada por defecto):', r.error);
+  } else if (r.motivo === 'sin_json') {
+    console.error('[blur-placas][MODERACION-NO-EVALUADA] Respuesta de Claude sin JSON reconocible (tras agotar reintento) — foto subida SIN evaluar contenido ni difuminar placa (fail-open: se trata como apropiada por defecto). stop_reason:', r.stopReason, 'Respuesta:', r.textoRespuesta.slice(0, 300));
+  } else {
+    console.error('[blur-placas][MODERACION-NO-EVALUADA] JSON inválido en la respuesta de Claude (tras agotar reintento) — foto subida SIN evaluar contenido ni difuminar placa (fail-open: se trata como apropiada por defecto):', r.error, 'stop_reason:', r.stopReason, 'Respuesta:', r.textoRespuesta.slice(0, 300));
   }
+}
 
+/**
+ * Evalúa si una detección tiene una placa "aceptable para difuminar": visible según la IA
+ * Y con una región cuya proporción ancho:alto (en píxeles reales de la imagen, `imgW`/
+ * `imgH`) cae dentro del rango plausible para una placa colombiana real. Requiere las
+ * dimensiones de la imagen porque el aspecto se calcula sobre el box en píxeles, no sobre
+ * los `%_pct` crudos (ver comentario extenso más abajo, en el uso original de este cálculo).
+ */
+const ASPECTO_MIN = 1.0;
+const ASPECTO_MAX = 4.5;
+
+type EvaluacionRegion =
+  | { valida: true; boxLeft: number; boxTop: number; boxW: number; boxH: number; aspecto: number }
+  | { valida: false; motivo: 'no_visible' }
+  | { valida: false; motivo: 'aspecto_invalido'; aspecto: number; boxW: number; boxH: number };
+
+function evaluarRegion(deteccion: PlacaDeteccion, imgW: number, imgH: number): EvaluacionRegion {
   if (!deteccion.plate_visible || !deteccion.region) {
-    console.warn('[blur-placas] Claude no detectó una placa visible en la foto (plate_visible=false)');
-    return { buffer, difuminada: false, contenidoInapropiado, motivoInapropiado, moderacionEvaluada: true };
+    return { valida: false, motivo: 'no_visible' };
   }
-
-  // Obtener dimensiones (ya con orientación normalizada, igual que lo que vio Claude)
-  const meta = await sharp(buffer).metadata();
-  const imgW = meta.width ?? 1;
-  const imgH = meta.height ?? 1;
-
   const r = deteccion.region;
   const boxLeft = (r.x_pct / 100) * imgW;
   const boxTop  = (r.y_pct / 100) * imgH;
   const boxW    = (r.w_pct / 100) * imgW;
   const boxH    = (r.h_pct / 100) * imgH;
-
-  // Segunda capa de seguridad (defensa en profundidad) además del prompt: una
-  // placa colombiana real es un rectángulo horizontal con una proporción
-  // ancho:alto de aproximadamente 2:1 a 2.5:1. Si el box que devolvió Claude
-  // está muy lejos de esa forma, es más probable que haya apuntado a un objeto
-  // de fondo (edificio, aviso, ventana) que a una placa real — no lo dibujamos.
-  // Usamos el ratio en PÍXELES REALES del box (boxW/boxH), no el de x_pct/y_pct
-  // crudo: estos últimos están expresados como % del ancho/alto de la imagen
-  // por separado, así que su cociente queda sesgado por el aspect-ratio de la
-  // FOTO (p. ej. una foto vertical de celular, muy común, no es cuadrada) y no
-  // refleja la proporción física real del rectángulo detectado. El rango
-  // [1.0, 4.5] es deliberadamente amplio (conservador) para no rechazar
-  // detecciones válidas con perspectiva/ángulo pronunciado.
-  const ASPECTO_MIN = 1.0;
-  const ASPECTO_MAX = 4.5;
   const aspecto = boxW / boxH;
   if (!Number.isFinite(aspecto) || aspecto < ASPECTO_MIN || aspecto > ASPECTO_MAX) {
-    console.warn(
-      '[blur-placas] Región descartada por proporción implausible para una placa',
-      { x_pct: r.x_pct, y_pct: r.y_pct, w_pct: r.w_pct, h_pct: r.h_pct, boxW, boxH, aspecto }
-    );
-    return { buffer, difuminada: false, contenidoInapropiado, motivoInapropiado, moderacionEvaluada: true };
+    return { valida: false, motivo: 'aspecto_invalido', aspecto, boxW, boxH };
   }
+  return { valida: true, boxLeft, boxTop, boxW, boxH, aspecto };
+}
+
+/** Región ya confirmada como válida por `evaluarRegion` (rama `valida: true` del union). */
+type RegionValida = Extract<EvaluacionRegion, { valida: true }>;
+
+/**
+ * A partir de una región válida (ya evaluada por `evaluarRegion`) calcula el rectángulo final
+ * (en píxeles enteros, recortado a los límites de la imagen) que se va a tapar, aplicando el
+ * margen proporcional del 6% descrito en el comentario extenso más abajo. Extraída a función
+ * propia porque ahora puede invocarse hasta 2 veces por foto — una por cada región válida de
+ * las 2 detecciones independientes (ver reconciliación en `detectarYDifuminarPlaca`) — en vez
+ * de una sola vez como antes.
+ */
+function calcularRectanguloTapado(
+  ev: RegionValida,
+  imgW: number,
+  imgH: number
+): { left: number; top: number; width: number; height: number } {
+  const { boxLeft, boxTop, boxW, boxH } = ev;
 
   // Margen extra (además del pequeño ~5% que ya se le pide a Claude) para tolerar
   // bounding boxes ligeramente desalineados y no dejar un borde de placa visible sin
@@ -272,22 +278,25 @@ Rules:
   const width  = Math.min(imgW - left, Math.max(20, right - left));
   const height = Math.min(imgH - top,  Math.max(10, bottom - top));
 
-  // Tapar la región de la placa con un rectángulo 100% OPACO de marca DrivePass
-  // (fondo navy `#1B3356` + borde de acento naranja `#F25C2B` + el ícono del
-  // logo centrado) en vez de un bloque plano — así el tapado se ve intencional
-  // y de marca en lugar de una "cinta de censura" tosca (reporte del usuario
-  // con foto real: un rectángulo amarillo sólido grande y evidente sobre el
-  // paragolpes de un Ford Explorer). Se descartó difuminado (blur) a propósito:
-  // un blur puede en teoría ser parcialmente reversible ajustando brillo/contraste
-  // sobre la imagen resultante, mientras que un relleno 100% opaco (sin canal
-  // alfa parcial) reemplaza los píxeles originales por completo, sin importar su
-  // contraste/tamaño de fuente — garantía de ilegibilidad más fuerte.
-  //
-  // Se construye todo como UN SOLO SVG (fondo redondeado + borde + ícono
-  // vectorial), rasterizado con sharp a las dimensiones exactas `width x height`
-  // ya calculadas arriba, y se compone sobre la foto en el mismo `{left, top}`
-  // de siempre. Un solo SVG es más simple y preciso que componer varias capas
-  // rasterizadas con sharp (como hacía el diseño anterior).
+  return { left, top, width, height };
+}
+
+/**
+ * Genera el rectángulo 100% OPACO de marca DrivePass (fondo navy `#1B3356` + borde de acento
+ * naranja `#F25C2B` + el ícono del logo centrado) rasterizado como PNG a las dimensiones
+ * `width x height` exactas — listo para usarse como una capa más de `sharp().composite([...])`.
+ * Se usa este tapado de marca en vez de un bloque plano o un blur a propósito: un blur puede
+ * en teoría ser parcialmente reversible ajustando brillo/contraste sobre la imagen resultante,
+ * mientras que un relleno 100% opaco (sin canal alfa parcial) reemplaza los píxeles originales
+ * por completo, sin importar su contraste/tamaño de fuente — garantía de ilegibilidad más
+ * fuerte.
+ *
+ * Extraída a función propia (antes vivía inline al final de `detectarYDifuminarPlaca`) porque
+ * ahora puede invocarse 1 o 2 veces por foto, una por cada región de placa válida detectada
+ * (ver reconciliación de las 2 llamadas independientes a Claude en `detectarYDifuminarPlaca`),
+ * y no queríamos duplicar este bloque de SVG.
+ */
+async function generarRectanguloMarca(width: number, height: number): Promise<Buffer> {
   const NAVY_MARCA = '#1B3356';
   const NARANJA_MARCA = '#F25C2B';
   const BLANCO_ICONO = '#F4F6FA';
@@ -348,10 +357,152 @@ Rules:
     </g>
   </svg>`;
 
-  const placaRegion = await sharp(Buffer.from(svgPlaca)).png().toBuffer();
+  return sharp(Buffer.from(svgPlaca)).png().toBuffer();
+}
+
+export async function detectarYDifuminarPlaca(
+  bufferOriginal: Buffer,
+  mediaType: 'image/jpeg' | 'image/png' | 'image/webp' = 'image/jpeg'
+): Promise<ResultadoDeteccion> {
+  // Corregir orientación EXIF primero: tanto la imagen que ve Claude como la
+  // región que recortamos/componemos deben trabajar sobre los mismos píxeles
+  // "derechos", si no el % de región que calcula Claude (sobre la imagen ya
+  // rotada) no coincide con las coordenadas de un buffer sin rotar.
+  const buffer = await normalizarOrientacion(bufferOriginal, mediaType);
+
+  if (!process.env.ANTHROPIC_API_KEY) {
+    console.error('[blur-placas][MODERACION-NO-EVALUADA] ANTHROPIC_API_KEY no configurada — foto subida SIN evaluar contenido ni difuminar placa (fail-open: se trata como apropiada por defecto)');
+    return { buffer, difuminada: false, contenidoInapropiado: false, moderacionEvaluada: false };
+  }
+
+  // Normalizar a JPEG para base64 (menor tamaño)
+  const jpegBuf = await sharp(buffer).jpeg({ quality: 85 }).toBuffer();
+  const base64 = jpegBuf.toString('base64');
+
+  // Se hacen SIEMPRE 2 llamadas INDEPENDIENTES a Claude por foto (mismo prompt, misma
+  // imagen) — ya NO depende de si la primera detección "tuvo éxito". Esto reemplaza el
+  // diseño anterior (que solo reintentaba ante `plate_visible:false` o proporción inválida)
+  // porque ese diseño no cerraba un hueco de seguridad real encontrado en producción (foto
+  // real, ejemplo ilustrativo: placa ABC123, foto trasera): la IA puede devolver una región
+  // con forma geométricamente creíble (que pasa el filtro de proporción de `evaluarRegion`)
+  // pero ubicada en el lugar EQUIVOCADO del paragolpes — no sobre la placa real —, lo que
+  // antes se aceptaba como éxito en la primera llamada y JAMÁS disparaba un reintento (una
+  // región "creíble pero mal ubicada" pasaba como éxito, no como "no hay placa").
+  //
+  // Con 2 consultas siempre independientes: si ambas aciertan el mismo lugar (caso normal)
+  // los 2 rectángulos quedan prácticamente superpuestos y se ve igual que taparlo una vez; si
+  // difieren (el bug real), se tapan AMBAS zonas, cubriendo ambas posibilidades. Esto duplica
+  // el costo de la llamada a la API en TODAS las fotos — decisión de producto aprobada
+  // explícitamente por Victor a cambio de cerrar este hueco de seguridad.
+  //
+  // Cada una de las 2 llamadas ("slots") puede a su vez reintentarse UNA vez si falla por un
+  // problema técnico (error de API o respuesta sin JSON válido) — cada slot tiene hasta 2
+  // intentos técnicos, así que el máximo teórico son 4 llamadas a la API por foto, pero el
+  // caso normal (sin fallos técnicos) son exactamente 2.
+  async function ejecutarSlot(numeroSlot: 1 | 2): Promise<LlamadaClaudeResultado> {
+    const intento1 = await llamarClaudeDeteccionPlaca(base64);
+    if (intento1.ok) return intento1;
+    console.warn(`[blur-placas] Slot ${numeroSlot}/2: intento 1/2 falló (motivo: ${intento1.motivo}) — reintentando este slot una vez más antes de rendirse`);
+    return llamarClaudeDeteccionPlaca(base64);
+  }
+
+  const [slot1, slot2] = await Promise.all([ejecutarSlot(1), ejecutarSlot(2)]);
+
+  if (!slot1.ok && !slot2.ok) {
+    // Ninguno de los 2 slots tuvo éxito técnico tras agotar su reintento — mismo
+    // comportamiento fail-closed de siempre: no se evaluó moderación ni se difuminó nada.
+    logFalloDefinitivo(slot1);
+    logFalloDefinitivo(slot2);
+    return { buffer, difuminada: false, contenidoInapropiado: false, moderacionEvaluada: false };
+  }
+
+  // Al menos uno de los 2 slots sí tuvo éxito técnico: la moderación de contenido de ESTA
+  // foto sí llegó a evaluarse, aunque el otro slot haya fallado por un problema técnico.
+  if (!slot1.ok) {
+    console.warn(`[blur-placas] Slot 1/2 falló por un problema técnico (motivo: ${slot1.motivo}) pero el slot 2 sí tuvo éxito — se continúa solo con la detección del slot 2 (moderación igual evaluada)`);
+  }
+  if (!slot2.ok) {
+    console.warn(`[blur-placas] Slot 2/2 falló por un problema técnico (motivo: ${slot2.motivo}) pero el slot 1 sí tuvo éxito — se continúa solo con la detección del slot 1 (moderación igual evaluada)`);
+  }
+
+  const detecciones: PlacaDeteccion[] = [];
+  if (slot1.ok) detecciones.push(slot1.deteccion);
+  if (slot2.ok) detecciones.push(slot2.deteccion);
+
+  // Moderación: "OR" entre todas las llamadas que sí tuvieron éxito técnico — si CUALQUIERA
+  // marcó contenido inapropiado, se respeta esa señal (mismo criterio que el diseño anterior).
+  const inapropiada = detecciones.find(d => d.inappropriate_content === true);
+  const contenidoInapropiado = inapropiada !== undefined;
+  const motivoInapropiado = inapropiada
+    ? (inapropiada.inappropriate_reason || 'Contenido marcado como inapropiado por la IA')
+    : undefined;
+
+  if (contenidoInapropiado) {
+    console.warn('[blur-placas] Foto marcada por la IA como contenido inapropiado:', motivoInapropiado);
+  }
+
+  // Dimensiones reales (ya con orientación normalizada, igual que lo que vio Claude), para
+  // evaluar la proporción de cada región candidata.
+  const meta = await sharp(buffer).metadata();
+  const imgW = meta.width ?? 1;
+  const imgH = meta.height ?? 1;
+
+  // Recolectar las regiones VÁLIDAS (pasaron `evaluarRegion`) de las llamadas que sí
+  // tuvieron éxito técnico — puede haber 0, 1, o 2.
+  const regionesValidas = detecciones
+    .map(d => evaluarRegion(d, imgW, imgH))
+    .filter((ev): ev is RegionValida => ev.valida);
+
+  if (regionesValidas.length === 0) {
+    console.warn(`[blur-placas] Ninguna de las ${detecciones.length} detección(es) exitosa(s) arrojó una placa aceptable — foto publicada sin tapar (no hay placa visible o proporción implausible en todas)`);
+    return { buffer, difuminada: false, contenidoInapropiado, motivoInapropiado, moderacionEvaluada: true };
+  }
+
+  // Se tapa CADA región válida como un rectángulo de marca independiente (no se calcula una
+  // "unión" de cajas ni se intenta fusionarlas geométricamente). Si las 2 regiones casi
+  // coinciden (caso normal, ambas llamadas acertaron el mismo lugar) los 2 rectángulos quedan
+  // superpuestos casi exactos y se ve igual que taparla una sola vez. Si difieren (el caso del
+  // bug real) quedan 2 rectángulos en 2 lugares distintos, cubriendo ambas posibilidades.
+  const rectangulos = regionesValidas.map(ev => calcularRectanguloTapado(ev, imgW, imgH));
+
+  if (rectangulos.length === 1) {
+    console.warn('[blur-placas] 1 región válida de placa (de 2 llamadas independientes) — se tapa 1 zona:', rectangulos[0]);
+  } else {
+    const [r1, r2] = rectangulos;
+    const c1x = r1.left + r1.width / 2, c1y = r1.top + r1.height / 2;
+    const c2x = r2.left + r2.width / 2, c2y = r2.top + r2.height / 2;
+    const distancia = Math.hypot(c1x - c2x, c1y - c2y);
+    const diagonal = Math.hypot(imgW, imgH);
+    const distanciaRelativa = diagonal > 0 ? distancia / diagonal : 0;
+    console.warn(
+      `[blur-placas] Las 2 llamadas independientes arrojaron región válida — se tapan ambas zonas. Distancia entre centros: ${Math.round(distancia)}px (${(distanciaRelativa * 100).toFixed(1)}% de la diagonal de la imagen).`,
+      { rect1: r1, rect2: r2 }
+    );
+    // Umbral simple (10% de la diagonal de la imagen) solo para fines de LOG/monitoreo: por
+    // debajo de esto, las 2 detecciones se consideran "el mismo lugar" (imprecisión normal del
+    // estimado de Claude); por encima, se consideran genuinamente discrepantes (el caso del
+    // bug real de producción que motivó este rediseño). En ambos casos se tapan las 2 zonas
+    // igual — este umbral NO cambia el comportamiento, solo deja rastro para que Victor pueda
+    // monitorear qué tan seguido pasa el caso divergente en producción.
+    const UMBRAL_DISCREPANCIA_RELATIVA = 0.10;
+    if (distanciaRelativa > UMBRAL_DISCREPANCIA_RELATIVA) {
+      console.warn('[blur-placas][DOBLE-DETECCION-DIVERGENTE] Las 2 llamadas independientes de detección de placa NO coincidieron en la ubicación de la placa — se cubrieron AMBAS zonas por seguridad. Monitorear frecuencia en producción.');
+    }
+  }
+
+  // Tapar cada región con un rectángulo 100% OPACO de marca DrivePass (ver
+  // `generarRectanguloMarca` para el detalle de diseño/justificación) — 1 o 2 capas
+  // independientes, compuestas en la MISMA llamada a `sharp().composite([...])`.
+  const capas = await Promise.all(
+    rectangulos.map(async (r) => ({
+      input: await generarRectanguloMarca(r.width, r.height),
+      left: r.left,
+      top: r.top,
+    }))
+  );
 
   const resultado = await sharp(buffer)
-    .composite([{ input: placaRegion, left, top }])
+    .composite(capas)
     .jpeg({ quality: 90 })
     .toBuffer();
 

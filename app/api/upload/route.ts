@@ -18,6 +18,24 @@ export const runtime = 'nodejs';
 const FOTO_IA_MAX_HORA = 30;
 const FOTO_IA_VENTANA_MS = 60 * 60 * 1000;
 
+// Rate-limit DEDICADO para la llamada (cara) de detección de placa/moderación con Claude
+// vision (`detectarYDifuminarPlaca`) — independiente del de `estandarizar-foto:${user.id}`
+// de arriba (clave y contador propios, no se comparten). El rediseño de esa función
+// duplicó el piso garantizado de llamadas a Opus vision por foto (de ~1 a ~2, hasta 4 en
+// el peor caso con reintentos técnicos) y antes no había NINGÚN tope específico sobre
+// ella — solo el de remove.bg (que además está suspendido, ver ESTANDARIZACION_SUSPENDIDA).
+// Un vehículo normal sube ~5-8 fotos (frente, trasera, laterales, interior, tablero); un
+// propietario subiendo/editando varios vehículos en una misma sesión intensiva no debería
+// toparse con 60/hora, pero sí bloquea un abuso claro de cientos de llamadas en bucle
+// contra una cuenta `propietario` autoregistrable sin verificar correo.
+const FOTO_VISION_MAX_HORA = 60;
+
+// Victor pidió explícitamente suspender temporalmente la estandarización con IA
+// (quitar fondo + mejorar calidad vía remove.bg, `estandarizarFotoVehiculo`) para toda
+// foto de vehículo. La moderación/difuminado de placa (arriba) NO se ve afectada por
+// esto — sigue corriendo siempre. Para revertir: volver este valor a `false`.
+const ESTANDARIZACION_SUSPENDIDA = true;
+
 export async function POST(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
@@ -88,24 +106,45 @@ export async function POST(req: NextRequest) {
       // el modelo allow-list documentado en lib/moderacion.ts). detectarYDifuminarPlaca ya
       // normaliza la orientación EXIF internamente, así que no hace falta un paso aparte.
       const mediaType = file.type as 'image/jpeg' | 'image/png' | 'image/webp';
-      const resultado = await detectarYDifuminarPlaca(rawBuffer, mediaType);
-      rawBuffer            = resultado.buffer;
-      difuminada           = resultado.difuminada;
-      // Fail-closed ante fallo de moderación: `resultado.moderacionEvaluada === false`
-      // significa que la IA NO llegó a evaluar de verdad esta foto (sin API key, error de
-      // red/API, o JSON inválido — ver lib/blur-placas.ts), y en ese caso
-      // `contenidoInapropiado` queda en `false` por defecto dentro de esa función. Tratar
-      // eso como "aprobada" sería fail-open silencioso: la foto quedaría registrada como
-      // revisada y aprobada para siempre sin que nadie la haya mirado. En vez de eso, la
-      // mandamos por el mismo camino que una foto marcada por la IA como inapropiada — a la
-      // cola de revisión manual del admin (contenido_revision=1 en el vehículo que la use).
-      contenidoSospechoso  = resultado.contenidoInapropiado || !resultado.moderacionEvaluada;
-      motivoSospechoso     = resultado.contenidoInapropiado
-        ? resultado.motivoInapropiado
-        : (!resultado.moderacionEvaluada
-            ? 'No se pudo evaluar automáticamente el contenido de esta foto (fallo de moderación) — pendiente de revisión manual.'
-            : undefined);
-      seEjecutoModeracion  = true;
+
+      // Rate-limit dedicado ANTES de gastar la llamada cara a Claude vision — si ya se
+      // superó, no tiene sentido llamar a detectarYDifuminarPlaca sabiendo que la foto se
+      // va a mandar a revisión manual de todos modos (ver FOTO_VISION_MAX_HORA arriba).
+      const excedioVision = consumirIntento(`foto-vision:${user.id}`, FOTO_VISION_MAX_HORA, FOTO_IA_VENTANA_MS) !== null;
+
+      if (excedioVision) {
+        // A diferencia del paso puramente cosmético de remove.bg (que si se salta, la foto
+        // simplemente no se "embellece"), saltar la detección de placa completa dejaría
+        // potencialmente una placa real SIN difuminar y sin ningún control — inaceptable
+        // tratándose de datos personales. Por eso NO se sube "tal cual sin revisar": se
+        // fuerza `contenidoSospechoso = true` (mismo camino que ya existe para "moderación
+        // no evaluada" más abajo) para que la foto SIEMPRE pase por algún control —
+        // automático o, en este caso, manual — antes de poder publicarse. No se bloquea la
+        // subida (peor UX que la propia moderación).
+        console.warn(`[upload] usuario ${user.id} superó el límite de detección de placa (${FOTO_VISION_MAX_HORA}/hora) — foto subida SIN detectar/difuminar placa, forzada a revisión manual`);
+        contenidoSospechoso = true;
+        motivoSospechoso    = 'Límite de detección automática de placa alcanzado — pendiente de revisión manual.';
+        seEjecutoModeracion = true;
+      } else {
+        const resultado = await detectarYDifuminarPlaca(rawBuffer, mediaType);
+        rawBuffer            = resultado.buffer;
+        difuminada           = resultado.difuminada;
+        // Fail-closed ante fallo de moderación: `resultado.moderacionEvaluada === false`
+        // significa que la IA NO llegó a evaluar de verdad esta foto (sin API key, error de
+        // red/API, o JSON inválido — ver lib/blur-placas.ts), y en ese caso
+        // `contenidoInapropiado` queda en `false` por defecto dentro de esa función. Tratar
+        // eso como "aprobada" sería fail-open silencioso: la foto quedaría registrada como
+        // revisada y aprobada para siempre sin que nadie la haya mirado. En vez de eso, la
+        // mandamos por el mismo camino que una foto marcada por la IA como inapropiada — a la
+        // cola de revisión manual del admin (contenido_revision=1 en el vehículo que la use).
+        contenidoSospechoso  = resultado.contenidoInapropiado || !resultado.moderacionEvaluada;
+        motivoSospechoso     = resultado.contenidoInapropiado
+          ? resultado.motivoInapropiado
+          : (!resultado.moderacionEvaluada
+              ? 'No se pudo evaluar automáticamente el contenido de esta foto (fallo de moderación) — pendiente de revisión manual.'
+              : undefined);
+        seEjecutoModeracion  = true;
+      }
 
       // Estandarización con IA (quitar fondo + mejorar calidad) — solo fotos de
       // publicación de vehículo, y solo si la moderación no la marcó para revisión
@@ -113,7 +152,9 @@ export async function POST(req: NextRequest) {
       // rechazada, y así se evita gastar la llamada paga de remove.bg en ella).
       // Best-effort real: si falla, se sigue con `rawBuffer` tal como quedó del
       // paso anterior (ya con la placa difuminada si correspondía).
-      if (tipo === 'vehiculo' && !contenidoSospechoso && yaEstandarizada) {
+      if (tipo === 'vehiculo' && !contenidoSospechoso && ESTANDARIZACION_SUSPENDIDA) {
+        console.warn(`[upload] estandarización de fotos suspendida (ESTANDARIZACION_SUSPENDIDA=true) — se omite remove.bg (se sube sin procesar)`);
+      } else if (tipo === 'vehiculo' && !contenidoSospechoso && yaEstandarizada) {
         console.warn(`[upload] usuario ${user.id} re-subió una foto ya estandarizada (yaEstandarizada=1) — se omite remove.bg`);
       } else if (tipo === 'vehiculo' && !contenidoSospechoso && correoNoVerificado(user.id)) {
         // Cuenta `propietario` autoregistrable sin KYC (ver comentario arriba de
