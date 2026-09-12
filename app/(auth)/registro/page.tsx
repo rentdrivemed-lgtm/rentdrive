@@ -126,6 +126,11 @@ function RegistroForm() {
   const [camposIA, setCamposIA] = useState<Set<CampoIA>>(new Set());
   const inputCedulaRef = useRef<HTMLInputElement>(null);
   const inputLicenciaRef = useRef<HTMLInputElement>(null);
+  // Foto ya guardada por el servidor al leerla (ver POST /api/registro/extraer-documento
+  // → `urlGuardada`): se retiene en memoria para mandarla en el submit final y que quede
+  // asociada a la cuenta, sin tener que volver a pedirla más adelante (p. ej. al reservar).
+  const [cedulaUrlGuardada, setCedulaUrlGuardada] = useState('');
+  const [licenciaUrlGuardada, setLicenciaUrlGuardada] = useState('');
 
   useEffect(() => {
     let vivo = true;
@@ -162,6 +167,15 @@ function RegistroForm() {
       if (!res.ok) {
         setErrorIA(data.error || 'No pudimos leer la foto. Puedes escribir tus datos a mano.');
         return;
+      }
+
+      // La foto ya quedó guardada en el servidor (best-effort): se retiene la URL
+      // para mandarla en el submit final. Si por algún motivo no vino (falló el
+      // guardado o no aplica), simplemente no se manda nada — el registro sigue
+      // funcionando igual, solo sin el atajo de precarga en la próxima reserva.
+      if (typeof data.urlGuardada === 'string' && data.urlGuardada) {
+        if (tipo === 'cedula') setCedulaUrlGuardada(data.urlGuardada);
+        else setLicenciaUrlGuardada(data.urlGuardada);
       }
 
       const datos = (data.datos || {}) as DatosDocumento;
@@ -272,7 +286,14 @@ function RegistroForm() {
       const res = await fetch('/api/auth/registro', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...cuenta, ...perfil, rol, codigo_referido: codigoReferido }),
+        body: JSON.stringify({
+          ...cuenta, ...perfil, rol, codigo_referido: codigoReferido,
+          // Opcionales: solo se mandan si la persona usó el atajo de foto y el
+          // servidor logró guardarla (ver leerDocumento). Quien llenó el
+          // formulario a mano simplemente no manda estos campos.
+          ...(cedulaUrlGuardada ? { cedula_url: cedulaUrlGuardada } : {}),
+          ...(licenciaUrlGuardada ? { licencia_url: licenciaUrlGuardada } : {}),
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setError(data.error || 'No pudimos completar el registro. Intenta de nuevo.'); return; }
@@ -421,8 +442,11 @@ function RegistroForm() {
                       className="mt-0.5 w-4 h-4 accent-accent flex-shrink-0" />
                     <span className="text-[11px] text-ink/60 leading-relaxed">
                       Autorizo a DrivePass a leer la foto de mi documento con un servicio de inteligencia artificial,
-                      con el único fin de llenar este formulario. La imagen no se guarda: se usa para leer los datos y
-                      se descarta. Esto no verifica mi identidad ni reemplaza los documentos que se piden al reservar.
+                      con el fin de llenar este formulario. Si completo el registro, la foto queda asociada a mi
+                      cuenta para no tener que subirla de nuevo más adelante (por ejemplo, al reservar un vehículo);
+                      si no completo el registro, la foto no queda asociada a ninguna cuenta y se elimina en
+                      nuestra siguiente limpieza periódica de archivos temporales.
+                      Esto no verifica mi identidad ni reemplaza los documentos que se piden al reservar.
                       Puedo registrarme sin subir ninguna foto, escribiendo mis datos a mano.
                       (Tratamiento de datos personales — Ley 1581 de 2012).
                     </span>

@@ -186,10 +186,12 @@ REGLAS INNEGOCIABLES:
 
 /**
  * Lee una foto de documento y devuelve los datos transcritos para pre-llenar el
- * formulario de registro. Recibe los bytes directamente: la imagen NO se guarda
- * en disco ni en Cloudinary — se manda a la IA y se descarta (la persona todavía
- * no tiene cuenta, así que almacenarla sería recolectar datos sensibles de
- * alguien que quizá nunca se registre).
+ * formulario de registro. Recibe los bytes directamente: esta función en sí NO
+ * guarda nada, solo manda la imagen a la IA para transcribirla. El guardado
+ * permanente de la foto (best-effort, en Cloudinary vía lib/storage.ts) ocurre
+ * aparte, en app/api/registro/extraer-documento/route.ts, DESPUÉS de una lectura
+ * exitosa — así la persona no tiene que volver a subir la misma foto más adelante
+ * (p. ej. al reservar un vehículo, ver app/pago/page.tsx).
  */
 export async function leerDocumentoRegistro(
   imagen: Buffer,

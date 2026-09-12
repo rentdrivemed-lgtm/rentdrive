@@ -681,6 +681,17 @@ function initDb(db: Database.Database) {
   try { db.exec("ALTER TABLE usuarios ADD COLUMN reset_token_expira TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE usuarios ADD COLUMN celular_indicativo TEXT DEFAULT '+57'"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE usuarios ADD COLUMN cedula_url_dorso TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  // Foto de cédula/licencia leída con IA en el atajo del registro (app/api/registro/
+  // extraer-documento) o en completar-perfil: antes se descartaba siempre; ahora se
+  // guarda (best-effort) para no pedírsela de nuevo en la próxima reserva (ver
+  // app/pago/page.tsx, que precarga desde acá). `cedula_url`/`cedula_url_dorso` ya
+  // existían (arriba) pero solo se usaban para la cédula del PROPIETARIO en su
+  // perfil — ahora también se llenan desde el atajo de registro del arrendatario.
+  // `licencia_url_dorso` nunca se llena desde el atajo del registro (esa foto solo
+  // pide el frente); solo `reservas.licencia_url_dorso` (ya existente) captura el
+  // dorso, en cada reserva.
+  try { db.exec("ALTER TABLE usuarios ADD COLUMN licencia_url TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE usuarios ADD COLUMN licencia_url_dorso TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE usuarios ADD COLUMN admin_nivel TEXT DEFAULT 'principal'"); } catch { /* ya existe */ }
   // Permisos por empleado: excepciones explícitas al nivel, como mapa JSON { area: boolean }.
   // '{}' (sin excepciones) = la cuenta se comporta exactamente igual que su nivel.

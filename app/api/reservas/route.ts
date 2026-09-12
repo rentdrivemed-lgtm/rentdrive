@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
 import { adminTieneArea, sinPermisoArea } from '@/lib/guard';
+import { esUrlDeStorageValida } from '@/lib/storage';
 import { calcularRecargo, calcularDiasAlquiler, calcularTotalAlquiler, lugarValido, type Lugar } from '@/lib/lugares';
 import { enviarCorreo } from '@/lib/email';
 import { generarCotizacion } from '@/lib/contabilidad';
@@ -220,6 +221,62 @@ export async function POST(req: NextRequest) {
   // Se guardan en el perfil para no volver a pedirlos en la próxima reserva.
   db.prepare('UPDATE usuarios SET direccion = ?, ciudad = ?, contacto_emergencia = ? WHERE id = ?')
     .run(direccionFinal, ciudadFinal, JSON.stringify({ nombre: emNombreFinal, telefono: emTelFinal }), user.id);
+
+  // Mismo espíritu: guarda también los documentos frescos de ESTA reserva en el
+  // perfil (incluido el dorso, que el atajo de foto del registro nunca captura),
+  // para que la PRÓXIMA reserva ya venga precargada (ver app/pago/page.tsx). Es
+  // best-effort a propósito — si falla, no debe tumbar la creación de la reserva,
+  // que es lo importante.
+  //
+  // Igual que en POST /api/auth/registro y /api/auth/completar-perfil: antes de
+  // escribir a `usuarios` se exige que cada URL sea de verdad una subida nuestra
+  // (Cloudinary bajo nuestro cloud_name) — sin esto, un cliente que arme el body a
+  // mano (no vino de DocUpload/DocUploadDoble) podría inyectar una URL arbitraria
+  // que quedara guardada como si fuera el documento del cliente. El `INSERT INTO
+  // reservas` de abajo es preexistente y queda fuera de este alcance: solo se
+  // filtra lo que entra al perfil del usuario.
+  //
+  // IMPORTANTE: el UPDATE se construye de forma DINÁMICA/CONDICIONAL (mismo
+  // patrón que POST /api/auth/completar-perfil) — solo se toca cada columna
+  // cuando el valor de ESTA reserva es válido Y aplica, para no pisar/perder un
+  // documento bueno que el usuario ya tenía guardado de una reserva anterior:
+  //   - Si en esta reserva el documento de identidad es un pasaporte
+  //     (documento_es_pasaporte), NO se tocan cedula_url/cedula_url_dorso: son de
+  //     un tipo de documento distinto (el pasaporte no tiene dorso — ver
+  //     app/pago/page.tsx), así que pisarlos aquí borraría o mezclaría la cédula
+  //     que el usuario sí tenía guardada.
+  //   - Si NO es pasaporte, cedula_url/cedula_url_dorso se actualizan solo si la
+  //     URL de esta reserva pasa esUrlDeStorageValida (si no, se deja el valor
+  //     ya guardado tal cual, nunca se pisa con '').
+  //   - licencia_url/licencia_url_dorso se actualizan siempre que la URL de esta
+  //     reserva pase esUrlDeStorageValida (la licencia no depende del tipo de
+  //     documento de identidad usado en esta reserva).
+  const setsPerfil: string[] = [];
+  const valoresPerfil: unknown[] = [];
+
+  if (!documento_es_pasaporte) {
+    if (typeof documento_id_url === 'string' && esUrlDeStorageValida(documento_id_url)) {
+      setsPerfil.push('cedula_url = ?'); valoresPerfil.push(documento_id_url);
+    }
+    if (typeof documento_id_url_dorso === 'string' && esUrlDeStorageValida(documento_id_url_dorso)) {
+      setsPerfil.push('cedula_url_dorso = ?'); valoresPerfil.push(documento_id_url_dorso);
+    }
+  }
+  if (typeof licencia_url === 'string' && esUrlDeStorageValida(licencia_url)) {
+    setsPerfil.push('licencia_url = ?'); valoresPerfil.push(licencia_url);
+  }
+  if (typeof licencia_url_dorso === 'string' && esUrlDeStorageValida(licencia_url_dorso)) {
+    setsPerfil.push('licencia_url_dorso = ?'); valoresPerfil.push(licencia_url_dorso);
+  }
+
+  if (setsPerfil.length > 0) {
+    try {
+      valoresPerfil.push(user.id);
+      db.prepare(`UPDATE usuarios SET ${setsPerfil.join(', ')} WHERE id = ?`).run(...valoresPerfil);
+    } catch (e) {
+      console.error('[reservas] No se pudo precargar los documentos en el perfil (best-effort, no bloquea la reserva):', e instanceof Error ? e.message : e);
+    }
+  }
 
   const dias = calcularDiasAlquiler(fecha_inicio, fecha_fin);
   const recargo = calcularRecargo(recogidaL, entregaL); // autoritativo: server-side

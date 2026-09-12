@@ -14,6 +14,7 @@ type Vehiculo = {
 type User = {
   id: number; nombre: string; rol: string; creditos_referido?: number;
   direccion?: string; ciudad?: string; contacto_emergencia?: string;
+  cedula_url?: string; licencia_url?: string;
 };
 
 function detectarTarjeta(num: string) {
@@ -94,6 +95,15 @@ function PagoContent() {
       const emN = (emergencia.nombre || '').trim();
       const emT = (emergencia.telefono || '').trim();
       setDireccion(dir); setCiudad(ciu); setEmNombre(emN); setEmTel(emT);
+      // Precarga la cédula/licencia que ya se guardó antes (foto leída en el atajo
+      // del registro, o de una reserva anterior) para no pedírsela de nuevo — el
+      // recuadro de DocUpload ya sabe mostrar la miniatura cuando `value` no está
+      // vacío. El dorso NUNCA se capturó en el atajo del registro (solo se pide la
+      // foto de frente), así que ese sigue pidiéndose siempre desde cero. Se usa
+      // el setter funcional para no pisar algo que la persona ya haya subido en
+      // esta misma sesión si `cargarInicial` se vuelve a llamar (botón Reintentar).
+      if (d.user.cedula_url) setDocIdUrl(prev => prev || d.user.cedula_url);
+      if (d.user.licencia_url) setLicenciaUrl(prev => prev || d.user.licencia_url);
       // "Faltan" incluye tanto "nunca los llenó" como "los tiene guardados pero ya
       // no cumplen las reglas actuales" (datos legacy) — en ambos casos el usuario
       // necesita ver los campos para poder corregirlos.
@@ -388,18 +398,20 @@ function PagoContent() {
               valueFrente={docIdUrl} valueDorso={docIdUrlDorso}
               onChangeFrente={setDocIdUrl} onChangeDorso={setDocIdUrlDorso}
               soloUnLado={esPasaporte}
+              soloImagen
               required
             />
             <DocUploadDoble
               label="Licencia de conducción"
               valueFrente={licenciaUrl} valueDorso={licenciaUrlDorso}
               onChangeFrente={setLicenciaUrl} onChangeDorso={setLicenciaUrlDorso}
+              soloImagen
               required
             />
           </div>
 
           <div className="bg-surface border border-border rounded-xl px-4 py-3 mb-4">
-            <p className="text-xs text-ink/50">Formatos aceptados: JPG, PNG, WebP o PDF · Máximo 15 MB por archivo</p>
+            <p className="text-xs text-ink/50">Foto clara (cámara o galería) — JPG, PNG o WebP · Máximo 15 MB por archivo</p>
           </div>
 
           {/* Datos de la operación — solo para quien no los tiene guardados o los tiene guardados pero inválidos (legacy) */}

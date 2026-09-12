@@ -4,6 +4,7 @@ import { consumirIntento, ipCliente } from '@/lib/limite-tasa';
 import { tieneClaveAnthropic } from '@/lib/anthropic';
 import { leerDocumentoRegistro, type TipoDocumentoRegistro } from '@/lib/registro-ocr';
 import { tipoRealImagen, formDataConLimite, PAYLOAD_TOO_LARGE } from '@/lib/subida-imagen';
+import { uploadFile } from '@/lib/storage';
 
 export const runtime = 'nodejs';
 
@@ -46,9 +47,40 @@ export const runtime = 'nodejs';
 //    saltaría por completo el aviso de tratamiento de datos que se le muestra a la
 //    persona en pantalla.
 //
-// La imagen NO se guarda en ningún lado: va a la IA y se descarta. Además de ser
-// mejor para la privacidad de alguien que aún no es usuario, evita que este
-// endpoint sirva para llenar el almacenamiento gratis.
+// La imagen SÍ se guarda (a partir de esta versión): tras una lectura exitosa
+// (es_legible && coincide_tipo, con al menos un dato transcrito) se sube a
+// Cloudinary reusando el mismo uploadFile() de lib/storage.ts que usa
+// POST /api/upload/documento, y la URL resultante se devuelve al cliente como
+// `urlGuardada` (ver el POST más abajo). Como este endpoint es público y la
+// cuenta todavía no existe en este punto, la URL NO se asocia a ningún usuario
+// aquí: el cliente (app/(auth)/registro/page.tsx o app/completar-perfil/page.tsx)
+// la retiene en memoria y la manda en el submit final, donde SÍ queda guardada en
+// `usuarios.cedula_url`/`licencia_url` (ver lib/db.ts). El motivo del cambio: antes
+// se pedía la misma foto de nuevo más adelante (al reservar, en app/pago/page.tsx)
+// — Victor decidió explícitamente que se guardara para no repetirle el trámite a
+// la persona.
+//
+// ⚠️ La subida NO es permanente por defecto: se hace bajo la carpeta
+// `registro-temp/` (ver `uploadFile(..., { folder: 'registro-temp' })` más abajo)
+// precisamente porque, en este punto, NO existe ninguna cuenta a la cual asociarla
+// todavía. Si la persona abandona el registro (cierra la pestaña, el correo ya
+// existe → 409, retoma la foto una segunda vez, etc.) esa imagen queda subida sin
+// ningún `usuario_id` — el hallazgo era que antes se guardaba en la carpeta normal
+// de documentos, sin límite de tiempo ni forma de distinguirla de un documento real
+// ya reclamado por una cuenta. `POST /api/admin/limpiar-documentos-huerfanos`
+// (admin-only, ver ese archivo) es el mecanismo que, corrido periódicamente,
+// revisa `registro-temp/` y borra lo que lleve más de 48h sin haber sido
+// reclamado (su URL no aparece en ningún `usuarios.cedula_url`/`licencia_url`).
+// El checkbox de consentimiento en el formulario refleja esto: la foto se guarda
+// asociada a la cuenta SOLO si el registro se completa; si no, se borra sola
+// pasado ese plazo corto.
+//
+// La subida es SIEMPRE best-effort: si falla por cualquier motivo, NO rompe la
+// respuesta de lectura (que ya costó una consulta real de IA) — simplemente se
+// omite `urlGuardada` de la respuesta y se deja un `console.error`. Los límites
+// de tasa de arriba (por IP y global) siguen acotando igual el costo/abuso de
+// este endpoint; guardar la imagen no cambia ese perfil de riesgo porque ya
+// estaba acotado por esos mismos límites.
 
 const MAX_BYTES = 8 * 1024 * 1024;          // 8 MB
 const IP_MAX_CORTO = 6;
@@ -190,6 +222,19 @@ export async function POST(req: NextRequest) {
       }, { status: 422 });
     }
 
+    // Guarda la foto en Cloudinary bajo `registro-temp/` (best-effort — ver el
+    // comentario grande al inicio del archivo sobre por qué esta carpeta es
+    // temporal y quién la limpia). Solo se llega acá con una lectura exitosa.
+    let urlGuardada: string | undefined;
+    try {
+      const ext = mediaType === 'image/png' ? 'png' : mediaType === 'image/webp' ? 'webp' : 'jpg';
+      const nombre = `doc-registro-${tipo}-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+      const subida = await uploadFile(nombre, mediaType, buffer, { folder: 'registro-temp' });
+      urlGuardada = subida.url;
+    } catch (e) {
+      console.error('[registro-ocr] No se pudo guardar la foto en el storage (best-effort, no bloquea la lectura):', e instanceof Error ? e.message : e);
+    }
+
     // Nota para quien lea esto después: esto NO verifica identidad. Solo transcribe.
     return NextResponse.json({
       datos: lectura.datos,
@@ -197,6 +242,7 @@ export async function POST(req: NextRequest) {
       campos_no_leidos: lectura.campos_no_leidos,
       nota: lectura.nota,
       verificado: false,
+      ...(urlGuardada ? { urlGuardada } : {}),
     });
   } catch (e) {
     console.error('[registro-ocr] Falló la lectura del documento:', e instanceof Error ? e.message : e);

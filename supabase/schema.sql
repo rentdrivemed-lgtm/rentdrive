@@ -41,6 +41,17 @@ CREATE TABLE IF NOT EXISTS usuarios (
   correo_codigo_intentos    INTEGER DEFAULT 0,
   created_at            TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
 );
+-- ⚠️ Nota (paridad SQLite↔Supabase): `usuarios.licencia_url` / `usuarios.licencia_url_dorso`
+-- (foto de cédula/licencia leída con IA en el atajo del registro, guardada para precargar
+-- en el checkout — ver lib/registro-ocr.ts y app/api/registro/extraer-documento/route.ts)
+-- son columnas nuevas que NO están en el CREATE TABLE de arriba. Igual que
+-- `cedula_url_dorso`, `banco`, `numero_cuenta`, `certificado_bancario_url`,
+-- `codigo_referido`, `referido_por`, `creditos_referido` y otras columnas de
+-- `usuarios` que YA usa el código real y tampoco están documentadas aquí (drift preexistente
+-- entre este archivo y lib/db.ts, no introducido por este cambio), si la tabla usuarios ya
+-- existía en Supabase, agregar:
+--   ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS licencia_url TEXT DEFAULT '';
+--   ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS licencia_url_dorso TEXT DEFAULT '';
 
 -- ─────────────── gastos (gastos de la empresa) ───────────────
 CREATE TABLE IF NOT EXISTS gastos (

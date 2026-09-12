@@ -2086,6 +2086,21 @@ function DashboardAdminInner() {
               ) : (
                 <div className="space-y-3">
                   {docItems.map(({ key, label, data }) => {
+                    // Tecno-mecánica exenta (Ley 2294 de 2023) y sin nada subido: en vez de
+                    // omitir la fila (que se vería igual que "simplemente falta"), se muestra
+                    // un aviso explícito de que no aplica — consistente con el mismo aviso
+                    // que ya se le muestra al propietario en su dashboard.
+                    if (key === 'tecno' && !tecnoRequerida(v.anio) && (!data || !('url' in data) || !data.url)) {
+                      return (
+                        <div key={key} className="rounded-xl p-3 border bg-surface border-border">
+                          <div className="flex items-center justify-between mb-1 gap-2">
+                            <p className="text-xs font-bold text-ink">{label}</p>
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-ink/10 text-ink/60 border border-border whitespace-nowrap">No exigible (vehículo &lt; 5 años)</span>
+                          </div>
+                          <p className="text-[11px] text-ink/50">✓ No aplica — vehículo de menos de 5 años (Ley 2294 de 2023). El propietario no necesita subir este documento.</p>
+                        </div>
+                      );
+                    }
                     if (!data || !('url' in data) || !data.url) return null;
                     const isPdf = data.url.toLowerCase().endsWith('.pdf');
                     const rev = docRevisiones[key] || { estado: 'pendiente', nota: '' };

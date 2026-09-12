@@ -15,7 +15,13 @@ import { correoNoVerificado } from '@/lib/verificacion-correo';
 // contraseña en sí) se agregaron para que el frontend detecte perfiles
 // incompletos de cuentas creadas por Google (ver app/api/auth/completar-perfil
 // y lib/perfil.ts, que es la autoridad real del lado servidor).
-const CAMPOS_SELECT = "tipo_documento, documento_identidad, fecha_nacimiento, celular, celular_indicativo, direccion, ciudad, contacto_emergencia, cedula_url, cedula_url_dorso, banco, numero_cuenta, certificado_bancario_url, codigo_referido, creditos_referido, admin_nivel, permisos_extra, correo_verificado, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END AS password_configurada";
+// licencia_url/licencia_url_dorso (nuevas, ver lib/db.ts): mismo criterio de
+// cedula_url/cedula_url_dorso — se leen acá para que app/pago/page.tsx pueda
+// precargar la licencia guardada (del atajo de registro o de una reserva
+// anterior) en vez de pedirla de nuevo. No se agregan a CAMPOS_EDITABLES (abajo):
+// hoy no hay ninguna pantalla de perfil que las edite directamente por esta vía
+// (se llenan desde el registro, completar-perfil o al crear una reserva).
+const CAMPOS_SELECT = "tipo_documento, documento_identidad, fecha_nacimiento, celular, celular_indicativo, direccion, ciudad, contacto_emergencia, cedula_url, cedula_url_dorso, licencia_url, licencia_url_dorso, banco, numero_cuenta, certificado_bancario_url, codigo_referido, creditos_referido, admin_nivel, permisos_extra, correo_verificado, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END AS password_configurada";
 
 export async function GET() {
   const user = await getCurrentUser();
