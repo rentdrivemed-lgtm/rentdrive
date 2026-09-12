@@ -57,9 +57,23 @@ export function documentosConUrlsValidas(documentosJson: string | undefined | nu
   return true;
 }
 
-export async function uploadFile(filename: string, contentType: string, data: ArrayBuffer | Buffer): Promise<UploadResult> {
+export type UploadOpts = {
+  /**
+   * Sobrescribe la carpeta de Cloudinary donde queda la subida (por defecto se deriva
+   * de `contentType`/`filename`, ver abajo). Se usa hoy para etiquetar de forma
+   * identificable las fotos subidas ANTES de que exista una cuenta (atajo de OCR del
+   * registro, `app/api/registro/extraer-documento/route.ts`, carpeta `registro-temp`):
+   * esas fotos pueden quedar huérfanas si la persona abandona el registro, y necesitan
+   * poder distinguirse de una subida normal ya asociada a una cuenta para que
+   * `POST /api/admin/limpiar-documentos-huerfanos` sepa qué prefijo revisar/borrar sin
+   * arriesgar tocar documentos de cuentas reales (que siguen en `docs`/`uploads`).
+   */
+  folder?: string;
+};
+
+export async function uploadFile(filename: string, contentType: string, data: ArrayBuffer | Buffer, opts?: UploadOpts): Promise<UploadResult> {
   const buffer = data instanceof ArrayBuffer ? Buffer.from(data) : data;
-  const folder = contentType === 'application/pdf' ? 'docs' : filename.startsWith('doc-') ? 'docs' : 'uploads';
+  const folder = opts?.folder || (contentType === 'application/pdf' ? 'docs' : filename.startsWith('doc-') ? 'docs' : 'uploads');
 
   const result = await new Promise<{ secure_url: string; public_id: string }>((resolve, reject) => {
     cloudinary.uploader.upload_stream(
@@ -69,6 +83,72 @@ export async function uploadFile(filename: string, contentType: string, data: Ar
   });
 
   return { url: result.secure_url, path: result.public_id };
+}
+
+// ── Limpieza de documentos huérfanos (registro-temp) ────────────────────────
+// Helpers de la Admin API de Cloudinary, usados por
+// POST /api/admin/limpiar-documentos-huerfanos. Se centralizan acá (en vez de
+// importar `cloudinary` de nuevo en la ruta) para no duplicar la configuración
+// del cliente y mantener todo el uso del SDK de Cloudinary en un solo archivo.
+
+export type RecursoCloudinary = { public_id: string; secure_url: string; created_at: string };
+
+// Los rechazos de la Admin API de Cloudinary NO son `instanceof Error` (son un
+// objeto plano `{ message, name, http_code }`, ver `UploadApiErrorResponse` del
+// SDK) — `err instanceof Error ? err.message : String(err)` los convertía en el
+// inútil "[object Object]". Este helper cubre ambos casos.
+export function mensajeErrorCloudinary(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (err && typeof err === 'object' && 'message' in err && typeof (err as { message: unknown }).message === 'string') {
+    return (err as { message: string }).message;
+  }
+  return String(err);
+}
+
+/**
+ * Lista TODOS los recursos de imagen bajo un prefijo/carpeta de Cloudinary,
+ * paginando con `next_cursor` hasta agotar el listado. Pensado para un job de
+ * limpieza ocasional (no para una ruta de alto tráfico ni para carpetas con
+ * volúmenes enormes de archivos).
+ */
+export async function listarRecursosPorPrefijo(prefijo: string): Promise<RecursoCloudinary[]> {
+  const recursos: RecursoCloudinary[] = [];
+  let cursor: string | undefined;
+  do {
+    const resp = await cloudinary.api.resources({
+      type: 'upload',
+      resource_type: 'image',
+      prefix: prefijo,
+      max_results: 500,
+      next_cursor: cursor,
+    });
+    for (const r of resp.resources as Array<{ public_id: string; secure_url: string; created_at: string }>) {
+      recursos.push({ public_id: r.public_id, secure_url: r.secure_url, created_at: r.created_at });
+    }
+    cursor = resp.next_cursor;
+  } while (cursor);
+  return recursos;
+}
+
+/**
+ * Borra recursos de Cloudinary por `public_id`, en lotes de 100 (límite de la
+ * Admin API para `delete_resources`). Tolerante por lote: si un lote falla, se
+ * sigue intentando con los siguientes (no se aborta el resto por un error
+ * puntual) y se reporta el último error visto.
+ */
+export async function borrarRecursos(publicIds: string[]): Promise<{ borrados: string[]; error?: string }> {
+  const borrados: string[] = [];
+  let error: string | undefined;
+  for (let i = 0; i < publicIds.length; i += 100) {
+    const lote = publicIds.slice(i, i + 100);
+    try {
+      await cloudinary.api.delete_resources(lote, { resource_type: 'image' });
+      borrados.push(...lote);
+    } catch (e) {
+      error = mensajeErrorCloudinary(e);
+    }
+  }
+  return { borrados, error };
 }
 
 // ── Tarjetas NFC ──────────────────────────────────────────────────────────

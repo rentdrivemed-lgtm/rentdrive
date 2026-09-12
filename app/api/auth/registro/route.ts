@@ -7,6 +7,7 @@ import { asignarCodigoReferido, vincularReferido } from '@/lib/referidos';
 import { bloqueadoPorCsrf } from '@/lib/csrf';
 import { consumirIntento, ipCliente } from '@/lib/limite-tasa';
 import { generarCodigoCorreo, expiraEnMinutos, CODIGO_VIGENCIA_MIN } from '@/lib/verificacion-correo';
+import { esUrlDeStorageValida } from '@/lib/storage';
 import bcrypt from 'bcryptjs';
 
 // Límite por IP: crear cuentas es gratis para quien registra pero NO para quien
@@ -48,7 +49,7 @@ export async function POST(req: NextRequest) {
     nombre, correo, password, rol,
     tipo_documento, documento_identidad, fecha_nacimiento,
     celular, celular_indicativo, numero_licencia,
-    codigo_referido,
+    codigo_referido, cedula_url, licencia_url,
   } = await req.json();
 
   if (!nombre || !correo || !password) {
@@ -78,6 +79,18 @@ export async function POST(req: NextRequest) {
 
   const hash = bcrypt.hashSync(password, 10);
 
+  // cedula_url / licencia_url (opcionales): vienen del atajo de foto del registro
+  // (app/(auth)/registro/page.tsx → POST /api/registro/extraer-documento, que ya
+  // subió la imagen a nuestro storage y devolvió `urlGuardada`). Quien llenó el
+  // formulario a mano simplemente no manda estos campos. Se valida que la URL
+  // realmente venga de nuestro storage (Cloudinary) antes de guardarla — mismo
+  // chequeo que ya exige lib/storage.ts para los documentos de vehículo — así una
+  // request directa al endpoint (curl) no puede inyectar cualquier URL arbitraria
+  // en el perfil de la cuenta recién creada. Si no es válida, se ignora en
+  // silencio (no bloquea el registro, que es opcional).
+  const cedulaUrlFinal = typeof cedula_url === 'string' && cedula_url && esUrlDeStorageValida(cedula_url) ? cedula_url : '';
+  const licenciaUrlFinal = typeof licencia_url === 'string' && licencia_url && esUrlDeStorageValida(licencia_url) ? licencia_url : '';
+
   // Código de verificación de correo (activación de cuenta) — se genera y guarda
   // ya en el INSERT, igual que leads_propietarios lo hace en su propio POST.
   // Ver lib/verificacion-correo.ts.
@@ -93,8 +106,9 @@ export async function POST(req: NextRequest) {
       (nombre, correo, password, rol,
        tipo_documento, documento_identidad, fecha_nacimiento,
        celular, celular_indicativo, direccion, ciudad, numero_licencia, contacto_emergencia,
+       cedula_url, licencia_url,
        correo_verificado, correo_codigo, correo_codigo_expira, correo_codigo_generado_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
   `).run(
     nombre, correo, hash, rolFinal,
     tipo_documento || 'cedula',
@@ -106,6 +120,8 @@ export async function POST(req: NextRequest) {
     '',
     numero_licencia || '',
     '{}',
+    cedulaUrlFinal,
+    licenciaUrlFinal,
     codigoCorreo, codigoExpira, ahora.toISOString(),
   );
 

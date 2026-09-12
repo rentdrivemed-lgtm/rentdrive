@@ -4,6 +4,7 @@ import { getCurrentUser } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { validarDocumentoIdentidad } from '@/lib/validacion';
 import { bloqueadoPorCsrf } from '@/lib/csrf';
+import { esUrlDeStorageValida } from '@/lib/storage';
 
 // ── Completar perfil tras registro con Google ────────────────────────────────
 //
@@ -44,8 +45,9 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
 
   const body = await req.json().catch(() => ({}));
-  const { password, tipo_documento, documento_identidad, fecha_nacimiento } = body as {
+  const { password, tipo_documento, documento_identidad, fecha_nacimiento, cedula_url, licencia_url } = body as {
     password?: unknown; tipo_documento?: unknown; documento_identidad?: unknown; fecha_nacimiento?: unknown;
+    cedula_url?: unknown; licencia_url?: unknown;
   };
 
   const db = getDb();
@@ -89,6 +91,17 @@ export async function POST(req: NextRequest) {
   const sets = ['tipo_documento = ?', 'documento_identidad = ?', 'fecha_nacimiento = ?'];
   const valores: unknown[] = [tipoDoc || 'cedula', numeroDoc, nacimiento];
   if (hashNuevo) { sets.push('password = ?'); valores.push(hashNuevo); }
+  // cedula_url / licencia_url (opcionales): vienen del atajo de foto de esta misma
+  // pantalla (app/completar-perfil/page.tsx → POST /api/registro/extraer-documento,
+  // que ya subió la imagen y devolvió `urlGuardada`). Igual que en el registro
+  // manual, se valida que la URL venga realmente de nuestro storage antes de
+  // guardarla; si no, se ignora en silencio (no bloquea el resto del guardado).
+  if (typeof cedula_url === 'string' && cedula_url && esUrlDeStorageValida(cedula_url)) {
+    sets.push('cedula_url = ?'); valores.push(cedula_url);
+  }
+  if (typeof licencia_url === 'string' && licencia_url && esUrlDeStorageValida(licencia_url)) {
+    sets.push('licencia_url = ?'); valores.push(licencia_url);
+  }
   valores.push(user.id);
 
   db.prepare(`UPDATE usuarios SET ${sets.join(', ')} WHERE id = ?`).run(...valores);

@@ -113,6 +113,9 @@ function CompletarPerfilForm() {
   const [avisoIA, setAvisoIA] = useState('');
   const [camposIA, setCamposIA] = useState<Set<CampoIA>>(new Set());
   const inputRef = useRef<HTMLInputElement>(null);
+  // Foto ya guardada por el servidor al leerla (ver POST /api/registro/extraer-documento
+  // → `urlGuardada`): se retiene en memoria para mandarla en el submit final.
+  const [cedulaUrlGuardada, setCedulaUrlGuardada] = useState('');
 
   useEffect(() => {
     let vivo = true;
@@ -169,6 +172,13 @@ function CompletarPerfilForm() {
         return;
       }
 
+      // La foto ya quedó guardada en el servidor (best-effort): se retiene la URL
+      // para mandarla en el submit final. Si no vino, el guardado no funcionó y
+      // simplemente no se manda nada (no bloquea el resto del flujo).
+      if (typeof data.urlGuardada === 'string' && data.urlGuardada) {
+        setCedulaUrlGuardada(data.urlGuardada);
+      }
+
       const datos = (data.datos || {}) as DatosDocumento;
       const marcados = new Set(camposIA);
       setPerfil(f => {
@@ -219,6 +229,9 @@ function CompletarPerfilForm() {
           tipo_documento: perfil.tipo_documento,
           documento_identidad: perfil.documento_identidad,
           fecha_nacimiento: perfil.fecha_nacimiento,
+          // Opcional: solo se manda si la persona usó el atajo de foto y el
+          // servidor logró guardarla.
+          ...(cedulaUrlGuardada ? { cedula_url: cedulaUrlGuardada } : {}),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -293,8 +306,12 @@ function CompletarPerfilForm() {
                   className="mt-0.5 w-4 h-4 accent-accent flex-shrink-0" />
                 <span className="text-[11px] text-ink/60 leading-relaxed">
                   Autorizo a DrivePass a leer la foto de mi documento con un servicio de inteligencia artificial,
-                  con el único fin de llenar este formulario. La imagen no se guarda: se usa para leer los datos y
-                  se descarta. Esto no verifica mi identidad. (Tratamiento de datos personales — Ley 1581 de 2012).
+                  con el fin de llenar este formulario. Si completo este paso, la foto queda asociada a mi cuenta
+                  para no tener que subirla de nuevo más adelante (por ejemplo, al reservar un vehículo); si no lo
+                  completo, la foto no queda asociada a ninguna cuenta y se elimina en nuestra siguiente limpieza
+                  periódica de archivos temporales. Esto no verifica mi identidad ni reemplaza los documentos que
+                  se piden al reservar.
+                  (Tratamiento de datos personales — Ley 1581 de 2012).
                 </span>
               </label>
 

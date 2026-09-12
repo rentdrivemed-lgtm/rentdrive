@@ -1667,25 +1667,40 @@ function DashboardPropietarioInner() {
                   </div>
                 </div>
 
-                {/* Tecno */}
+                {/* Tecno — exención de la Ley 2294 de 2023 (ver lib/tecnomecanica.ts): un
+                    vehículo con menos de 5 años (aprox. por año-modelo) no la requiere.
+                    En ese caso no tiene sentido mostrarle al propietario un recuadro de
+                    subida (el sistema ya sabe que no aplica): se reemplaza por un aviso
+                    fijo, sin ninguna acción pendiente de su parte. */}
                 <div className="bg-surface rounded-xl p-3 border border-border space-y-2">
                   <div className="flex items-center justify-between">
                     <p className="text-xs font-semibold text-ink">Tecno-mecánica</p>
-                    {fDet.tecno && (fDet.tecno as { url?: string }).url && <span className="text-[10px] text-success font-bold">✓ Subido</span>}
+                    {tecnoRequerida(vehiculoEditando.anio) && fDet.tecno && (fDet.tecno as { url?: string }).url && <span className="text-[10px] text-success font-bold">✓ Subido</span>}
                   </div>
-                  <DocUpload label="Revisión tecno-mecánica" value={editDocs.tecno?.url || ''} onChange={url => setEditDocs(d => ({ ...d, tecno: { ...d.tecno, url } }))} />
-                  {(fDet.tecno as { url?: string } | undefined)?.url && (
-                    <a href={urlDescarga((fDet.tecno as { url?: string }).url as string)} download
-                      className="flex items-center gap-1 text-[11px] font-medium text-ink/50 hover:text-accent transition">
-                      <IconExport size={11} /> Descargar
-                    </a>
+                  {tecnoRequerida(vehiculoEditando.anio) ? (
+                    <>
+                      <DocUpload label="Revisión tecno-mecánica" value={editDocs.tecno?.url || ''} onChange={url => setEditDocs(d => ({ ...d, tecno: { ...d.tecno, url } }))} />
+                      {(fDet.tecno as { url?: string } | undefined)?.url && (
+                        <a href={urlDescarga((fDet.tecno as { url?: string }).url as string)} download
+                          className="flex items-center gap-1 text-[11px] font-medium text-ink/50 hover:text-accent transition">
+                          <IconExport size={11} /> Descargar
+                        </a>
+                      )}
+                      <div>
+                        <label className="text-[11px] text-ink/50 block mb-1">Fecha de vencimiento</label>
+                        <input type="date" value={editDocs.tecno?.vence || ''}
+                          onChange={e => setEditDocs(d => ({ ...d, tecno: { ...d.tecno, url: d.tecno?.url || '', vence: e.target.value } }))}
+                          className="w-full border border-border rounded-lg px-2 py-1.5 text-xs text-ink bg-surface-2 focus:outline-none focus:ring-1 focus:ring-accent/40" />
+                      </div>
+                    </>
+                  ) : (
+                    <div className="rounded-lg bg-success/10 border border-success/25 px-3 py-2.5">
+                      <p className="text-xs font-semibold text-success">✓ No aplica</p>
+                      <p className="text-[11px] text-ink/60 mt-0.5">
+                        Vehículo de menos de 5 años (Ley 2294 de 2023) — no necesitas subir nada.
+                      </p>
+                    </div>
                   )}
-                  <div>
-                    <label className="text-[11px] text-ink/50 block mb-1">Fecha de vencimiento</label>
-                    <input type="date" value={editDocs.tecno?.vence || ''}
-                      onChange={e => setEditDocs(d => ({ ...d, tecno: { ...d.tecno, url: d.tecno?.url || '', vence: e.target.value } }))}
-                      className="w-full border border-border rounded-lg px-2 py-1.5 text-xs text-ink bg-surface-2 focus:outline-none focus:ring-1 focus:ring-accent/40" />
-                  </div>
                 </div>
 
                 {/* Tarjeta */}
@@ -1821,9 +1836,10 @@ function DashboardPropietarioInner() {
                 valueFrente={perfil.cedula_url} valueDorso={perfil.cedula_url_dorso}
                 onChangeFrente={url => setPerfil(p => ({ ...p, cedula_url: url }))}
                 onChangeDorso={url => setPerfil(p => ({ ...p, cedula_url_dorso: url }))}
-                soloUnLado={perfil.tipo_documento === 'pasaporte'} />
+                soloUnLado={perfil.tipo_documento === 'pasaporte'}
+                soloImagen />
               <p className="text-[11px] text-ink/50 mt-1">
-                Imagen o PDF claro y legible. Solo la vemos para validar tus documentos.
+                Foto clara (cámara o galería). Solo la vemos para validar tus documentos.
               </p>
             </div>
           </div>

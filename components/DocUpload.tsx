@@ -1,16 +1,33 @@
 'use client';
 import { useRef, useState } from 'react';
 import RecortarImagen from '@/components/RecortarImagen';
+import { IconPhoto } from '@/components/Icons';
 
 type Props = {
   label: string;
   value: string;
   onChange: (url: string) => void;
   required?: boolean;
+  /**
+   * true para documentos que NUNCA son un PDF (cédula/pasaporte, licencia de
+   * conducción: siempre es la foto de una tarjeta física). En ese caso el
+   * input queda como `accept="image/*" capture="environment"` — SIN mezclar
+   * con `application/pdf` — porque en muchos navegadores móviles (sobre todo
+   * Android) un `accept` mixto de imagen+PDF esconde la opción de cámara del
+   * selector nativo y solo deja elegir un archivo ya existente.
+   *
+   * Cuando es `false` (SOAT/tarjeta de propiedad/tecno-mecánica/seguro todo
+   * riesgo, que sí a veces llegan como PDF escaneado), el recuadro se queda
+   * igual que antes (imagen o PDF, sin `capture`) para no quitarle a nadie la
+   * posibilidad de subir un PDF, pero se agrega un botón aparte de "Tomar
+   * foto" con su propio input de solo cámara.
+   */
+  soloImagen?: boolean;
 };
 
-export default function DocUpload({ label, value, onChange, required }: Props) {
+export default function DocUpload({ label, value, onChange, required, soloImagen }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const camaraRef = useRef<HTMLInputElement>(null);
   const [subiendo, setSubiendo] = useState(false);
   const [error, setError] = useState('');
   const [recorteUrl, setRecorteUrl] = useState<string | null>(null);
@@ -21,6 +38,13 @@ export default function DocUpload({ label, value, onChange, required }: Props) {
     try {
       const fd = new FormData();
       fd.append('file', file, nombreArchivo);
+      // `soloImagen` ya identifica en este componente los documentos que NUNCA son un
+      // PDF (cédula/pasaporte, licencia — ver el comentario del prop arriba). Se manda
+      // también al servidor para que /api/upload/documento pueda rechazar un PDF real
+      // (por bytes mágicos, no por el Content-Type que declare el archivo) cuando el
+      // documento es de este tipo — antes solo se restringía en el `accept` del input,
+      // que no impide nada del lado del servidor.
+      fd.append('soloImagen', soloImagen ? 'true' : 'false');
       const res = await fetch('/api/upload/documento', { method: 'POST', body: fd });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setError(data.error || 'Error al subir'); return; }
@@ -48,6 +72,7 @@ export default function DocUpload({ label, value, onChange, required }: Props) {
     if (recorteUrl) URL.revokeObjectURL(recorteUrl);
     setRecorteUrl(null);
     if (inputRef.current) inputRef.current.value = '';
+    if (camaraRef.current) camaraRef.current.value = '';
     subirArchivo(blob, 'documento.jpg');
   };
 
@@ -55,6 +80,7 @@ export default function DocUpload({ label, value, onChange, required }: Props) {
     if (recorteUrl) URL.revokeObjectURL(recorteUrl);
     setRecorteUrl(null);
     if (inputRef.current) inputRef.current.value = '';
+    if (camaraRef.current) camaraRef.current.value = '';
   };
 
   const isPdf = value?.toLowerCase().endsWith('.pdf');
@@ -62,9 +88,24 @@ export default function DocUpload({ label, value, onChange, required }: Props) {
 
   return (
     <div className="flex flex-col gap-1">
-      <label className="text-xs font-semibold text-ink/60 uppercase tracking-wide">
-        {label} {required && <span className="text-accent">*</span>}
-      </label>
+      <div className="flex items-center justify-between gap-2">
+        <label className="text-xs font-semibold text-ink/60 uppercase tracking-wide">
+          {label} {required && <span className="text-accent">*</span>}
+        </label>
+        {/* SOAT/tarjeta/tecno/seguro: el recuadro de abajo sigue aceptando PDF (sin
+            `capture`), así que se ofrece la cámara aparte con este botón — ver el
+            comentario de `soloImagen` en el tipo Props. */}
+        {!soloImagen && (
+          <button
+            type="button"
+            onClick={() => camaraRef.current?.click()}
+            disabled={subiendo}
+            className="inline-flex items-center gap-1 text-[10px] font-semibold text-accent hover:text-accent-hover disabled:opacity-50 transition flex-shrink-0"
+          >
+            <IconPhoto size={11} /> Tomar foto
+          </button>
+        )}
+      </div>
       <div
         role="button" tabIndex={0} aria-label={`Subir ${label}`}
         onClick={() => inputRef.current?.click()}
@@ -107,10 +148,21 @@ export default function DocUpload({ label, value, onChange, required }: Props) {
       <input
         ref={inputRef}
         type="file"
-        accept="image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf"
+        accept={soloImagen ? 'image/*' : 'image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf'}
+        capture={soloImagen ? 'environment' : undefined}
         className="hidden"
         onChange={handleFile}
       />
+      {!soloImagen && (
+        <input
+          ref={camaraRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          className="hidden"
+          onChange={handleFile}
+        />
+      )}
       {recorteUrl && (
         <RecortarImagen imagenUrl={recorteUrl} onConfirmar={confirmarRecorte} onCancelar={cancelarRecorte} />
       )}
