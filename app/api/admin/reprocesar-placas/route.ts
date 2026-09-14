@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { guardArea } from '@/lib/guard';
 import { secretoCronValido } from '@/lib/cron-secret';
-import { detectarYDifuminarPlaca } from '@/lib/blur-placas';
+import { detectarYDifuminarPlaca, type ResultadoDeteccion } from '@/lib/blur-placas';
 import { uploadFile, esUrlDeStorageValida } from '@/lib/storage';
 import { registrarFotoModeracion } from '@/lib/moderacion';
 import { registrarAuditoria } from '@/lib/permisos';
@@ -76,6 +76,36 @@ function esperar(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// Prefijo con el que ESTE endpoint nombra las fotos que corrige. Cloudinary lo conserva en
+// la URL pública (`.../uploads/reproc-placa-<vehiculo>-<ts>-<rand>.jpg`), así que es una
+// marca fiable y determinística de "esta foto ya salió de una corrida anterior".
+const PREFIJO_FOTO_REPROCESADA = 'reproc-placa-';
+
+function esFotoDeReprocesoPrevio(url: string): boolean {
+  return url.includes(`/${PREFIJO_FOTO_REPROCESADA}`);
+}
+
+/**
+ * ¿El tapado que produjo esta corrida es de los IMPRECISOS Y GRANDES (la banda de respaldo
+ * de lib/blur-placas.ts, centrada en la pista sesgada de la IA)? Ver `ResultadoDeteccion.via`.
+ *
+ * SOLO `banda_respaldo` cuenta como impreciso, y eso es deliberado: `color_con_banda`
+ * significa que el detector de color SÍ encontró un rectángulo amarillo real (aunque débil o
+ * angosto, y por eso se le sumó la banda) — y ese es EXACTAMENTE el escenario que este
+ * endpoint existe para arreglar: una foto que salió de una corrida anterior con un jirón de
+ * placa asomando al lado del sello viejo. Tratar `color_con_banda` como impreciso descartaba
+ * ese tapado y devolvía `sin_cambios` con la placa todavía legible.
+ *
+ * CONVERGENCIA (por qué esto no apila bandas para siempre): una vez que la pasada que sí se
+ * aplicó selló ese jirón amarillo, la foto resultante ya no tiene ningún amarillo que el
+ * detector de color pueda encontrar, así que una pasada posterior solo puede caer en
+ * `banda_respaldo` — y esa sí se descarta aquí. O sea: a lo sumo UNA corrida extra por foto,
+ * y solo cuando de verdad quedaba placa visible.
+ */
+function tapadoImpreciso(via: ResultadoDeteccion['via']): boolean {
+  return via === 'banda_respaldo';
+}
+
 type MediaType = 'image/jpeg' | 'image/png' | 'image/webp';
 
 async function descargarImagen(url: string): Promise<{ buffer: Buffer; mediaType: MediaType }> {
@@ -109,13 +139,26 @@ async function descargarImagen(url: string): Promise<{ buffer: Buffer; mediaType
  * Reprocesa TODAS las fotos (fotos + fotos_detalle) de un vehículo con la versión ya
  * corregida de detectarYDifuminarPlaca. Solo sube/reemplaza una foto si el resultado
  * DIFIERE del original (`resultado.difuminada === true`, es decir: se volvió a detectar
- * y tapar una placa) — si Claude ya no encuentra una placa "visible" en la foto (p. ej.
- * porque ya quedó bien tapada en una corrida anterior, o porque el rectángulo viejo la
- * cubre lo suficiente como para que ya no se reconozca como placa), la foto se deja
- * intacta y se marca `sin_cambios`. Esto hace que volver a correr el endpoint sobre el
- * mismo vehículo sea razonablemente idempotente: no genera una foto nueva ni gasta una
- * subida a Cloudinary por cada corrida repetida — el costo repetido es solo la llamada
- * de detección a Anthropic.
+ * y tapar una placa) — si Claude ya no encuentra una placa "visible" en la foto, se deja
+ * intacta y se marca `sin_cambios`.
+ *
+ * IDEMPOTENCIA (ojo, NO es gratis — se apoya en una guarda explícita): correr este endpoint
+ * dos veces sobre el mismo vehículo NO debe seguir generando fotos nuevas. Confiar solo en
+ * "Claude ya no verá placa en una foto tapada" NO alcanza con el diseño híbrido actual: una
+ * foto ya sellada no tiene ningún rectángulo amarillo que el detector de color pueda
+ * encontrar, así que si Claude igual reporta placa visible (el prompt le pide intentarlo
+ * incluso si está "partially obscured"), la foto cae al Caso C y se le estampa una BANDA
+ * generosa nueva, se sube a Cloudinary y se reemplaza la URL — en CADA corrida. Dos o tres
+ * pasadas destruirían la foto a punta de bandas apiladas.
+ * Por eso: si la foto de origen YA viene de una corrida anterior de este endpoint
+ * (`esFotoDeReprocesoPrevio`, por el prefijo del nombre en la URL) y el tapado nuevo es de
+ * los imprecisos (`tapadoImpreciso`, o sea SOLO `via === 'banda_respaldo'`: la banda sola,
+ * sin ningún rectángulo amarillo real detrás), se descarta el resultado y se marca
+ * `sin_cambios` sin subir nada. Todo tapado que SÍ se apoya en un rectángulo amarillo medido
+ * sobre los píxeles (`color`, `color_sin_pista`, `color_sin_ia` y también `color_con_banda`,
+ * donde el candidato era débil/angosto y se le sumó la banda) se aplica igual: es una placa
+ * que la corrida anterior no cubrió, que es justamente lo que se quiere poder arreglar en una
+ * segunda pasada. Ver el comentario de `tapadoImpreciso` para por qué esto converge.
  *
  * LIMITACIÓN CONOCIDA (documentada para quien revise/corra esto): no existe un
  * "original sin tapar" guardado aparte — la única fuente disponible es la foto YA
@@ -177,13 +220,22 @@ async function reprocesarVehiculo(db: Database.Database, vehiculo: VehiculoRow):
         // `contenido_inapropiado=1` de esta misma URL (p. ej. de una subida anterior por
         // /api/upload que sí la marcó) — eso saltaría la moderación en silencio la próxima
         // vez que esa foto se reutilice en una publicación nueva (fotos_moderacion es la
-        // fuente que consulta POST /api/vehiculos). En vez de eso: NO se toca `difuminada`
-        // (viene en `false`, no se sube nada nuevo a Cloudinary con un resultado sin
-        // evaluar) y se registra fail-closed (contenidoInapropiado=true) con un motivo
-        // explícito distinto al de una detección real, para que el vehículo caiga a
+        // fuente que consulta POST /api/vehiculos). En vez de eso: se IGNORA el buffer que
+        // devolvió la detección (no se sube nada nuevo a Cloudinary con un resultado de
+        // moderación sin evaluar) y se registra fail-closed (contenidoInapropiado=true) con
+        // un motivo explícito distinto al de una detección real, para que el vehículo caiga a
         // revisión manual en vez de quedar aprobado por accidente. El resumen refleja esto
         // como `estado: 'error'` (nunca `sin_cambios`) para que el admin lo note y pueda
         // reintentar esa foto puntual más tarde.
+        //
+        // OJO (cambió en la versión híbrida de lib/blur-placas.ts): con
+        // `moderacionEvaluada === false`, `resultado.difuminada` YA PUEDE VENIR EN `true` —
+        // si la IA falló pero el detector determinístico de color sí encontró la placa, esa
+        // función tapa la placa igual. Aquí esa versión tapada se descarta a propósito: la
+        // foto ya publicada se deja como está y queda marcada para revisión manual, porque
+        // publicar un buffer cuyo contenido nunca se moderó sería fail-open. Basta con
+        // reintentar el endpoint cuando la IA vuelva a responder para que esa foto se
+        // corrija por el camino normal.
         moderacionPorUrl.set(url, {
           contenidoInapropiado: true,
           motivoInapropiado: 'No se pudo evaluar automáticamente el contenido de esta foto en el reproceso (fallo de moderación) — pendiente de revisión manual.',
@@ -200,8 +252,17 @@ async function reprocesarVehiculo(db: Database.Database, vehiculo: VehiculoRow):
         });
         if (!resultado.difuminada) {
           resultados.push({ url, estado: 'sin_cambios' });
+        } else if (esFotoDeReprocesoPrevio(url) && tapadoImpreciso(resultado.via)) {
+          // Ver la nota de IDEMPOTENCIA arriba: foto que ya salió de una corrida previa +
+          // tapado nuevo impreciso (banda SOLA, sin ningún amarillo real detrás) = apilar
+          // bandas sobre bandas. Se descarta. Un `color_con_banda` NO cae aquí: ahí sí hubo
+          // un rectángulo amarillo medido (placa que la corrida previa dejó asomando).
+          console.warn(
+            `[reprocesar-placas] Foto ya reprocesada antes (${url}) y el tapado nuevo sería una banda de respaldo (via=${resultado.via}) — se descarta para no apilar bandas; la foto queda como está.`,
+          );
+          resultados.push({ url, estado: 'sin_cambios' });
         } else {
-          const nombre = `reproc-placa-${vehiculo.id}-${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;
+          const nombre = `${PREFIJO_FOTO_REPROCESADA}${vehiculo.id}-${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;
           const { url: nuevaUrl } = await uploadFile(nombre, 'image/jpeg', resultado.buffer);
           cambios.set(url, {
             nuevaUrl,

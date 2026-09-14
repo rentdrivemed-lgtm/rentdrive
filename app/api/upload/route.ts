@@ -20,10 +20,11 @@ const FOTO_IA_VENTANA_MS = 60 * 60 * 1000;
 
 // Rate-limit DEDICADO para la llamada (cara) de detección de placa/moderación con Claude
 // vision (`detectarYDifuminarPlaca`) — independiente del de `estandarizar-foto:${user.id}`
-// de arriba (clave y contador propios, no se comparten). El rediseño de esa función
-// duplicó el piso garantizado de llamadas a Opus vision por foto (de ~1 a ~2, hasta 4 en
-// el peor caso con reintentos técnicos) y antes no había NINGÚN tope específico sobre
-// ella — solo el de remove.bg (que además está suspendido, ver ESTANDARIZACION_SUSPENDIDA).
+// de arriba (clave y contador propios, no se comparten). El costo real hoy es de 1 llamada
+// a Opus vision por foto (2 como máximo, si la primera falla por un problema técnico y se
+// reintenta — ver lib/blur-placas.ts; la versión intermedia que hacía 2 llamadas siempre,
+// hasta 4, ya no existe), y antes no había NINGÚN tope específico sobre ella — solo el de
+// remove.bg (que además está suspendido, ver ESTANDARIZACION_SUSPENDIDA).
 // Un vehículo normal sube ~5-8 fotos (frente, trasera, laterales, interior, tablero); un
 // propietario subiendo/editando varios vehículos en una misma sesión intensiva no debería
 // toparse con 60/hora, pero sí bloquea un abuso claro de cientos de llamadas en bucle
