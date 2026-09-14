@@ -13,6 +13,7 @@ import ReferidosCard from '@/components/ReferidosCard';
 import CalendarioReservas, { type ReservaCalendario } from '@/components/CalendarioReservas';
 import { IconCar, IconCalendar, IconChat, IconCheck, IconArrowL, IconExport, IconPhoto } from '@/components/Icons';
 import { TIPO_VEHICULO_LABELS, type TipoVehiculo } from '@/lib/rentabilidad';
+import { COMBUSTIBLE_LABELS, esCombustibleValido, requiereInscripcionExencion, type Combustible } from '@/lib/vehiculo-campos';
 import { precioMercadoSugerido, segmentoValido } from '@/lib/precioMercado';
 import FirmaCanvas from '@/components/FirmaCanvas';
 import { descargarCuentaCobroPDF } from '@/lib/contabilidad-pdf';
@@ -22,15 +23,26 @@ import MisBusesPanel from '@/components/buses/MisBusesPanel';
 
 // Opciones de categoría (mismas 6 que la calculadora de mercado) para el selector.
 const CATEGORIAS = Object.entries(TIPO_VEHICULO_LABELS) as [TipoVehiculo, string][];
+// Tipos de combustible (lista cerrada, ver lib/vehiculo-campos.ts). El vacío es una opción
+// real ("Sin especificar"): es el estado de todos los vehículos publicados antes de este
+// campo, y no obliga a nadie a inventar un dato que no tenga a mano.
+const COMBUSTIBLES_OPCIONES = Object.entries(COMBUSTIBLE_LABELS) as [Combustible, string][];
 const copCorto = (n: number) => `$${Math.round(n).toLocaleString('es-CO')}`;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type DocItem = { url: string; vence?: string };
+// `todo_riesgo` ya no aparece acá (sep-2026): DrivePass expide la póliza directamente, así
+// que dejó de pedírsele al propietario. IMPORTANTE: los vehículos que ya la subieron
+// CONSERVAN su `documentos.todo_riesgo` en la BD. En el cliente eso pasa porque `editDocs` se
+// carga con el JSON COMPLETO que viene de la base (`parseJ<Documentos>(v.documentos, {})`, ver
+// `abrirEditar`) y se vuelve a enviar completo al guardar (los tipos de TypeScript se borran en
+// runtime, así que las claves legadas viajan intactas de ida y vuelta). Pero la GARANTÍA no
+// vive acá: PUT /api/vehiculos/[id] re-inyecta explícitamente toda clave que esté en la BD y no
+// venga en el body, así que aunque este componente dejara de reenviarlas no se perderían.
 type Documentos = {
   soat?: DocItem;
   tecno?: DocItem;
   tarjeta?: { url: string; url_dorso?: string };
-  todo_riesgo?: { url: string; aseguradora?: string; poliza?: string; vence?: string };
 };
 type DocRevision = { estado: string; nota: string };
 type Vehiculo = {
@@ -38,6 +50,7 @@ type Vehiculo = {
   tipo: string; precio_dia: number; disponible: number;
   valor_comercial?: number; precio_manual?: number; precio_ajuste_pct?: number;
   dias_disponibles: string; placa?: string;
+  combustible?: string; clase_vehiculo?: string; exencion_pico_placa_inscrita?: number;
   fotos?: string; fotos_detalle?: string;
   ubicacion?: string; descripcion?: string;
   documentos?: string; documentos_estado?: string;
@@ -45,6 +58,8 @@ type Vehiculo = {
   contenido_revision?: number;
 };
 type Reserva = ReservaCalendario & { usuario_id: number };
+/** Campos del formulario de publicación que el atajo de IA puede autocompletar. */
+type CampoTarjetaIA = 'marca' | 'modelo' | 'anio' | 'placa' | 'tipo' | 'combustible' | 'clase_vehiculo';
 type User = {
   id: number; nombre: string; correo: string;
   tipo_documento?: string; documento_identidad?: string;
@@ -78,11 +93,19 @@ const FOTOS_LABELS: Record<keyof Fotos, string> = {
 const FORM_INICIAL = {
   marca: '', modelo: '', anio: '', tipo: 'sedan',
   ubicacion: 'Medellín', descripcion: '', placa: '', valor_comercial: '',
+  // Campos que salen de la tarjeta de propiedad (ver lib/vehiculo-campos.ts). `combustible`
+  // vacío = "sin especificar"; `clase_vehiculo` es el texto de la matrícula tal cual.
+  combustible: '', clase_vehiculo: '',
+  // Confirmación de que el propietario YA inscribió la exención de pico y placa ante la
+  // Secretaría de Movilidad de Medellín. Solo aplica a híbrido y gas (GNV): su exención NO
+  // es automática. Se manda como boolean; el servidor lo guarda como 0/1 y lo fuerza a 0 si
+  // el combustible no la requiere (ver app/api/vehiculos/route.ts).
+  exencion_pico_placa_inscrita: false,
 };
-const DOC_KEYS = ['soat', 'tecno', 'tarjeta', 'todo_riesgo'] as const;
+const DOC_KEYS = ['soat', 'tecno', 'tarjeta'] as const;
 const DOC_LABELS_MAP: Record<string, string> = {
   soat: 'SOAT', tecno: 'Tecno-mecánica',
-  tarjeta: 'Tarjeta de propiedad', todo_riesgo: 'Todo riesgo',
+  tarjeta: 'Tarjeta de propiedad',
 };
 const estadoColor: Record<string, string> = {
   pendiente: 'bg-warning/15 text-warning',
@@ -116,10 +139,13 @@ function calcProgreso(v: Vehiculo): { pct: number; items: ProgresoItem[] } {
     { key: 'soat',       label: 'SOAT',               done: !!(docs.soat as { url?: string } | undefined)?.url },
     { key: 'tecno',      label: tecnoLabel,           done: tecnoOk },
     { key: 'tarjeta',    label: 'Tarjeta propiedad (frente y dorso)',  done: !!((docs.tarjeta as { url?: string; url_dorso?: string } | undefined)?.url && (docs.tarjeta as { url?: string; url_dorso?: string } | undefined)?.url_dorso) },
-    // Seguro todo riesgo: opcional, nunca bloquea nada — se marca siempre "hecho" en el
-    // checklist (en vez de quitarlo del array) para que siga siendo visible con su
-    // etiqueta "(opcional)" pero sin restar porcentaje de progreso.
-    { key: 'todo_riesgo',label: 'Todo riesgo (opcional)', done: true },
+    // Nota: el ítem "Todo riesgo (opcional)" se quitó del checklist en sep-2026 — DrivePass
+    // expide la póliza, ya no se le pide al propietario. Estaba fijo en `done: true`, o sea
+    // que regalaba un punto a TODOS: quitarlo baja numerador y denominador en 1, y eso SÍ
+    // mueve el porcentaje de cualquier vehículo incompleto — hacia abajo (2/8 = 25% pasa a
+    // 1/7 = 14%; 7/8 = 88% pasa a 6/7 = 86%). Solo los vehículos con todo completo se quedan
+    // igual, en 100%. Es el número honesto: antes el checklist se veía más avanzado de lo que
+    // estaba por un ítem que nadie tenía que hacer.
     { key: 'aprobacion', label: 'Aprobación DrivePass', done: v.documentos_estado === 'aprobado' },
   ];
   const done = items.filter(i => i.done).length;
@@ -186,7 +212,7 @@ function DashboardPropietarioInner() {
   }, []);
   const [errorTarjetaIA, setErrorTarjetaIA] = useState('');
   const [avisoTarjetaIA, setAvisoTarjetaIA] = useState('');
-  const [camposTarjetaIA, setCamposTarjetaIA] = useState<Set<'marca' | 'modelo' | 'anio' | 'placa' | 'tipo'>>(new Set());
+  const [camposTarjetaIA, setCamposTarjetaIA] = useState<Set<CampoTarjetaIA>>(new Set());
   // Fotos de la tarjeta de propiedad que el endpoint de IA ya guardó como documento
   // (ver /api/vehiculos/extraer-matricula): se reutilizan al publicar como el documento
   // oficial "Tarjeta de propiedad" del vehículo, sin volver a pedirlas (Punto 2).
@@ -405,7 +431,7 @@ function DashboardPropietarioInner() {
     }
   };
 
-  const desmarcarCampoTarjeta = (campo: 'marca' | 'modelo' | 'anio' | 'placa' | 'tipo') => {
+  const desmarcarCampoTarjeta = (campo: CampoTarjetaIA) => {
     setCamposTarjetaIA(prev => {
       if (!prev.has(campo)) return prev;
       const copia = new Set(prev);
@@ -433,7 +459,10 @@ function DashboardPropietarioInner() {
         return;
       }
 
-      const datos = (data.datos || {}) as { placa: string | null; marca: string | null; modelo: string | null; anio: number | null; tipo: string | null };
+      const datos = (data.datos || {}) as {
+        placa: string | null; marca: string | null; modelo: string | null; anio: number | null;
+        tipo: string | null; combustible: string | null; clase_vehiculo: string | null;
+      };
       const marcados = new Set(camposTarjetaIA);
       setForm(f => {
         const nuevo = { ...f };
@@ -442,6 +471,11 @@ function DashboardPropietarioInner() {
         if (datos.anio)   { nuevo.anio = String(datos.anio);        marcados.add('anio'); }
         if (datos.placa)  { nuevo.placa = datos.placa;              marcados.add('placa'); }
         if (datos.tipo && CATEGORIAS.some(([val]) => val === datos.tipo)) { nuevo.tipo = datos.tipo; marcados.add('tipo'); }
+        // El servidor ya normaliza el combustible a la lista cerrada, pero se revalida acá
+        // antes de escribirlo en el <select> (si llegara algo fuera de lista, se ignora y la
+        // persona lo elige a mano) — el valor decide la exención de pico y placa.
+        if (datos.combustible && esCombustibleValido(datos.combustible)) { nuevo.combustible = datos.combustible; marcados.add('combustible'); }
+        if (datos.clase_vehiculo) { nuevo.clase_vehiculo = datos.clase_vehiculo; marcados.add('clase_vehiculo'); }
         return nuevo;
       });
       setCamposTarjetaIA(marcados);
@@ -536,6 +570,8 @@ function DashboardPropietarioInner() {
       tipo: v.tipo, ubicacion: v.ubicacion || 'Medellín',
       descripcion: v.descripcion || '', placa: v.placa || '',
       valor_comercial: v.valor_comercial ? String(v.valor_comercial) : '',
+      combustible: v.combustible || '', clase_vehiculo: v.clase_vehiculo || '',
+      exencion_pico_placa_inscrita: !!v.exencion_pico_placa_inscrita,
     });
     setEditFotos({ ...FOTOS_VACIAS, ...parseJ<Partial<Fotos>>(v.fotos_detalle, {}) } as Fotos);
     setEditDias(parseJ<string[]>(v.dias_disponibles, []));
@@ -954,6 +990,8 @@ function DashboardPropietarioInner() {
                       value={dias}
                       onChange={nuevos => guardarDias(v.id, nuevos)}
                       placa={v.placa}
+                      combustible={v.combustible}
+                      exencionInscrita={v.exencion_pico_placa_inscrita}
                       reservedDates={reservasDatesVehiculo(v.id)}
                     />
                   </div>
@@ -1202,8 +1240,9 @@ function DashboardPropietarioInner() {
                 <div className="min-w-0">
                   <p className="font-bold text-ink text-sm">Publica más rápido</p>
                   <p className="text-xs text-ink/60 mt-0.5 leading-relaxed">
-                    Sube el frente y el reverso de la tarjeta de propiedad y completamos marca, línea, año, placa
-                    y categoría por ti. Revisas los datos y corriges lo que haga falta antes de publicar.
+                    Sube el frente y el reverso de la tarjeta de propiedad y completamos marca, línea, año, placa,
+                    categoría, tipo de combustible y clase de vehículo por ti. Revisas los datos y corriges lo que
+                    haga falta antes de publicar.
                   </p>
                 </div>
               </div>
@@ -1311,6 +1350,79 @@ function DashboardPropietarioInner() {
                       <option key={val} value={val}>{label}</option>
                     ))}
                   </select>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-ink/60 block mb-1.5">
+                    Tipo de combustible
+                    {camposTarjetaIA.has('combustible') && (
+                      <span className="ml-1.5 inline-flex items-center gap-1 text-[10px] font-semibold text-accent normal-case tracking-normal">
+                        <IconCheck size={10} /> de tu foto
+                      </span>
+                    )}
+                  </label>
+                  <select className={`w-full border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40 ${camposTarjetaIA.has('combustible') ? 'border-accent/50 bg-accent-light/40' : 'border-border'}`}
+                    value={form.combustible}
+                    onChange={e => {
+                      desmarcarCampoTarjeta('combustible');
+                      const valor = e.target.value;
+                      // Si el combustible nuevo no admite el trámite (gasolina, diésel, eléctrico
+                      // o "sin especificar"), la casilla se resetea: dejarla marcada guardaría un
+                      // "sí, inscrito" que no significa nada. El servidor lo fuerza igual.
+                      setForm(f => ({
+                        ...f, combustible: valor,
+                        exencion_pico_placa_inscrita: requiereInscripcionExencion(valor) ? f.exencion_pico_placa_inscrita : false,
+                      }));
+                    }}>
+                    <option value="">Sin especificar</option>
+                    {COMBUSTIBLES_OPCIONES.map(([val, label]) => (
+                      <option key={val} value={val}>{label}</option>
+                    ))}
+                  </select>
+                  {/* Eléctrico: exento automático vía RUNT, no hay nada que preguntar. */}
+                  {form.combustible === 'electrico' && (
+                    <p className="text-[11px] text-success mt-1">✓ Exento de pico y placa en Medellín (automático, no requiere trámite).</p>
+                  )}
+                  {/* Híbrido y gas (GNV): exentos SOLO si el propietario inscribió el vehículo
+                      ante la Secretaría de Movilidad. Sin ese trámite la exención no existe y
+                      lo comparendan igual, así que se pide confirmación explícita en vez de
+                      deducirla del combustible. */}
+                  {requiereInscripcionExencion(form.combustible) && (
+                    <div className="mt-2 rounded-xl border border-border bg-surface-2 p-2.5">
+                      <label className="flex items-start gap-2 cursor-pointer">
+                        <input type="checkbox" className="mt-0.5 accent-accent"
+                          checked={form.exencion_pico_placa_inscrita}
+                          onChange={e => setForm(f => ({ ...f, exencion_pico_placa_inscrita: e.target.checked }))} />
+                        <span className="text-[11px] text-ink leading-relaxed">
+                          Ya inscribí la exención de pico y placa ante la Secretaría de Movilidad de Medellín.
+                        </span>
+                      </label>
+                      <p className="text-[11px] text-ink/45 mt-1.5 leading-relaxed">
+                        Los {form.combustible === 'gas' ? 'vehículos a gas natural (GNV)' : 'híbridos'} están exentos,
+                        pero la exención NO es automática: sin ese trámite tu vehículo sigue con pico y placa.
+                        {form.exencion_pico_placa_inscrita
+                          ? ' Marcado: no te mostraremos días de pico y placa.'
+                          : ' Mientras no lo marques, mostramos los días de restricción normalmente.'}
+                      </p>
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-ink/60 block mb-1.5">
+                    Clase de vehículo
+                    {camposTarjetaIA.has('clase_vehiculo') && (
+                      <span className="ml-1.5 inline-flex items-center gap-1 text-[10px] font-semibold text-accent normal-case tracking-normal">
+                        <IconCheck size={10} /> de tu foto
+                      </span>
+                    )}
+                  </label>
+                  {/* Editable a propósito (no solo lectura): la IA transcribe lo que alcanza a
+                      leer de la matrícula y puede equivocarse con una tarjeta desgastada; quien
+                      no use el atajo tiene que poder escribirla. El texto de ayuda deja claro
+                      de dónde sale el dato. */}
+                  <input type="text" maxLength={40} placeholder="Como aparece en la matrícula"
+                    className={`w-full border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40 ${camposTarjetaIA.has('clase_vehiculo') ? 'border-accent/50 bg-accent-light/40' : 'border-border'}`}
+                    value={form.clase_vehiculo} onChange={e => { desmarcarCampoTarjeta('clase_vehiculo'); setForm(f => ({ ...f, clase_vehiculo: e.target.value })); }} />
+                  <p className="text-[11px] text-ink/45 mt-1">Ej: Automóvil, Campero, Camioneta. Es la &quot;clase&quot; impresa en tu tarjeta de propiedad.</p>
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-ink/60 block mb-1.5">Valor comercial (COP) <span className="text-accent">*</span></label>
@@ -1460,6 +1572,50 @@ function DashboardPropietarioInner() {
                   </select>
                 </div>
                 <div>
+                  <label className="text-xs font-medium text-ink/60 block mb-1">Tipo de combustible</label>
+                  <select className="w-full border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40"
+                    value={editForm.combustible}
+                    onChange={e => {
+                      const valor = e.target.value;
+                      // Mismo reseteo que en el formulario de publicar (ver arriba).
+                      setEditForm(ef => ({
+                        ...ef, combustible: valor,
+                        exencion_pico_placa_inscrita: requiereInscripcionExencion(valor) ? ef.exencion_pico_placa_inscrita : false,
+                      }));
+                    }}>
+                    <option value="">Sin especificar</option>
+                    {COMBUSTIBLES_OPCIONES.map(([val, label]) => (
+                      <option key={val} value={val}>{label}</option>
+                    ))}
+                  </select>
+                  {editForm.combustible === 'electrico' && (
+                    <p className="text-[11px] text-success mt-1">✓ Exento de pico y placa en Medellín (automático, no requiere trámite).</p>
+                  )}
+                  {requiereInscripcionExencion(editForm.combustible) && (
+                    <div className="mt-2 rounded-xl border border-border bg-surface-2 p-2.5">
+                      <label className="flex items-start gap-2 cursor-pointer">
+                        <input type="checkbox" className="mt-0.5 accent-accent"
+                          checked={editForm.exencion_pico_placa_inscrita}
+                          onChange={e => setEditForm(ef => ({ ...ef, exencion_pico_placa_inscrita: e.target.checked }))} />
+                        <span className="text-[11px] text-ink leading-relaxed">
+                          Ya inscribí la exención de pico y placa ante la Secretaría de Movilidad de Medellín.
+                        </span>
+                      </label>
+                      <p className="text-[11px] text-ink/45 mt-1.5 leading-relaxed">
+                        Los {editForm.combustible === 'gas' ? 'vehículos a gas natural (GNV)' : 'híbridos'} están exentos,
+                        pero la exención NO es automática: sin ese trámite tu vehículo sigue con pico y placa.
+                      </p>
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-ink/60 block mb-1">Clase de vehículo</label>
+                  <input type="text" maxLength={40} placeholder="Como aparece en la matrícula"
+                    className="w-full border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40"
+                    value={editForm.clase_vehiculo} onChange={e => setEditForm(ef => ({ ...ef, clase_vehiculo: e.target.value }))} />
+                  <p className="text-[11px] text-ink/45 mt-1">La &quot;clase&quot; impresa en tu tarjeta de propiedad (ej. Automóvil, Campero).</p>
+                </div>
+                <div>
                   <label className="text-xs font-medium text-ink/60 block mb-1">Valor comercial (COP)</label>
                   <input type="text" inputMode="numeric" placeholder="0"
                     className="w-full border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40"
@@ -1502,6 +1658,8 @@ function DashboardPropietarioInner() {
                     anio: Number(editForm.anio), tipo: editForm.tipo,
                     valor_comercial: Number(editForm.valor_comercial) || 0,
                     descripcion: editForm.descripcion, placa: editForm.placa,
+                    combustible: editForm.combustible, clase_vehiculo: editForm.clase_vehiculo,
+                    exencion_pico_placa_inscrita: editForm.exencion_pico_placa_inscrita,
                   })}
                   disabled={guardandoSeccion.basico}
                   className="flex items-center gap-2 bg-accent hover:bg-accent-hover text-white text-sm font-bold px-4 py-2 rounded-xl transition disabled:opacity-60">
@@ -1570,6 +1728,11 @@ function DashboardPropietarioInner() {
               <div className="mb-3">
                 <DisponibilidadReglas dias={editDias} />
               </div>
+              {/* `placa`, `combustible` y `exencionInscrita` salen del estado LOCAL del formulario:
+                  el calendario funciona como vista previa en vivo de lo que estás a punto de
+                  guardar. `placa` ya se comportaba así antes de estos campos; se mantiene el
+                  mismo criterio para los tres para no dejar la vista a medias (media preview,
+                  media BD). */}
               <CalendarioDisponibilidad
                 value={editDias}
                 onChange={async (dias) => {
@@ -1580,6 +1743,8 @@ function DashboardPropietarioInner() {
                   if (!ok) setEditDias(anterior);
                 }}
                 placa={editForm.placa}
+                combustible={editForm.combustible}
+                exencionInscrita={editForm.exencion_pico_placa_inscrita}
                 reservedDates={reservasDatesVehiculo(vehiculoEditandoId!)}
               />
               {seccionMsg.dias && (
@@ -1735,40 +1900,10 @@ function DashboardPropietarioInner() {
                   })()}
                 </div>
 
-                {/* Todo riesgo */}
-                <div className="bg-surface rounded-xl p-3 border border-border space-y-2">
-                  <div className="flex items-center justify-between">
-                    <p className="text-xs font-semibold text-ink">Seguro todo riesgo (opcional)</p>
-                    {fDet.todo_riesgo && (fDet.todo_riesgo as { url?: string }).url && <span className="text-[10px] text-success font-bold">✓ Subido</span>}
-                  </div>
-                  <DocUpload label="Póliza todo riesgo (opcional)" value={editDocs.todo_riesgo?.url || ''} onChange={url => setEditDocs(d => ({ ...d, todo_riesgo: { ...d.todo_riesgo, url } }))} />
-                  {(fDet.todo_riesgo as { url?: string } | undefined)?.url && (
-                    <a href={urlDescarga((fDet.todo_riesgo as { url?: string }).url as string)} download
-                      className="flex items-center gap-1 text-[11px] font-medium text-ink/50 hover:text-accent transition">
-                      <IconExport size={11} /> Descargar
-                    </a>
-                  )}
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="text-[11px] text-ink/50 block mb-1">Aseguradora</label>
-                      <input type="text" placeholder="Ej: Sura" value={editDocs.todo_riesgo?.aseguradora || ''}
-                        onChange={e => setEditDocs(d => ({ ...d, todo_riesgo: { ...d.todo_riesgo, url: d.todo_riesgo?.url || '', aseguradora: e.target.value } }))}
-                        className="w-full border border-border rounded-lg px-2 py-1.5 text-xs text-ink bg-surface-2 focus:outline-none focus:ring-1 focus:ring-accent/40" />
-                    </div>
-                    <div>
-                      <label className="text-[11px] text-ink/50 block mb-1">N° Póliza</label>
-                      <input type="text" placeholder="Número" value={editDocs.todo_riesgo?.poliza || ''}
-                        onChange={e => setEditDocs(d => ({ ...d, todo_riesgo: { ...d.todo_riesgo, url: d.todo_riesgo?.url || '', poliza: e.target.value } }))}
-                        className="w-full border border-border rounded-lg px-2 py-1.5 text-xs text-ink bg-surface-2 focus:outline-none focus:ring-1 focus:ring-accent/40" />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="text-[11px] text-ink/50 block mb-1">Vencimiento</label>
-                    <input type="date" value={editDocs.todo_riesgo?.vence || ''}
-                      onChange={e => setEditDocs(d => ({ ...d, todo_riesgo: { ...d.todo_riesgo, url: d.todo_riesgo?.url || '', vence: e.target.value } }))}
-                      className="w-full border border-border rounded-lg px-2 py-1.5 text-xs text-ink bg-surface-2 focus:outline-none focus:ring-1 focus:ring-accent/40" />
-                  </div>
-                </div>
+                {/* Seguro todo riesgo: bloque retirado en sep-2026 — DrivePass expide la póliza
+                    directamente, así que ya no se le pide al propietario. Los vehículos que ya
+                    la habían subido conservan `documentos.todo_riesgo` en la base y su archivo;
+                    `editDocs` lo arrastra intacto al guardar (ver el tipo `Documentos` arriba). */}
               </div>
 
               <div className="flex items-center gap-3 mt-4">

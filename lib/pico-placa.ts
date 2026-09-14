@@ -1,4 +1,6 @@
 // Pico y placa (restricción vehicular de Medellín por último dígito de placa).
+import { exentoPicoPlaca, type DatosExencion } from './vehiculo-campos';
+
 export type PicoPlaca = {
   activo: boolean;
   vigencia: string;
@@ -32,8 +34,23 @@ export function ultimoDigitoPlaca(placa: string): number | null {
   return parseInt(digits[digits.length - 1]);
 }
 
-export function placaRestringida(pp: PicoPlaca, placa: string, fecha: Date): boolean {
+/**
+ * Punto ÚNICO de decisión de "¿este vehículo tiene pico y placa este día?".
+ *
+ * `exencion` es opcional a propósito (no rompe llamadores viejos): si no se pasa, o si
+ * llega vacío/desconocido — el caso de todos los vehículos anteriores a las columnas
+ * `combustible` / `exencion_pico_placa_inscrita` — el resultado es exactamente el de
+ * siempre. Solo devuelve false por exención cuando el vehículo realmente lo está en
+ * Medellín: eléctrico (automático) o híbrido/GNV CON la inscripción confirmada ante la
+ * Secretaría de Movilidad (ver exentoPicoPlaca en lib/vehiculo-campos.ts). Marcar como
+ * exento a un híbrido sin el trámite sería información falsa que termina en comparendo.
+ *
+ * Va como objeto `{ combustible, inscrita }` y no como dos parámetros sueltos: son 5 los
+ * llamadores y la firma ya iba por el cuarto argumento posicional.
+ */
+export function placaRestringida(pp: PicoPlaca, placa: string, fecha: Date, exencion?: DatosExencion | null): boolean {
   if (!pp.activo) return false;
+  if (exentoPicoPlaca(exencion)) return false;
   const diaStr = String(fecha.getDay()); // 0=domingo, 1=lunes, ..., 6=sábado
   const digito = ultimoDigitoPlaca(placa);
   if (digito === null) return false;

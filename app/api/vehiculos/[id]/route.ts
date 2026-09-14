@@ -8,24 +8,31 @@ import { registrarAuditoria } from '@/lib/permisos';
 import { contieneLenguajeInapropiado, extraerUrlsFotos, fotosRegistradasEntre, normalizarUrlFoto } from '@/lib/moderacion';
 import { documentosConUrlsValidas } from '@/lib/storage';
 import { tecnoRequerida } from '@/lib/tecnomecanica';
+import { esCombustibleValido, inscripcionExencionConfirmada, requiereInscripcionExencion, sanitizarClaseVehiculo } from '@/lib/vehiculo-campos';
 
-const DOC_KEYS = ['soat', 'tecno', 'tarjeta', 'todo_riesgo'] as const;
+// Documentos que hoy se le piden al propietario. `todo_riesgo` YA NO está en la lista
+// (sep-2026): DrivePass expide la póliza directamente, así que dejó de pedirse, mostrarse
+// y revisarse. Los vehículos que ya la habían subido CONSERVAN su `documentos.todo_riesgo`
+// en la BD y su archivo en Cloudinary — esta lista solo controla qué se pide/etiqueta/revisa,
+// nunca borra claves del JSON. Eso lo garantiza el PUT de más abajo, que re-inyecta
+// explícitamente toda clave presente en la BD y ausente del body (ver "Preservación de claves
+// legadas de `documentos`"); no depende de que el cliente reenvíe el JSON completo.
+const DOC_KEYS = ['soat', 'tecno', 'tarjeta'] as const;
 const DOC_LABELS: Record<string, string> = {
   soat: 'SOAT', tecno: 'Tecno-mecánica',
-  tarjeta: 'Tarjeta de propiedad', todo_riesgo: 'Seguro todo riesgo',
+  tarjeta: 'Tarjeta de propiedad',
 };
 
 type DocRevision = { estado: string; nota: string };
 type VehicleRow = { documentos: string; documentos_revisiones: string; propietario_id: number; marca: string; modelo: string; anio: number; placa?: string; disponible: number };
 
 // `anio` (año-modelo, aproximación de la fecha de matrícula) decide si `tecno` cuenta dentro
-// del estado agregado — ver lib/tecnomecanica.ts (Ley 2294 de 2023). `todo_riesgo` es un
-// seguro opcional: nunca debe poder bloquear ni denegar el estado agregado, esté subido o no.
+// del estado agregado — ver lib/tecnomecanica.ts (Ley 2294 de 2023).
 //
 // Compartida entre `computeEstado` (estado agregado) y la nota de rechazo que arma el admin
 // en `revisar_documento` más abajo — mismo criterio en ambos lugares (antes solo lo aplicaba
 // `computeEstado`; la nota seguía mencionando "denegado" para una clave irrelevante para ESE
-// vehículo, ej. tecno exenta o todo_riesgo, lo cual confundía al propietario sin bloquear
+// vehículo, ej. una tecno exenta, lo cual confundía al propietario sin bloquear
 // realmente la publicación).
 function clavesRelevantes(anio: number | null | undefined): (typeof DOC_KEYS)[number][] {
   const claves: (typeof DOC_KEYS)[number][] = ['soat', 'tarjeta'];
@@ -173,6 +180,41 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     body.anio = anioNum;
   }
 
+  // ── `combustible` / `clase_vehiculo` (campos de la matrícula, ver lib/vehiculo-campos.ts) ──
+  // `combustible` es una lista cerrada, no texto libre: además de describir el vehículo,
+  // decide (junto con `exencion_pico_placa_inscrita`) la exención de pico y placa
+  // (lib/pico-placa.ts), así que un valor inventado desde el cliente podría hacerle creer a un
+  // arrendatario que su carro no tiene restricción. Se rechaza explícito (mismo criterio que `anio` arriba) en vez de
+  // normalizar en silencio. Vacío = "no declarado", que es el estado de todos los vehículos
+  // anteriores a esta columna y sigue siendo válido.
+  if (body.combustible !== undefined) {
+    if (body.combustible === null || body.combustible === '') {
+      body.combustible = '';
+    } else if (!esCombustibleValido(body.combustible)) {
+      return NextResponse.json({ error: 'Tipo de combustible inválido.' }, { status: 400 });
+    }
+  }
+  // `clase_vehiculo` sí es texto transcrito de la matrícula (el RUNT usa variantes), así que
+  // no hay lista cerrada — solo se recorta para no guardar un texto arbitrariamente largo.
+  if (body.clase_vehiculo !== undefined) {
+    body.clase_vehiculo = sanitizarClaseVehiculo(body.clase_vehiculo);
+  }
+
+  // `exencion_pico_placa_inscrita`: el propietario confirma que inscribió la exención de pico
+  // y placa ante la Secretaría de Movilidad de Medellín. Solo tiene sentido para híbridos y
+  // gas (GNV) — la de los eléctricos es automática y el resto no es exento —, así que el
+  // servidor la DERIVA en vez de confiar en el cliente: si el combustible efectivo no requiere
+  // el trámite, se fuerza a 0. Eso implementa también el reseteo al cambiar de combustible
+  // (cambiar un híbrido inscrito a gasolina apaga el flag solo, aunque el body no lo mande).
+  // Se guarda como INTEGER 0/1 y nunca como booleano crudo: better-sqlite3 no acepta booleans.
+  if (body.exencion_pico_placa_inscrita !== undefined || body.combustible !== undefined) {
+    const combustibleEfectivo = body.combustible !== undefined ? body.combustible : vehiculo.combustible;
+    const confirmada = body.exencion_pico_placa_inscrita !== undefined
+      ? inscripcionExencionConfirmada(body.exencion_pico_placa_inscrita)
+      : inscripcionExencionConfirmada(vehiculo.exencion_pico_placa_inscrita);
+    body.exencion_pico_placa_inscrita = requiereInscripcionExencion(combustibleEfectivo) && confirmada ? 1 : 0;
+  }
+
   // ── Admin: review individual document ──
   if (isAdmin && body.revisar_documento) {
     const { key, estado, nota } = body.revisar_documento as { key: string; estado: string; nota: string };
@@ -188,8 +230,8 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     revs[key] = { estado, nota: nota || '' };
     const newEstado = computeEstado(docs, revs, row.anio);
     // Solo se listan en la nota las claves relevantes para ESTE vehículo (mismo criterio que
-    // `computeEstado`, ver `clavesRelevantes`) — así un rechazo de `todo_riesgo` (opcional) o
-    // de `tecno` en un vehículo exento no aparece en la nota como si bloqueara la publicación.
+    // `computeEstado`, ver `clavesRelevantes`) — así un rechazo de `tecno` en un vehículo
+    // exento no aparece en la nota como si bloqueara la publicación.
     const clavesRel = clavesRelevantes(row.anio);
     const newNota = DOC_KEYS
       .filter(k => clavesRel.includes(k) && revs[k]?.estado === 'denegado')
@@ -208,7 +250,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       .run(JSON.stringify(revs), newEstado, newNota, nuevoDisponible, Number(id));
 
     // Nota de diseño: esta notificación individual se dispara igual aunque `key` no sea
-    // relevante para este vehículo (tecno exenta, o todo_riesgo). A diferencia de
+    // relevante para este vehículo (tecno exenta, o una clave legada como todo_riesgo). A diferencia de
     // `documentos_nota`/`documentos_estado` (que sí excluyen claves irrelevantes, ver
     // `clavesRelevantes` arriba, porque esos SÍ deciden si el vehículo puede publicarse), esta
     // notificación es un mensaje 1-a-1 sobre el documento puntual que el admin acaba de
@@ -297,7 +339,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   // LA DEFENSA: cualquier cambio de `anio` en este PUT (`body.anio` distinto al valor actual
   // en BD) borra `revs.tecno` (si existía, aprobado o denegado — su vigencia dependía de la
   // edad declarada anterior, que acaba de cambiar) y recalcula `documentos_estado` y
-  // `disponible` con el año NUEVO. SOAT/tarjeta/todo_riesgo no dependen de la edad del
+  // `disponible` con el año NUEVO. SOAT/tarjeta no dependen de la edad del
   // vehículo, así que no se tocan. Esto cierra el hueco retroactivo (revertir el año vuelve a
   // apagar `disponible` si ya no cumple) sin necesitar validar `anio` contra un documento
   // real (limitación conocida y fuera del alcance de este fix — ver lib/tecnomecanica.ts).
@@ -353,11 +395,47 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     }
   }
 
+  // ── Preservación de claves legadas de `documentos` ──
+  // El formulario del propietario ya no muestra `todo_riesgo` (sep-2026: DrivePass expide la
+  // póliza), pero los vehículos que la subieron CONSERVAN esa clave en la BD y nadie debe
+  // borrarla. Hasta ahora eso dependía de que el cliente reenviara el JSON completo tal como
+  // lo cargó — un passthrough frágil que TypeScript ya no vigila (la clave salió del tipo
+  // `Documentos`). Acá se vuelve estructural: cualquier clave que esté en la BD y NO venga en
+  // el body se re-inyecta antes de escribir. Ningún flujo de la app borra claves de
+  // `documentos` (el formulario siempre reenvía las que conoce, y el admin solo escribe
+  // `documentos_revisiones`), así que esto no bloquea nada real.
+  if (traeDocumentosNuevos) {
+    let docsBody: unknown = null;
+    let docsBD: Record<string, unknown> = {};
+    try { docsBody = JSON.parse(String(body.documentos ?? '{}')); } catch { docsBody = null; }
+    try { docsBD = JSON.parse(String(vehiculo.documentos ?? '{}')) as Record<string, unknown>; } catch { /* JSON corrupto en BD: no hay nada que preservar */ }
+    if (docsBody && typeof docsBody === 'object' && docsBD && typeof docsBD === 'object') {
+      const destino = docsBody as Record<string, unknown>;
+      let agregadas = false;
+      for (const [clave, valor] of Object.entries(docsBD)) {
+        if (Object.hasOwn(destino, clave)) continue;
+        // `defineProperty` y no `destino[clave] = valor`: una clave `__proto__` guardada en el
+        // JSON dispararía el setter de Object.prototype (cambiaría el prototipo del objeto en
+        // vez de agregar la clave). Definirla como propiedad propia hace lo que se espera.
+        Object.defineProperty(destino, clave, { value: valor, writable: true, enumerable: true, configurable: true });
+        agregadas = true;
+      }
+      if (agregadas) body.documentos = JSON.stringify(destino);
+    }
+  }
+
   // ── Validación de URLs de documentos (Punto 3) ──
   // `documentos` debe contener SOLO URLs que realmente vengan de nuestro storage
   // (Cloudinary vía uploadFile(), ver lib/storage.ts) — nunca un string arbitrario que el
   // cliente se haya inventado (que jamás pasó por revisión ni existe de verdad).
-  if (traeDocumentosNuevos && !documentosConUrlsValidas(body.documentos)) {
+  //
+  // Se valida solo lo que CAMBIA: las URLs que YA están guardadas en este vehículo pasan sin
+  // re-chequeo (mismo criterio que la allow-list de fotos más abajo). Si no, un documento
+  // legado con URL anterior a Cloudinary (`/uploads/...`) — típicamente `todo_riesgo`, que ya
+  // no se puede re-subir desde el formulario — dejaba la sección Documentos imposible de
+  // guardar para siempre. La lista de exentas sale de la BD, no del body, así que una URL
+  // NUEVA de dominio ajeno se sigue rechazando igual que antes.
+  if (traeDocumentosNuevos && !documentosConUrlsValidas(body.documentos, String(vehiculo.documentos ?? ''))) {
     return NextResponse.json({ error: 'Documento inválido, vuelve a subirlo' }, { status: 400 });
   }
 
@@ -373,7 +451,8 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   // `precio_dia` NO se actualiza por el loop genérico: lo controla la lógica de precio automático
   // más abajo (recalcula desde categoría + valor comercial) o el override manual del admin.
   const ownFields = ['marca', 'modelo', 'anio', 'tipo', 'ubicacion', 'valor_comercial', 'precio_ajuste_pct',
-    'descripcion', 'disponible', 'dias_disponibles', 'fotos_detalle', 'fotos', 'placa', 'documentos'];
+    'descripcion', 'disponible', 'dias_disponibles', 'fotos_detalle', 'fotos', 'placa', 'documentos',
+    'combustible', 'clase_vehiculo', 'exencion_pico_placa_inscrita'];
   // `archivado`: solo el admin lo toca (ni siquiera el propietario dueño), y solo para
   // DESARCHIVAR (0) — la vía normal para ENTRAR a archivado es DELETE (eliminar inteligente,
   // ver más abajo), que decide solo cuándo corresponde según el historial real del vehículo.

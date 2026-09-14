@@ -31,11 +31,13 @@ type Usuario = {
   cedula_url?: string; cedula_url_dorso?: string;
 };
 type DocItem = { url: string; vence?: string };
+// `todo_riesgo` ya no aparece acá (sep-2026): DrivePass expide la póliza directamente, así
+// que dejó de pedirse y de revisarse. Los vehículos que ya la tenían conservan la clave en
+// `documentos` en la BD (nadie la borra), simplemente ya no se muestra en este panel.
 type Documentos = {
   soat?: DocItem;
   tecno?: DocItem;
   tarjeta?: { url: string; url_dorso?: string };
-  todo_riesgo?: { url: string; aseguradora?: string; poliza?: string; vence?: string };
 };
 
 type DocRevision = { estado: string; nota: string };
@@ -44,6 +46,7 @@ type Vehiculo = {
   id: number; marca: string; modelo: string; anio: number; tipo: string;
   precio_dia: number; propietario_id: number; propietario_nombre: string; disponible: number;
   fotos: string; fotos_detalle: string; placa?: string; documentos?: string;
+  combustible?: string; clase_vehiculo?: string; exencion_pico_placa_inscrita?: number;
   documentos_estado?: string; documentos_nota?: string; documentos_revisiones?: string;
   en_vitrina?: number; archivado?: number;
   contenido_revision?: number; contenido_revision_motivo?: string;
@@ -67,10 +70,10 @@ const FOTOS_LABELS: Record<string, string> = {
   cojineria: 'Cojinería', baul: 'Baúl', tablero: 'Tablero',
 };
 
-const DOC_KEYS = ['soat', 'tecno', 'tarjeta', 'todo_riesgo'] as const;
+const DOC_KEYS = ['soat', 'tecno', 'tarjeta'] as const;
 const DOC_LABELS: Record<string, string> = {
   soat: 'SOAT', tecno: 'Tecno-mecánica',
-  tarjeta: 'Tarjeta de propiedad', todo_riesgo: 'Seguro todo riesgo',
+  tarjeta: 'Tarjeta de propiedad',
 };
 
 function calcularEdad(fechaNac: string) {
@@ -1324,7 +1327,11 @@ function DashboardAdminInner() {
             try { portada = (JSON.parse(v.fotos) as string[])[0] || ''; } catch { portada = ''; }
             const sinPrecioV = !v.precio_dia || v.precio_dia === 0;
             const editandoPrecio = (vid: number) => vid in precioEdit;
-            const enPP = placaRestringida(picoPlaca, v.placa ?? '', new Date());
+            // La exención entra en la decisión: los eléctricos (y los híbridos/GNV que ya
+            // inscribieron el trámite ante la Secretaría de Movilidad) están exentos en
+            // Medellín (ver lib/pico-placa.ts), así que no se les pinta el borde rojo ni el badge.
+            const enPP = placaRestringida(picoPlaca, v.placa ?? '', new Date(),
+              { combustible: v.combustible, inscrita: v.exencion_pico_placa_inscrita });
             const leftBorder = enPP ? 'border-danger' : sinPrecioV ? 'border-accent' : 'border-transparent';
             // `disponible=0` ya se explica visualmente cuando hay un badge de documentos_estado
             // "en revisión" o "denegado" (ver más abajo). Pero también puede estar en 0 sin
@@ -2002,11 +2009,10 @@ function DashboardAdminInner() {
         let docs: Documentos = {};
         try { docs = JSON.parse(v.documentos || '{}'); } catch { docs = {}; }
 
-        const docItems: { key: string; label: string; data: DocItem | { url: string } | { url: string; aseguradora?: string; poliza?: string; vence?: string } | undefined }[] = [
+        const docItems: { key: string; label: string; data: DocItem | { url: string } | undefined }[] = [
           { key: 'soat',       label: 'SOAT',                  data: docs.soat },
           { key: 'tecno',      label: 'Tecno-mecánica',         data: docs.tecno },
           { key: 'tarjeta',    label: 'Tarjeta de propiedad',   data: docs.tarjeta },
-          { key: 'todo_riesgo',label: 'Seguro todo riesgo',     data: docs.todo_riesgo },
         ];
 
         const tieneDocs = docItems.some(d => d.data && 'url' in d.data && d.data.url);
@@ -2059,7 +2065,7 @@ function DashboardAdminInner() {
                         ? <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Analizando documentos…</>
                         : <><IconShield size={16} /> Verificar con IA</>}
                     </button>
-                    <span className="text-xs text-ink/50">Lee SOAT, tecno, tarjeta y seguro; valida fechas, placa y propietario.</span>
+                    <span className="text-xs text-ink/50">Lee SOAT, tecno y tarjeta de propiedad; valida fechas, placa y propietario.</span>
                   </div>
 
                   {iaError && (
@@ -2164,8 +2170,6 @@ function DashboardAdminInner() {
                           <p className="text-[11px] text-warning mb-2">⚠ Falta el dorso.</p>
                         )}
                         {'vence' in data && data.vence && <p className="text-[11px] text-ink/50 mb-1">Vence: {(data as { vence?: string }).vence}</p>}
-                        {'aseguradora' in data && (data as { aseguradora?: string }).aseguradora && <p className="text-[11px] text-ink/60">Aseg: {(data as { aseguradora?: string }).aseguradora}</p>}
-                        {'poliza' in data && (data as { poliza?: string }).poliza && <p className="text-[11px] text-ink/60">Póliza: {(data as { poliza?: string }).poliza}</p>}
 
                         {/* Denial note */}
                         {rev.estado === 'denegado' && rev.nota && (
@@ -2308,12 +2312,23 @@ function DashboardAdminInner() {
                   </div>
                 </div>
 
-                {/* Sección: Licencia */}
-                <p className="text-[10px] font-bold text-ink/50 uppercase tracking-widest pt-1">Licencia de conducción</p>
-                <div className="bg-surface rounded-xl p-3 border border-border">
-                  <p className="text-[10px] text-ink/50 uppercase tracking-wide mb-0.5">Número de licencia</p>
-                  <p className="text-sm font-semibold text-ink font-mono">{u.numero_licencia || '—'}</p>
-                </div>
+                {/* Sección: Licencia — solo para quien la necesita.
+                    `usuarios.numero_licencia` es UNA sola columna compartida: es obligatoria
+                    para el arrendatario (rol 'usuario') y desde sep-2026 ya no se le pide al
+                    propietario en el registro, así que a un propietario le llegaría siempre
+                    vacía y mostrar la sección solo confundía. Se sigue mostrando si el dato
+                    existe (cuentas viejas de propietario que alcanzaron a llenarlo). La
+                    columna NO se tocó: la usa la verificación con IA de los documentos del
+                    arrendatario (ver app/api/verificar-documentos/route.ts). */}
+                {(u.rol !== 'propietario' || !!u.numero_licencia) && (
+                  <>
+                    <p className="text-[10px] font-bold text-ink/50 uppercase tracking-widest pt-1">Licencia de conducción</p>
+                    <div className="bg-surface rounded-xl p-3 border border-border">
+                      <p className="text-[10px] text-ink/50 uppercase tracking-wide mb-0.5">Número de licencia</p>
+                      <p className="text-sm font-semibold text-ink font-mono">{u.numero_licencia || '—'}</p>
+                    </div>
+                  </>
+                )}
 
                 {/* Sección: Dirección */}
                 <p className="text-[10px] font-bold text-ink/50 uppercase tracking-widest pt-1">Dirección</p>

@@ -31,7 +31,7 @@ const T = {
     reqTitle: 'Requisitos del vehículo',
     reqs: [
       'Modelo 2018 o más reciente',
-      'Seguro todo riesgo vigente',
+      'Póliza de seguro expedida por DrivePass (no necesitas aportar la tuya)',
       'SOAT y revisión técnico-mecánica al día',
       'GPS activo o disponibilidad para instalarlo',
       'Buen estado mecánico y estético',
@@ -76,7 +76,7 @@ const T = {
     reqTitle: 'Vehicle requirements',
     reqs: [
       '2018 model or newer',
-      'Active comprehensive insurance',
+      'Insurance policy issued by DrivePass (you do not need to provide your own)',
       'Up-to-date SOAT and technical-mechanical inspection',
       'Active GPS or availability to install one',
       'Good mechanical and aesthetic condition',

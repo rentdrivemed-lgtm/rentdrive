@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { IconArrowL, IconArrowR } from '@/components/Icons';
 import { DIAS_SEMANA, fechaISOLocal as isoDate, picoPlacaVacio, placaRestringida, ultimoDigitoPlaca, type PicoPlaca } from '@/lib/pico-placa';
+import { exentoPicoPlaca, motivoExencion } from '@/lib/vehiculo-campos';
 import { useLang } from '@/contexts/LanguageContext';
 
 // Nombres de días en inglés, en el mismo orden/índices que DIAS_SEMANA (id '1'..'5' = Lun..Vie).
@@ -13,6 +14,18 @@ type Props = {
   /** Días ya ocupados por reservas activas (no seleccionables). */
   reservedDates?: string[];
   placa?: string;
+  /**
+   * Combustible del vehículo (ver lib/vehiculo-campos.ts). Junto con `exencionInscrita`
+   * decide si el vehículo está exento de pico y placa en Medellín: si lo está, no se le
+   * marca ningún día ni se le muestra el aviso de restricción.
+   */
+  combustible?: string;
+  /**
+   * `vehiculos.exencion_pico_placa_inscrita` (0/1 desde la BD): el propietario confirmó que
+   * inscribió la exención ante la Secretaría de Movilidad de Medellín. Los híbridos y los de
+   * gas (GNV) solo están exentos CON ese trámite; los eléctricos lo están sin él.
+   */
+  exencionInscrita?: boolean | number;
   /** Rango seleccionado (ISO YYYY-MM-DD). fin = día de devolución. */
   inicio: string;
   fin: string;
@@ -31,6 +44,8 @@ const T = {
     tocaRecogida: 'Toca el día de recogida.', tocaDevolucion: 'Ahora toca el día de devolución.', rangoOk: 'Rango seleccionado ✓',
     leyendaSel: 'Selección', leyendaDisp: 'Disponible', leyendaOcup: 'Ocupado', leyendaPico: 'Pico y placa',
     placaTermina: 'Placa termina en', picoPlacaDia: 'pico y placa:', sinRestriccion: 'sin restricción de pico y placa',
+    exento: 'exento de pico y placa por ser',
+    motivoExento: { electrico: 'eléctrico', hibrido: 'híbrido', gas: 'a gas natural (GNV)' } as Record<string, string>,
   },
   en: {
     dias: ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'], locale: 'en-US',
@@ -41,11 +56,13 @@ const T = {
     tocaRecogida: 'Tap the pickup day.', tocaDevolucion: 'Now tap the return day.', rangoOk: 'Range selected ✓',
     leyendaSel: 'Selected', leyendaDisp: 'Available', leyendaOcup: 'Booked', leyendaPico: 'Plate restriction',
     placaTermina: 'Plate ends in', picoPlacaDia: 'restricted day:', sinRestriccion: 'no plate restriction',
+    exento: 'exempt from the plate restriction — it is',
+    motivoExento: { electrico: 'electric', hibrido: 'hybrid', gas: 'natural gas (CNG) powered' } as Record<string, string>,
   },
 };
 
 export default function CalendarioReserva({
-  availableDates, reservedDates, placa, inicio, fin, onChange, disabled,
+  availableDates, reservedDates, placa, combustible, exencionInscrita, inicio, fin, onChange, disabled,
 }: Props) {
   const { lang } = useLang();
   const c = T[lang];
@@ -72,9 +89,14 @@ export default function CalendarioReserva({
   // Último dígito de la placa y, bajo la config vigente, el/los día(s) de la semana en
   // que está restringido (vacío si pico y placa está desactivado o no aplica al dígito).
   const digitoPlaca = placa ? ultimoDigitoPlaca(placa) : null;
-  const diasRestriccionPlaca = digitoPlaca !== null && pp.activo
+  // Exento en Medellín (eléctrico siempre; híbrido/GNV solo con la inscripción confirmada
+  // ante la Secretaría de Movilidad) — ni días marcados ni lista de días.
+  const exencion = { combustible, inscrita: exencionInscrita };
+  const exento = exentoPicoPlaca(exencion);
+  const diasRestriccionPlaca = digitoPlaca !== null && pp.activo && !exento
     ? DIAS_SEMANA.filter(d => (pp.dias[d.id] ?? []).includes(digitoPlaca)).map(d => (lang === 'en' ? DIA_NOMBRE_EN[d.id] : d.nombre))
     : [];
+  const etiquetaExento = c.motivoExento[motivoExencion(exencion) ?? ''] ?? '';
 
   const seleccionable = (fecha: Date, str: string) => {
     if (disabled) return false;
@@ -120,7 +142,7 @@ export default function CalendarioReserva({
     if (placa) {
       for (let i = 1; i <= totalDias; i++) {
         const d = new Date(año, mes, i);
-        if (placaRestringida(pp, placa, d)) picoSet.add(isoDate(d));
+        if (placaRestringida(pp, placa, d, exencion)) picoSet.add(isoDate(d));
       }
     }
     const celdas: (Date | null)[] = [
@@ -186,7 +208,9 @@ export default function CalendarioReserva({
       {placa && digitoPlaca !== null && (
         <p className="text-xs text-ink/60 mb-2">
           {c.placaTermina} <span className="font-semibold text-ink">{digitoPlaca}</span>
-          {diasRestriccionPlaca.length > 0
+          {exento
+            ? <> — <span className="font-semibold text-success">{c.exento} {etiquetaExento}</span></>
+            : diasRestriccionPlaca.length > 0
             ? <> — {c.picoPlacaDia} <span className="font-semibold text-accent">{diasRestriccionPlaca.join(lang === 'en' ? ' and ' : ' y ')}</span></>
             : <> — {c.sinRestriccion}</>}
         </p>
@@ -218,7 +242,7 @@ export default function CalendarioReserva({
         <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-accent inline-block" /> {c.leyendaSel}</span>
         <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded ring-1 ring-success/40 inline-block" /> {c.leyendaDisp}</span>
         <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-danger/15 border border-danger/30 inline-block" /> {c.leyendaOcup}</span>
-        {placa && <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded relative inline-block"><span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-accent" /></span> {c.leyendaPico}</span>}
+        {placa && !exento && <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded relative inline-block"><span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-accent" /></span> {c.leyendaPico}</span>}
       </div>
     </div>
   );

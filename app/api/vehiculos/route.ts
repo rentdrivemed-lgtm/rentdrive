@@ -9,6 +9,7 @@ import { perfilIncompleto, CODIGO_PERFIL_INCOMPLETO } from '@/lib/perfil';
 import { correoNoVerificado, CODIGO_CORREO_NO_VERIFICADO } from '@/lib/verificacion-correo';
 import { contieneLenguajeInapropiado, extraerUrlsFotos, fotosRegistradasEntre, normalizarUrlFoto } from '@/lib/moderacion';
 import { documentosConUrlsValidas } from '@/lib/storage';
+import { esCombustibleValido, inscripcionExencionConfirmada, requiereInscripcionExencion, sanitizarClaseVehiculo } from '@/lib/vehiculo-campos';
 
 function datesInRange(start: string, end: string): string[] {
   const dates: string[] = [];
@@ -190,11 +191,31 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json();
   const { marca, modelo, anio, tipo, ubicacion, valor_comercial, precio_ajuste_pct, descripcion,
-          fotos, fotos_detalle, dias_disponibles, placa, documentos } = body;
+          fotos, fotos_detalle, dias_disponibles, placa, documentos, combustible, clase_vehiculo,
+          exencion_pico_placa_inscrita } = body;
 
   if (!marca || !modelo || !anio) {
     return NextResponse.json({ error: 'Faltan datos requeridos' }, { status: 400 });
   }
+
+  // `combustible` es una lista cerrada (ver lib/vehiculo-campos.ts), no texto libre: además
+  // de describir el vehículo, decide —junto con `exencion_pico_placa_inscrita`— la exención de
+  // pico y placa (lib/pico-placa.ts), así que un valor inventado desde el cliente podría
+  // hacerle creer a un arrendatario que su carro no tiene restricción. Vacío/ausente = "no declarado" (el
+  // estado de todos los vehículos anteriores a esta columna) y es perfectamente válido.
+  if (combustible !== undefined && combustible !== null && combustible !== '' && !esCombustibleValido(combustible)) {
+    return NextResponse.json({ error: 'Tipo de combustible inválido.' }, { status: 400 });
+  }
+  const combustibleFinal = esCombustibleValido(combustible) ? combustible : '';
+  // `clase_vehiculo` sí es texto transcrito de la matrícula (el RUNT usa variantes), así que
+  // no hay lista cerrada — solo se recorta para que no entre un texto arbitrariamente largo.
+  const claseVehiculoFinal = sanitizarClaseVehiculo(clase_vehiculo);
+  // `exencion_pico_placa_inscrita`: confirmación de que el propietario inscribió la exención
+  // ante la Secretaría de Movilidad de Medellín. La derivamos del combustible ya validado en
+  // vez de confiar en el cliente — solo híbridos y gas (GNV) la necesitan; en los eléctricos
+  // la exención es automática y en el resto no existe. Se guarda como INTEGER 0/1.
+  const exencionInscritaFinal = requiereInscripcionExencion(combustibleFinal)
+    && inscripcionExencionConfirmada(exencion_pico_placa_inscrita) ? 1 : 0;
 
   // Filtro de lenguaje inapropiado en la descripción (texto libre público). Se rechaza el
   // request de una — más simple y mejor UX que mandarlo a revisión manual silenciosa (a
@@ -267,8 +288,9 @@ export async function POST(req: NextRequest) {
     INSERT INTO vehiculos
       (propietario_id, marca, modelo, anio, tipo, ubicacion, precio_dia, descripcion,
        fotos, fotos_detalle, dias_disponibles, placa, valor_comercial, precio_ajuste_pct, precio_manual,
-       disponible, documentos, documentos_estado, contenido_revision, contenido_revision_motivo)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?)
+       disponible, documentos, documentos_estado, contenido_revision, contenido_revision_motivo,
+       combustible, clase_vehiculo, exencion_pico_placa_inscrita)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     user.id, marca, modelo, anio,
     segmento, ubicacion || 'Medellín',
@@ -280,6 +302,7 @@ export async function POST(req: NextRequest) {
     valorComercial, ajuste,
     documentos || '{}', documentosEstadoInicial,
     contenidoRevision, contenidoRevisionMotivo,
+    combustibleFinal, claseVehiculoFinal, exencionInscritaFinal,
   );
 
   // Aviso al equipo, mismo criterio que el PUT cuando el propietario sube documentos por
