@@ -1,5 +1,9 @@
 # Dependencias
 node_modules/
+# Sin barra final, además: en un worktree/checkout donde `node_modules` es un SYMLINK
+# (no un directorio real), el patrón `node_modules/` de arriba NO lo matchea y un
+# `git add -A` lo commitearía como enlace simbólico.
+node_modules
 
 # Next.js
 .next/
@@ -30,6 +34,11 @@ public/uploads/*
 !public/uploads/corolla.jpg
 !public/uploads/4runner.jpg
 !public/uploads/placeholder-car.svg
+
+# Salida del banco de pruebas del detector de placas
+# (scripts/probar-deteccion-placa.ts). Son COPIAS ANOTADAS de fotos reales de
+# clientes, con la placa legible — nunca deben entrar al repo.
+deteccion-placa-salida/
 
 # Logs
 *.log
