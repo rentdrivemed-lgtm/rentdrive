@@ -8,6 +8,7 @@ import {
   categoriaPorPasajeros, anioBusValido, resetearTarifasBusACategoria,
   CAPACIDAD_MIN_PASAJEROS, CAPACIDAD_MAX_PASAJEROS,
 } from '@/lib/busCotizador';
+import { filtrarVehiculos } from '@/lib/vehiculo-publico';
 
 export async function GET(req: NextRequest) {
   const db = getDb();
@@ -23,6 +24,12 @@ export async function GET(req: NextRequest) {
   // Si no viene `categoria` explícita pero sí `pasajeros`, se sugiere la categoría acorde
   // a la cantidad de pasajeros solicitada (§7.1 del spec) y se filtra por esa.
   const categoria = categoriaParam || (pasajerosParam ? categoriaPorPasajeros(Number(pasajerosParam)) : null);
+
+  // Sesión + permiso de área, resueltos una sola vez: deciden qué buses se listan (abajo) y
+  // qué campos sensibles pueden salir en la respuesta (un bus es una fila de `vehiculos`,
+  // así que arrastra los mismos `documentos` del propietario — ver lib/vehiculo-publico.ts).
+  const sesion = await getCurrentUser();
+  const esAdminConPermiso = !!sesion && sesion.rol === 'admin' && adminTieneArea(db, sesion.id, 'buses');
 
   let query = `
     SELECT v.*, u.nombre as propietario_nombre
@@ -41,29 +48,25 @@ export async function GET(req: NextRequest) {
     // Mismo criterio que GET /api/vehiculos: el propio dueño (o un admin con la sección
     // "buses") ve TODOS sus buses, incluidos los no disponibles o en revisión de contenido.
     // Cualquier otro visitante solo ve lo mismo que ve la vitrina pública.
-    let puedeVerTodos = false;
-    const user = await getCurrentUser();
-    if (user) {
-      const esDueño = user.id === Number(propietarioId);
-      const esAdminConPermiso = user.rol === 'admin' && adminTieneArea(db, user.id, 'buses');
-      puedeVerTodos = esDueño || esAdminConPermiso;
-    }
+    const esDueño = !!sesion && sesion.id === Number(propietarioId);
+    const puedeVerTodos = esDueño || esAdminConPermiso;
     if (!puedeVerTodos) query += ' AND v.disponible = 1 AND v.contenido_revision = 0';
   } else {
     // Listado principal sin propietarioId: público, salvo que sea el admin con la sección
     // "buses" navegando SU panel de administración (panelAdmin=1) — ahí sí ve los buses
     // pendientes de aprobación (disponible=0), igual que ya hace GET /api/vehiculos.
-    const user = await getCurrentUser();
-    const esAdminConPermiso = panelAdmin && !!user && user.rol === 'admin' && adminTieneArea(db, user.id, 'buses');
-    if (esAdminConPermiso) {
+    if (panelAdmin && esAdminConPermiso) {
       query += ' AND v.contenido_revision = 0';
     } else {
       query += ' AND v.disponible = 1 AND v.contenido_revision = 0';
     }
   }
 
-  const buses = db.prepare(query).all(...params);
-  return NextResponse.json({ buses });
+  const buses = db.prepare(query).all(...params) as Record<string, unknown>[];
+  // Igual que GET /api/vehiculos: los campos privados del propietario solo salen para el
+  // dueño de CADA bus o para el admin con la sección "buses".
+  const ctx = { usuarioId: sesion?.id ?? null, esAdminConPermiso };
+  return NextResponse.json({ buses: filtrarVehiculos(buses, ctx) });
 }
 
 export async function POST(req: NextRequest) {

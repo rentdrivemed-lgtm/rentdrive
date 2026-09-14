@@ -10,6 +10,7 @@ import { correoNoVerificado, CODIGO_CORREO_NO_VERIFICADO } from '@/lib/verificac
 import { contieneLenguajeInapropiado, extraerUrlsFotos, fotosRegistradasEntre, normalizarUrlFoto } from '@/lib/moderacion';
 import { documentosConUrlsValidas } from '@/lib/storage';
 import { esCombustibleValido, inscripcionExencionConfirmada, requiereInscripcionExencion, sanitizarClaseVehiculo } from '@/lib/vehiculo-campos';
+import { filtrarVehiculos } from '@/lib/vehiculo-publico';
 
 function datesInRange(start: string, end: string): string[] {
   const dates: string[] = [];
@@ -42,12 +43,17 @@ export async function GET(req: NextRequest) {
   // sesión, porque un admin también navega la home pública como cualquier usuario normal.
   const panelAdmin = searchParams.get('panelAdmin') === '1';
 
+  // Sesión + permiso de área, resueltos UNA sola vez para toda la ruta: deciden tanto qué
+  // vehículos se listan (ramas de abajo) como qué campos sensibles pueden salir en la
+  // respuesta (documentos del propietario, ver lib/vehiculo-publico.ts).
+  const sesion = await getCurrentUser();
+  const esAdminConPermiso = !!sesion && sesion.rol === 'admin' && adminTieneArea(db, sesion.id, 'vehiculos');
+
   // Vista de archivados / en revisión de contenido: exclusiva del admin con la sección
   // "vehiculos" (ver lib/eliminar.ts). Esta ruta es pública para el resto de casos, así
   // que aquí sí hay que exigir sesión + permiso.
   if (archivados || revisionContenido) {
-    const user = await getCurrentUser();
-    if (!user || user.rol !== 'admin' || !adminTieneArea(db, user.id, 'vehiculos')) return sinPermisoArea();
+    if (!esAdminConPermiso) return sinPermisoArea();
   }
 
   let query = `
@@ -84,13 +90,8 @@ export async function GET(req: NextRequest) {
       // otro visitante (sin sesión, o con sesión de otro usuario que no sea admin) solo
       // debe ver lo mismo que ve el listado público — mismo criterio que ya aplica
       // GET /api/vehiculos/[id] para el detalle de un vehículo en revisión.
-      let puedeVerTodos = false;
-      const user = await getCurrentUser();
-      if (user) {
-        const esDueño = user.id === Number(propietarioId);
-        const esAdminConPermiso = user.rol === 'admin' && adminTieneArea(db, user.id, 'vehiculos');
-        puedeVerTodos = esDueño || esAdminConPermiso;
-      }
+      const esDueño = !!sesion && sesion.id === Number(propietarioId);
+      const puedeVerTodos = esDueño || esAdminConPermiso;
       if (!puedeVerTodos) query += ' AND v.disponible = 1 AND v.contenido_revision = 0';
     } else {
       // Listado principal sin propietarioId: para el público (y cualquier usuario sin
@@ -104,9 +105,7 @@ export async function GET(req: NextRequest) {
       // lista principal. Sin `panelAdmin=1` (p. ej. el mismo admin navegando la home
       // pública en app/page.tsx como cualquier usuario) el comportamiento debe ser
       // idéntico al de un visitante sin permisos.
-      const user = await getCurrentUser();
-      const esAdminConPermiso = panelAdmin && !!user && user.rol === 'admin' && adminTieneArea(db, user.id, 'vehiculos');
-      if (esAdminConPermiso) {
+      if (panelAdmin && esAdminConPermiso) {
         query += ' AND v.contenido_revision = 0';
       } else {
         query += ' AND v.disponible = 1 AND v.contenido_revision = 0';
@@ -159,7 +158,12 @@ export async function GET(req: NextRequest) {
     return altaB - altaA;
   });
 
-  return NextResponse.json({ vehiculos });
+  // Los campos privados del propietario (documentos y su revisión, valor comercial) solo
+  // salen para el dueño de CADA vehículo o para el admin con la sección "vehiculos" — el
+  // resto de llamadas (home/vitrina públicas, otro usuario autenticado) los recibe sin
+  // ellos. Ver lib/vehiculo-publico.ts.
+  const ctx = { usuarioId: sesion?.id ?? null, esAdminConPermiso };
+  return NextResponse.json({ vehiculos: filtrarVehiculos(vehiculos, ctx) });
 }
 
 function parseDias(json: string | undefined): string[] {

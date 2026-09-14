@@ -10,6 +10,7 @@ import {
   categoriaPorPasajeros, anioBusValido, resetearTarifasBusACategoria, adminsConAreaBuses,
   CAPACIDAD_MIN_PASAJEROS, CAPACIDAD_MAX_PASAJEROS, type CategoriaBus,
 } from '@/lib/busCotizador';
+import { filtrarVehiculo } from '@/lib/vehiculo-publico';
 
 // GET/PUT/DELETE de un bus individual (Etapa 2). Antes de este archivo no existía ningún
 // endpoint para editar un bus después de creado: `disponible` quedaba hardcodeado a 0 en
@@ -35,17 +36,22 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
   if (!bus) return NextResponse.json({ error: 'No encontrado' }, { status: 404 });
 
+  // Sesión + permiso de área: deciden si un bus no publicado es visible (abajo) y qué
+  // campos sensibles pueden salir en la respuesta (ver lib/vehiculo-publico.ts).
+  const sesion = await getCurrentUser();
+  const esAdminConPermiso = !!sesion && sesion.rol === 'admin' && adminTieneArea(db, sesion.id, 'buses');
+
   const esPublico = Number(bus.disponible) === 1 && Number(bus.contenido_revision) === 0;
   if (!esPublico) {
-    const user = await getCurrentUser();
-    const esDueño = !!user && user.rol === 'propietario' && Number(bus.propietario_id) === user.id;
-    const esAdminConPermiso = !!user && user.rol === 'admin' && adminTieneArea(db, user.id, 'buses');
+    const esDueño = !!sesion && sesion.rol === 'propietario' && Number(bus.propietario_id) === sesion.id;
     if (!esDueño && !esAdminConPermiso) {
       return NextResponse.json({ error: 'No encontrado' }, { status: 404 });
     }
   }
 
-  return NextResponse.json({ bus });
+  // Ruta pública (vitrina de buses): los documentos del propietario solo para el dueño o
+  // el admin con la sección "buses".
+  return NextResponse.json({ bus: filtrarVehiculo(bus, { usuarioId: sesion?.id ?? null, esAdminConPermiso }) });
 }
 
 // PUT — el propietario dueño del bus (o un admin con la sección "buses") lo edita. Es la

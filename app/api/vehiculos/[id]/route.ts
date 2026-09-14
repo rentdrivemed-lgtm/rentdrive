@@ -9,6 +9,7 @@ import { contieneLenguajeInapropiado, extraerUrlsFotos, fotosRegistradasEntre, n
 import { documentosConUrlsValidas } from '@/lib/storage';
 import { tecnoRequerida } from '@/lib/tecnomecanica';
 import { esCombustibleValido, inscripcionExencionConfirmada, requiereInscripcionExencion, sanitizarClaseVehiculo } from '@/lib/vehiculo-campos';
+import { filtrarVehiculo } from '@/lib/vehiculo-publico';
 
 // Documentos que hoy se le piden al propietario. `todo_riesgo` YA NO está en la lista
 // (sep-2026): DrivePass expide la póliza directamente, así que dejó de pedirse, mostrarse
@@ -84,10 +85,13 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   // Mismo criterio que `archivado`, pero el propietario dueño SÍ puede seguir viendo el
   // detalle de su propio vehículo (para ver por qué está en revisión), igual que el admin
   // con la sección "vehiculos".
+  // Sesión + permiso de área: deciden si este detalle es visible estando en revisión de
+  // contenido (abajo) y qué campos sensibles pueden salir en la respuesta.
+  const sesion = await getCurrentUser();
+  const esAdminConPermiso = !!sesion && sesion.rol === 'admin' && adminTieneArea(db, sesion.id, 'vehiculos');
+
   if (Number(vehiculo.contenido_revision) === 1) {
-    const user = await getCurrentUser();
-    const esDueño = !!user && user.rol === 'propietario' && Number(vehiculo.propietario_id) === user.id;
-    const esAdminConPermiso = !!user && user.rol === 'admin' && adminTieneArea(db, user.id, 'vehiculos');
+    const esDueño = !!sesion && sesion.rol === 'propietario' && Number(vehiculo.propietario_id) === sesion.id;
     if (!esDueño && !esAdminConPermiso) {
       return NextResponse.json({ error: 'No encontrado' }, { status: 404 });
     }
@@ -103,7 +107,14 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     for (const d of rangoDias(r.fecha_inicio, r.fecha_fin)) ocupadasSet.add(d);
   }
 
-  return NextResponse.json({ vehiculo, ocupadas: [...ocupadasSet] });
+  // Ruta pública (ficha del vehículo y página de pago, ambas sin sesión): los campos
+  // privados del propietario (documentos y su revisión, valor comercial) solo salen para el
+  // dueño del vehículo o para el admin con la sección "vehiculos". `placa` SÍ se mantiene
+  // pública: la ficha la necesita para el pico y placa del calendario
+  // (app/vehiculos/[id]/page.tsx → components/CalendarioReserva.tsx). Ver lib/vehiculo-publico.ts.
+  const vehiculoVisible = filtrarVehiculo(vehiculo, { usuarioId: sesion?.id ?? null, esAdminConPermiso });
+
+  return NextResponse.json({ vehiculo: vehiculoVisible, ocupadas: [...ocupadasSet] });
 }
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
