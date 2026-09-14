@@ -33,28 +33,70 @@ export function esUrlDeStorageValida(url: unknown): boolean {
 }
 
 /**
- * Valida que TODAS las URLs presentes dentro de un JSON de `documentos` (ej.
- * `{ soat: { url }, tecno: { url }, tarjeta: { url, url_dorso }, ... }`)
- * provengan de una subida real a nuestro storage. Cualquier clave `url` o
- * `url_dorso` con un valor que no calce el prefijo real se considera inválida.
- * Un JSON vacío/sin URLs es válido (no hay nada que validar).
+ * Extrae los valores crudos de `url` / `url_dorso` que haya dentro de un JSON de
+ * `documentos`. Devuelve `null` si el JSON no se puede parsear o no es un objeto.
+ * Los valores van SIN filtrar por tipo a propósito: un `url` que no sea string
+ * (número, objeto, null) tiene que llegar hasta la validación y ser rechazado ahí,
+ * no desaparecer silenciosamente de la lista.
  */
-export function documentosConUrlsValidas(documentosJson: string | undefined | null): boolean {
-  if (!documentosJson) return true;
+function urlsDeDocumentos(documentosJson: string | undefined | null): unknown[] | null {
+  if (!documentosJson) return [];
   let docs: Record<string, unknown>;
   try {
     docs = JSON.parse(documentosJson);
   } catch {
-    return false;
+    return null;
   }
-  if (!docs || typeof docs !== 'object') return false;
+  if (!docs || typeof docs !== 'object') return null;
+  const urls: unknown[] = [];
   for (const valor of Object.values(docs)) {
     if (!valor || typeof valor !== 'object') continue;
     const doc = valor as Record<string, unknown>;
-    if (doc.url !== undefined && !esUrlDeStorageValida(doc.url)) return false;
-    if (doc.url_dorso !== undefined && !esUrlDeStorageValida(doc.url_dorso)) return false;
+    if (doc.url !== undefined) urls.push(doc.url);
+    if (doc.url_dorso !== undefined) urls.push(doc.url_dorso);
   }
-  return true;
+  return urls;
+}
+
+/**
+ * Valida que las URLs presentes dentro de un JSON de `documentos` (ej.
+ * `{ soat: { url }, tecno: { url }, tarjeta: { url, url_dorso }, ... }`)
+ * provengan de una subida real a nuestro storage. Cualquier clave `url` o
+ * `url_dorso` con un valor que no calce el prefijo real se considera inválida.
+ * Un JSON vacío/sin URLs es válido (no hay nada que validar).
+ *
+ * `documentosActualesJson` (opcional) es el JSON que HOY está guardado en la BD para ese
+ * mismo vehículo. Sus URLs se consideran ya aceptadas y NO se vuelven a validar: se valida
+ * solo lo que CAMBIA en este request. Es el mismo criterio de la allow-list de fotos en
+ * PUT /api/vehiculos/[id] (solo las URLs nuevas deben tener registro de subida).
+ *
+ * Por qué (sep-2026): antes se revalidaba TODO el JSON en cada guardado, así que un
+ * documento legado con una URL previa a Cloudinary (rutas `/uploads/...`) hacía fallar con
+ * 400 cualquier guardado de la sección Documentos — aunque ese documento no se estuviera
+ * tocando. Mientras el campo era visible el propietario podía re-subirlo y limpiar la URL
+ * mala; al retirar el bloque "Seguro todo riesgo" del formulario (DrivePass expide la
+ * póliza) esa clave legada quedó sin ninguna forma de arreglarse desde la interfaz, y el
+ * vehículo se quedaba sin poder guardar documentos NUNCA más.
+ *
+ * NO debilita nada para URLs nuevas: la lista de exentas sale de la BASE DE DATOS, no del
+ * body, así que el cliente no puede declarar una URL como "ya guardada". Cualquier URL que
+ * no esté literalmente persistida en ese vehículo sigue teniendo que pasar
+ * `esUrlDeStorageValida`. (La exención es por valor de URL, no por clave: reutilizar en
+ * otra clave una URL que este mismo vehículo ya tenía guardada está permitido y no da
+ * acceso a nada que el propietario no tuviera ya.)
+ */
+export function documentosConUrlsValidas(
+  documentosJson: string | undefined | null,
+  documentosActualesJson?: string | undefined | null,
+): boolean {
+  const urls = urlsDeDocumentos(documentosJson);
+  if (urls === null) return false;
+  // Si el JSON guardado está corrupto, `urlsDeDocumentos` devuelve null → no se exenta
+  // nada (falla cerrado) y se valida todo como antes.
+  const yaGuardadas = new Set(
+    (urlsDeDocumentos(documentosActualesJson) ?? []).filter((u): u is string => typeof u === 'string' && u !== ''),
+  );
+  return urls.every(u => (typeof u === 'string' && yaGuardadas.has(u)) || esUrlDeStorageValida(u));
 }
 
 export type UploadOpts = {

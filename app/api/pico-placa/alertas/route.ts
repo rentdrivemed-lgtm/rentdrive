@@ -13,7 +13,7 @@ const DIAS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', '
 
 type Afectada = {
   reserva_id: number; placa: string; digito: number;
-  marca: string; modelo: string;
+  marca: string; modelo: string; combustible: string; exencion_pico_placa_inscrita: number;
   usuario_id: number; usuario_nombre: string; usuario_celular: string;
   propietario_id: number; propietario_nombre: string; propietario_celular: string;
 };
@@ -45,6 +45,8 @@ function afectadasHoy(db: ReturnType<typeof getDb>, hoy: Date): Afectada[] {
   const iso = fechaISOLocal(hoy);
   const filas = db.prepare(`
     SELECT r.id AS reserva_id, COALESCE(v.placa,'') AS placa, v.marca, v.modelo,
+           COALESCE(v.combustible,'') AS combustible,
+           COALESCE(v.exencion_pico_placa_inscrita,0) AS exencion_pico_placa_inscrita,
            r.usuario_id, u.nombre AS usuario_nombre, COALESCE(u.celular,'') AS usuario_celular,
            v.propietario_id, p.nombre AS propietario_nombre, COALESCE(p.celular,'') AS propietario_celular
     FROM reservas r
@@ -55,8 +57,12 @@ function afectadasHoy(db: ReturnType<typeof getDb>, hoy: Date): Afectada[] {
       AND r.fecha_inicio <= ? AND r.fecha_fin >= ?
   `).all(iso, iso) as Omit<Afectada, 'digito'>[];
 
+  // La exención entra en la decisión: un eléctrico —y un híbrido/GNV CON la inscripción
+  // confirmada ante la Secretaría de Movilidad— está exento en Medellín, así que NO debe
+  // recibir el aviso de pico y placa (ni el arrendatario ni el propietario). Un híbrido sin
+  // el trámite sí lo recibe: no está exento de verdad.
   return filas
-    .filter(f => placaRestringida(pp, f.placa, hoy))
+    .filter(f => placaRestringida(pp, f.placa, hoy, { combustible: f.combustible, inscrita: f.exencion_pico_placa_inscrita }))
     .map(f => ({ ...f, digito: ultimoDigitoPlaca(f.placa) ?? -1 }));
 }
 

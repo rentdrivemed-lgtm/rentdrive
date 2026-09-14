@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { IconArrowL, IconArrowR } from '@/components/Icons';
 import { DIAS_SEMANA, fechaISOLocal as isoDate, picoPlacaVacio, placaRestringida, ultimoDigitoPlaca, type PicoPlaca } from '@/lib/pico-placa';
+import { exentoPicoPlaca, motivoExencion } from '@/lib/vehiculo-campos';
 
 type Props = {
   value: string[];
@@ -9,11 +10,24 @@ type Props = {
   readOnly?: boolean;
   reservedDates?: string[];
   placa?: string;
+  /**
+   * Combustible del vehículo (ver lib/vehiculo-campos.ts). Junto con `exencionInscrita`
+   * decide si el vehículo está exento de pico y placa en Medellín: si lo está, no se le
+   * marca ningún día ni se le muestra la lista de días restringidos.
+   */
+  combustible?: string;
+  /**
+   * `vehiculos.exencion_pico_placa_inscrita` (0/1 desde la BD, boolean desde el formulario):
+   * el propietario confirmó que inscribió la exención ante la Secretaría de Movilidad. Es
+   * OBLIGATORIO para híbridos y gas (GNV) — sin ella NO están exentos —, y es irrelevante
+   * para los eléctricos (exentos automáticamente). Ausente = se comporta como siempre.
+   */
+  exencionInscrita?: boolean | number;
 };
 
 const DIAS = ['Lu', 'Ma', 'Mi', 'Ju', 'Vi', 'Sá', 'Do'];
 
-export default function CalendarioDisponibilidad({ value, onChange, readOnly, reservedDates, placa }: Props) {
+export default function CalendarioDisponibilidad({ value, onChange, readOnly, reservedDates, placa, combustible, exencionInscrita }: Props) {
   const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
   const [base, setBase] = useState(() => new Date(hoy.getFullYear(), hoy.getMonth(), 1));
   const [pp, setPp] = useState<PicoPlaca>(picoPlacaVacio());
@@ -35,7 +49,12 @@ export default function CalendarioDisponibilidad({ value, onChange, readOnly, re
   // Último dígito de la placa y, bajo la config vigente, el día de la semana en que
   // está restringido (puede no haber ninguno si pico y placa está desactivado).
   const digitoPlaca = placa ? ultimoDigitoPlaca(placa) : null;
-  const diasRestriccionPlaca = digitoPlaca !== null && pp.activo
+  // Exento en Medellín (eléctrico siempre; híbrido/GNV solo con la inscripción confirmada
+  // ante la Secretaría de Movilidad) — ni días marcados ni lista de días.
+  const exencion = { combustible, inscrita: exencionInscrita };
+  const exento = exentoPicoPlaca(exencion);
+  const motivo = motivoExencion(exencion);
+  const diasRestriccionPlaca = digitoPlaca !== null && pp.activo && !exento
     ? DIAS_SEMANA.filter(d => (pp.dias[d.id] ?? []).includes(digitoPlaca)).map(d => d.nombre)
     : [];
 
@@ -74,7 +93,7 @@ export default function CalendarioDisponibilidad({ value, onChange, readOnly, re
     if (placa) {
       for (let i = 1; i <= totalDias; i++) {
         const d = new Date(año, mes, i);
-        if (placaRestringida(pp, placa, d)) picoSet.add(isoDate(d));
+        if (placaRestringida(pp, placa, d, exencion)) picoSet.add(isoDate(d));
       }
     }
     const celdas: (Date | null)[] = [
@@ -162,7 +181,9 @@ export default function CalendarioDisponibilidad({ value, onChange, readOnly, re
       {placa && digitoPlaca !== null && (
         <p className="text-xs text-ink/60 mb-2">
           Placa termina en <span className="font-semibold text-ink">{digitoPlaca}</span>
-          {diasRestriccionPlaca.length > 0
+          {exento
+            ? <> — <span className="font-semibold text-success">exento de pico y placa por ser {motivo === 'electrico' ? 'eléctrico' : motivo === 'gas' ? 'a gas natural (GNV)' : 'híbrido'}</span></>
+            : diasRestriccionPlaca.length > 0
             ? <> — pico y placa: <span className="font-semibold text-accent">{diasRestriccionPlaca.join(' y ')}</span></>
             : <> — sin restricción de pico y placa</>}
         </p>
@@ -205,7 +226,7 @@ export default function CalendarioDisponibilidad({ value, onChange, readOnly, re
             <span className="w-3 h-3 rounded bg-danger/15 border border-danger/30 inline-block" /> Reservado
           </span>
         )}
-        {placa && (
+        {placa && !exento && (
           <span className="flex items-center gap-1.5">
             <span className="w-3 h-3 rounded border border-accent/40 ring-1 ring-accent/40 inline-block" /> Pico y placa
           </span>

@@ -7,7 +7,7 @@ import { IconArrowL, IconShield } from '@/components/Icons';
 const content = {
   es: {
     title: 'Términos y Condiciones',
-    updated: 'Última actualización: mayo 2024',
+    updated: 'Última actualización: septiembre 2026',
     intro: 'Al utilizar la plataforma DrivePass, aceptas los presentes términos y condiciones en su totalidad. Si no estás de acuerdo con alguno de ellos, por favor abstente de usar el servicio.',
     sections: [
       {
@@ -20,11 +20,11 @@ const content = {
       },
       {
         title: '3. Requisitos del propietario',
-        body: 'Para publicar un vehículo en DrivePass este debe: (a) ser modelo 2018 o más reciente; (b) contar con seguro todo riesgo vigente; (c) tener los documentos al día (SOAT, revisión técnico-mecánica); (d) contar con GPS activo. DrivePass asignará el precio de alquiler basado en el tipo de vehículo, año, condición y demanda.',
+        body: 'Para publicar un vehículo en DrivePass este debe: (a) ser modelo 2018 o más reciente; (b) tener los documentos al día (SOAT, revisión técnico-mecánica); (c) contar con GPS activo. El propietario no debe aportar una póliza de seguro todo riesgo propia: la póliza del vehículo la expide DrivePass. DrivePass asignará el precio de alquiler basado en el tipo de vehículo, año, condición y demanda.',
       },
       {
         title: '4. Seguro y responsabilidad',
-        body: 'Todos los vehículos listados deben contar con póliza de seguro todo riesgo. El alquilador es responsable de cualquier daño que ocurra durante el período de alquiler no cubierto por la póliza. DrivePass no asume responsabilidad por accidentes, robos, daños a terceros o cualquier otro incidente durante el alquiler. Se recomienda al alquilador revisar minuciosamente el vehículo antes de tomarlo.',
+        body: 'La póliza de seguro de los vehículos listados es expedida por DrivePass; el propietario no debe aportar una póliza propia. Las coberturas, exclusiones y condiciones aplicables son las de esa póliza. El alquilador es responsable de cualquier daño que ocurra durante el período de alquiler no cubierto por la póliza. DrivePass no asume responsabilidad por accidentes, robos, daños a terceros o cualquier otro incidente durante el alquiler. Se recomienda al alquilador revisar minuciosamente el vehículo antes de tomarlo.',
       },
       {
         title: '5. Política de cancelación',
@@ -58,7 +58,7 @@ const content = {
   },
   en: {
     title: 'Terms and Conditions',
-    updated: 'Last updated: May 2024',
+    updated: 'Last updated: September 2026',
     intro: 'By using the DrivePass platform you fully accept these terms and conditions. If you disagree with any of them, please refrain from using the service.',
     sections: [
       {
@@ -71,11 +71,11 @@ const content = {
       },
       {
         title: '3. Owner requirements',
-        body: 'To list a vehicle on DrivePass it must: (a) be a 2018 model or newer; (b) have active comprehensive insurance; (c) have up-to-date documents (SOAT, technical-mechanical inspection); (d) have an active GPS. DrivePass will assign the rental price based on vehicle type, year, condition and demand.',
+        body: 'To list a vehicle on DrivePass it must: (a) be a 2018 model or newer; (b) have up-to-date documents (SOAT, technical-mechanical inspection); (c) have an active GPS. Owners are not required to provide their own comprehensive insurance policy: the vehicle\'s insurance policy is issued by DrivePass. DrivePass will assign the rental price based on vehicle type, year, condition and demand.',
       },
       {
         title: '4. Insurance and liability',
-        body: 'All listed vehicles must have a comprehensive insurance policy. The renter is responsible for any damage occurring during the rental period not covered by the policy. DrivePass assumes no responsibility for accidents, theft, third-party damage or any other incident during the rental.',
+        body: 'The insurance policy for listed vehicles is issued by DrivePass; owners are not required to provide their own. The coverages, exclusions and conditions that apply are those of that policy. The renter is responsible for any damage occurring during the rental period not covered by the policy. DrivePass assumes no responsibility for accidents, theft, third-party damage or any other incident during the rental.',
       },
       {
         title: '5. Cancellation policy',

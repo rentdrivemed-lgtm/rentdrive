@@ -298,6 +298,22 @@ CREATE TABLE IF NOT EXISTS fotos_moderacion (
 --   ALTER TABLE vehiculos ADD COLUMN IF NOT EXISTS contenido_revision INTEGER DEFAULT 0;
 --   ALTER TABLE vehiculos ADD COLUMN IF NOT EXISTS contenido_revision_motivo TEXT DEFAULT '';
 
+-- Nota (campos de la matrícula, sep-2026): `vehiculos.combustible` (TEXT, default '') y
+-- `vehiculos.clase_vehiculo` (TEXT, default '') son columnas nuevas creadas en lib/db.ts
+-- con el patrón ALTER idempotente. Aplica el MISMO gap preexistente descrito arriba:
+-- `vehiculos` no tiene `CREATE TABLE` en este archivo, así que aquí solo queda anotado
+-- como pendiente. Si en algún momento se reconstruye `CREATE TABLE vehiculos` para
+-- Supabase, agregar ahí también:
+--   ALTER TABLE vehiculos ADD COLUMN IF NOT EXISTS combustible TEXT DEFAULT '';
+--   ALTER TABLE vehiculos ADD COLUMN IF NOT EXISTS clase_vehiculo TEXT DEFAULT '';
+--   ALTER TABLE vehiculos ADD COLUMN IF NOT EXISTS exencion_pico_placa_inscrita INTEGER DEFAULT 0;
+-- `combustible` solo acepta gasolina|diesel|hibrido|electrico|gas o '' (validado en el
+-- servidor, ver lib/vehiculo-campos.ts); decide además la exención de pico y placa
+-- (lib/pico-placa.ts). `exencion_pico_placa_inscrita` (0/1) acompaña a `combustible`: en
+-- Medellín los eléctricos quedan exentos automáticamente, pero híbridos y gas natural (GNV)
+-- solo lo están si el propietario inscribió el trámite ante la Secretaría de Movilidad, y
+-- eso es lo que confirma este flag. Default 0 = no inscrita = no exento.
+
 -- Tarjetas de presentación virtual (NFC) — una por creador/embajador (y a
 -- futuro, por cliente). El HTML autocontenido vive en el volumen persistente
 -- y se sirve tal cual en /tarjeta/<slug> para el tag físico.

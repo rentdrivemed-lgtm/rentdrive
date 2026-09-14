@@ -55,6 +55,7 @@ type Vehiculo = {
   descripcion: string; fotos: string; fotos_detalle: string;
   propietario_nombre: string; propietario_id: number;
   dias_disponibles: string; placa?: string; disponible?: number;
+  combustible?: string; clase_vehiculo?: string; exencion_pico_placa_inscrita?: number;
 };
 type User = { id: number; nombre: string; rol: string };
 
@@ -215,6 +216,8 @@ export default function VehiculoDetalle() {
                   availableDates={diasDisponibles}
                   reservedDates={ocupadas}
                   placa={vehiculo.placa}
+                  combustible={vehiculo.combustible}
+                  exencionInscrita={vehiculo.exencion_pico_placa_inscrita}
                   inicio={fechaInicio}
                   fin={fechaFin}
                   onChange={(i, f) => { setFechaInicio(i); setFechaFin(f); setMsg(''); }}

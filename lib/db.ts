@@ -658,6 +658,25 @@ function initDb(db: Database.Database) {
   try { db.exec("ALTER TABLE vehiculos ADD COLUMN capacidad_pasajeros INTEGER"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE vehiculos ADD COLUMN bus_categoria TEXT"); } catch { /* ya existe */ }
 
+  // Datos que se transcriben de la tarjeta de propiedad (ver lib/vehiculo-campos.ts).
+  // `combustible`: uno de gasolina|diesel|hibrido|electrico|gas, o '' si no se declaró.
+  // Además de ser informativo, decide —junto con `exencion_pico_placa_inscrita` de más
+  // abajo— la exención de pico y placa de Medellín (ver placaRestringida en
+  // lib/pico-placa.ts) — por eso el servidor solo acepta valores de esa lista, nunca
+  // texto libre.
+  // `clase_vehiculo`: la "clase" tal como la imprime el RUNT ('Automóvil', 'Campero',
+  // 'Camioneta'…). NO reemplaza a `tipo` (categoría comercial de precio/filtros), es
+  // texto descriptivo recortado a 40 caracteres.
+  try { db.exec("ALTER TABLE vehiculos ADD COLUMN combustible TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE vehiculos ADD COLUMN clase_vehiculo TEXT DEFAULT ''"); } catch { /* ya existe */ }
+
+  // `exencion_pico_placa_inscrita` (0/1): el propietario confirma que YA inscribió la
+  // exención de pico y placa ante la Secretaría de Movilidad de Medellín. Solo aplica a
+  // híbridos y gas natural (GNV) — su exención NO es automática, requiere ese trámite; los
+  // eléctricos quedan exentos por el solo registro en el RUNT. Default 0 = "no inscrita",
+  // que deja a todos los vehículos ya existentes exactamente como estaban (restringidos).
+  try { db.exec("ALTER TABLE vehiculos ADD COLUMN exencion_pico_placa_inscrita INTEGER DEFAULT 0"); } catch { /* ya existe */ }
+
   // fotos_moderacion — pasó de "solo registrar fotos sospechosas" a un modelo allow-list
   // (registrar TODA foto subida, ver lib/moderacion.ts). Columnas nuevas para bases ya
   // existentes (una base creada desde cero ya las trae en el CREATE TABLE de arriba).

@@ -189,7 +189,8 @@ function RegistroForm() {
         }
         if (datos.documento_identidad) { nuevo.documento_identidad = datos.documento_identidad; marcados.add('documento_identidad'); }
         if (datos.fecha_nacimiento)    { nuevo.fecha_nacimiento = datos.fecha_nacimiento;       marcados.add('fecha_nacimiento'); }
-        if (datos.numero_licencia)     { nuevo.numero_licencia = datos.numero_licencia;         marcados.add('numero_licencia'); }
+        // Solo el arrendatario ve (y necesita) este campo — ver el selector de rol arriba.
+        if (datos.numero_licencia && rol === 'usuario') { nuevo.numero_licencia = datos.numero_licencia; marcados.add('numero_licencia'); }
         return nuevo;
       });
       setCamposIA(marcados);
@@ -288,6 +289,13 @@ function RegistroForm() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...cuenta, ...perfil, rol, codigo_referido: codigoReferido,
+          // `numero_licencia` solo se manda cuando el rol es 'usuario' (arrendatario). Es el
+          // único rol que ve ese campo desde sep-2026, así que para un propietario sería un
+          // valor fantasma: escrito en un paso anterior (o autocompletado por el OCR) y luego
+          // invisible. El `onClick` del selector de rol ya lo limpia, pero hay un SEGUNDO
+          // camino a rol='propietario' — el query param `?rol=propietario` del useEffect de
+          // arriba, que no pasa por ese onClick. Este override cubre los dos de una.
+          numero_licencia: rol === 'usuario' ? perfil.numero_licencia : '',
           // Opcionales: solo se mandan si la persona usó el atajo de foto y el
           // servidor logró guardarla (ver leerDocumento). Quien llenó el
           // formulario a mano simplemente no manda estos campos.
@@ -359,7 +367,20 @@ function RegistroForm() {
             <IconKey size={22} />
             <span>Quiero alquilar</span>
           </button>
-          <button type="button" onClick={() => { setRol('propietario'); setPaso(1); setError(''); }}
+          {/* Al cambiar a propietario se limpia `numero_licencia` y su marca "de tu foto":
+              desde sep-2026 ese campo NO se le muestra al propietario (DrivePass ya no se lo
+              pide), y dejar un valor escrito en un paso anterior lo convertiría en un campo
+              fantasma que se envía sin que nadie lo vea. Esto es solo la limpieza de la UI —
+              la garantía de verdad está en el submit, que omite `numero_licencia` cuando el
+              rol no es 'usuario' (hay otro camino a propietario, `?rol=propietario`, que no
+              pasa por acá). La COLUMNA `usuarios.numero_licencia` no se tocó: sigue siendo
+              obligatoria para el arrendatario y la usa la verificación con IA de sus
+              documentos. */}
+          <button type="button" onClick={() => {
+            setRol('propietario'); setPaso(1); setError('');
+            setPerfil(f => ({ ...f, numero_licencia: '' }));
+            setCamposIA(prev => { if (!prev.has('numero_licencia')) return prev; const c = new Set(prev); c.delete('numero_licencia'); return c; });
+          }}
             className={`flex flex-col items-center gap-2 p-4 rounded-2xl border-2 transition font-medium text-sm ${
               rol === 'propietario'
                 ? 'border-brand bg-brand text-white shadow-lg shadow-brand/25'
@@ -617,23 +638,28 @@ function RegistroForm() {
                 />
               </div>
 
-              {/* Licencia — requerida para arrendatarios */}
-              <div>
-                <label className="block text-xs font-semibold text-ink/60 mb-1.5 uppercase tracking-wide">
-                  Número de licencia de conducción
-                  {rol === 'usuario' && <span className="text-accent ml-1">*</span>}
-                  {rol === 'propietario' && <span className="font-normal text-ink/40 ml-1">(opcional)</span>}
-                  {marcaIA('numero_licencia')}
-                </label>
-                <input type="text" required={rol === 'usuario'} placeholder="Ej: 80123456"
-                  className={clsCampo('numero_licencia')} value={perfil.numero_licencia}
-                  onChange={e => { desmarcarCampo('numero_licencia'); setPerfil(f => ({ ...f, numero_licencia: e.target.value })); }} />
-                <p className="text-[11px] text-ink/50 mt-1">
-                  {rol === 'usuario'
-                    ? 'Requerido para poder realizar reservas de vehículos.'
-                    : 'Solo si también deseas alquilar vehículos de otros propietarios.'}
-                </p>
-              </div>
+              {/* Licencia — SOLO para el arrendatario (rol 'usuario'). Al propietario ya no se
+                  le pide (sep-2026): no la necesita para publicar su vehículo.
+                  OJO: hoy este registro es el ÚNICO punto de entrada de `numero_licencia` —
+                  no hay ningún perfil editable donde se pueda llenar después. O sea que un
+                  propietario que además quiera alquilar queda sin ese dato; si eso llega a
+                  hacer falta, habrá que agregar el campo a la edición de perfil (pendiente
+                  consciente, no algo que ya funcione). */}
+              {rol === 'usuario' && (
+                <div>
+                  <label className="block text-xs font-semibold text-ink/60 mb-1.5 uppercase tracking-wide">
+                    Número de licencia de conducción
+                    <span className="text-accent ml-1">*</span>
+                    {marcaIA('numero_licencia')}
+                  </label>
+                  <input type="text" required placeholder="Ej: 80123456"
+                    className={clsCampo('numero_licencia')} value={perfil.numero_licencia}
+                    onChange={e => { desmarcarCampo('numero_licencia'); setPerfil(f => ({ ...f, numero_licencia: e.target.value })); }} />
+                  <p className="text-[11px] text-ink/50 mt-1">
+                    Requerido para poder realizar reservas de vehículos.
+                  </p>
+                </div>
+              )}
 
               {/* Botones */}
               <div className="flex gap-3 pt-1">

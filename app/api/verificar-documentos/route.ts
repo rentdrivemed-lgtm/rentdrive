@@ -9,11 +9,15 @@ import { tecnoRequerida } from '@/lib/tecnomecanica';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
+// Documentos del vehículo que se le mandan a la IA y que cuentan para el estado agregado.
+// `todo_riesgo` YA NO está (sep-2026): DrivePass expide la póliza directamente, así que dejó
+// de pedirse y de revisarse. Los vehículos que ya la tenían subida conservan su
+// `documentos.todo_riesgo` en la BD (este endpoint solo LEE de `documentos`, nunca lo
+// reescribe), simplemente dejó de mandarse a verificar.
 const VEH_DOCS: [string, string][] = [
   ['soat', 'SOAT'],
   ['tecno', 'Tecnomecánica'],
   ['tarjeta', 'Tarjeta de propiedad'],
-  ['todo_riesgo', 'Seguro todo riesgo'],
 ];
 
 // El SDK de Anthropic arma el mensaje de error como "<status> <json crudo>"
@@ -38,10 +42,12 @@ function mensajeAmigable(e: unknown): string {
 }
 
 // `anio` (año-modelo, aproximación de la fecha de matrícula) decide si `tecno` cuenta dentro
-// del estado agregado — ver lib/tecnomecanica.ts (Ley 2294 de 2023). `todo_riesgo` es un
-// seguro opcional: nunca debe poder bloquear ni denegar el estado agregado, esté subido o no.
+// del estado agregado — ver lib/tecnomecanica.ts (Ley 2294 de 2023). El filtro explícito de
+// `todo_riesgo` que había acá se quitó junto con su entrada en VEH_DOCS (ya no se pide): la
+// clave legada que algunos vehículos todavía tienen en `documentos` simplemente no está en
+// esta lista, así que nunca entra al estado agregado — igual que antes.
 function computeEstado(docs: Record<string, { url?: string } | undefined>, revs: Record<string, { estado?: string }>, anio: number | null | undefined): string {
-  const claves = VEH_DOCS.map(([k]) => k).filter(k => k !== 'todo_riesgo' && (k !== 'tecno' || tecnoRequerida(anio)));
+  const claves = VEH_DOCS.map(([k]) => k).filter(k => k !== 'tecno' || tecnoRequerida(anio));
   const subidos = claves.filter(k => docs[k]?.url);
   if (subidos.length === 0) return 'sin_documentos';
   if (subidos.some(k => revs[k]?.estado === 'denegado')) return 'denegado';
