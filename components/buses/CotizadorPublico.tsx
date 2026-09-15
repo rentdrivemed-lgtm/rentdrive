@@ -142,7 +142,7 @@ export default function CotizadorPublico({ bus, onVolver }: { bus: BusPublico; o
           {/* Info del bus */}
           <div>
             <div className="relative mb-5">
-              <GaleriaVehiculo fotos={fotos} />
+              <GaleriaVehiculo fotos={fotos} titulo={`${bus.marca} ${bus.modelo} · ${bus.anio}`} />
               {bus.bus_categoria && (
                 <span className="absolute top-3 right-3 z-20 bg-brand/80 backdrop-blur-sm text-white text-xs font-semibold px-3 py-1 rounded-full">
                   {CATEGORIA_LABEL[bus.bus_categoria]}
