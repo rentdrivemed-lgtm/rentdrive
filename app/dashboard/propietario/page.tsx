@@ -4,7 +4,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import FotoUpload from '@/components/FotoUpload';
 import DocUpload from '@/components/DocUpload';
-import DocUploadDoble from '@/components/DocUploadDoble';
+import DocUploadDoble, { ladosFaltantes } from '@/components/DocUploadDoble';
 import TelefonoInput from '@/components/TelefonoInput';
 import { validarCelular, validarDocumentoIdentidad, PAIS_TEL_DEFAULT } from '@/lib/validacion';
 import CalendarioDisponibilidad from '@/components/CalendarioDisponibilidad';
@@ -711,6 +711,21 @@ function DashboardPropietarioInner() {
     if (errDoc) { setPerfilMsg(errDoc); return; }
     const errCel = validarCelular(perfil.celular_indicativo, perfil.celular);
     if (errCel) { setPerfilMsg(errCel); return; }
+    // Cédula del propietario: frente SIEMPRE, y dorso salvo que su documento
+    // registrado sea un pasaporte (que no tiene dorso). Misma regla que aplica el
+    // servidor en PUT /api/auth/me — esto es solo el feedback inmediato. Se exige
+    // al guardar el perfil (igual que ya se exigían los datos bancarios) y NO al
+    // publicar/alquilar: un propietario que hoy no tiene el dorso cargado sigue
+    // operando normal, y lo resuelve subiendo la foto en este mismo formulario.
+    const faltanCedula = ladosFaltantes(perfil.cedula_url, perfil.cedula_url_dorso, perfil.tipo_documento === 'pasaporte');
+    if (faltanCedula.length > 0) {
+      setPerfilMsg(
+        perfil.tipo_documento === 'pasaporte'
+          ? 'Sube la foto de tu pasaporte: es obligatoria para verificar que la tarjeta de propiedad esté a tu nombre.'
+          : 'Sube tu cédula por el frente Y por el dorso: es obligatoria para verificar que la tarjeta de propiedad esté a tu nombre.'
+      );
+      return;
+    }
     if (!perfil.banco.trim() || !perfil.numero_cuenta.trim() || !perfil.certificado_bancario_url) {
       setPerfilMsg('Los datos bancarios son obligatorios para procesar pagos.');
       return;
@@ -749,6 +764,13 @@ function DashboardPropietarioInner() {
   };
 
   if (!user) return <div className="text-center py-20 text-ink/50">Cargando...</div>;
+
+  // Cédula del propietario incompleta (típicamente: cuentas viejas que subieron solo
+  // el frente, cuando el dorso todavía no se pedía). NO bloquea nada de lo que ya
+  // está en marcha —ni publicar, ni reservas, ni cuentas de cobro—: solo avisa de
+  // forma persistente y el guardado del perfil sí lo exige (ver guardarPerfil y
+  // PUT /api/auth/me). Ver `ladosFaltantes` en components/DocUploadDoble.tsx.
+  const faltanLadosCedula = ladosFaltantes(perfil.cedula_url, perfil.cedula_url_dorso, perfil.tipo_documento === 'pasaporte');
 
   // ── Tabs ──────────────────────────────────────────────────────────────────
   const TABS = [
@@ -845,6 +867,28 @@ function DashboardPropietarioInner() {
             ))}
           </div>
         </>
+      )}
+
+      {tab !== 'editar' && tab !== 'perfil' && faltanLadosCedula.length > 0 && (
+        <div className="mb-6 rounded-2xl border border-warning/30 bg-warning/10 px-4 py-3.5 flex items-start justify-between gap-3 flex-wrap">
+          <div className="min-w-0">
+            <p className="text-sm font-bold text-warning">
+              {faltanLadosCedula.length === 2
+                ? 'Falta la foto de tu documento de identidad'
+                : faltanLadosCedula[0] === 'dorso'
+                  ? 'Falta el dorso de tu cédula'
+                  : 'Falta el frente de tu cédula'}
+            </p>
+            <p className="text-xs text-warning/90 mt-0.5">
+              La necesitamos completa para verificar que la tarjeta de propiedad de tus vehículos esté a tu nombre.
+              Son 30 segundos desde el celular.
+            </p>
+          </div>
+          <button onClick={() => setTab('perfil')}
+            className="flex-shrink-0 bg-warning/20 hover:bg-warning/30 text-warning font-bold text-xs px-4 py-2 rounded-xl transition">
+            Subirla ahora
+          </button>
+        </div>
       )}
 
       {tab !== 'editar' && (
@@ -1972,9 +2016,10 @@ function DashboardPropietarioInner() {
                 onChangeFrente={url => setPerfil(p => ({ ...p, cedula_url: url }))}
                 onChangeDorso={url => setPerfil(p => ({ ...p, cedula_url_dorso: url }))}
                 soloUnLado={perfil.tipo_documento === 'pasaporte'}
-                soloImagen />
+                soloImagen required mostrarFaltantes />
               <p className="text-[11px] text-ink/50 mt-1">
-                Foto clara (cámara o galería). Solo la vemos para validar tus documentos.
+                Foto clara (cámara o galería){perfil.tipo_documento === 'pasaporte' ? '' : ', por el frente y por el dorso'}. Obligatoria: sin ella no podemos
+                validar que la tarjeta de propiedad de tus vehículos esté a tu nombre. Solo la vemos para eso.
               </p>
             </div>
           </div>

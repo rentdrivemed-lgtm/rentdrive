@@ -16,7 +16,14 @@
 import { getAnthropic } from './anthropic';
 import { validarDocumentoIdentidad } from './validacion';
 
-export type TipoDocumentoRegistro = 'cedula' | 'licencia';
+// 'cedula_dorso' = el REVERSO del documento de identidad. No aporta datos nuevos para
+// el formulario (nombre/número/fecha están en el frente), pero se lee igual con IA por
+// dos motivos: (1) es la única forma de que el reverso pase por el MISMO endpoint
+// público que ya sube la foto a storage (app/api/registro/extraer-documento), sin abrir
+// una vía de subida sin sesión y sin validación de contenido; y (2) así se rechaza una
+// foto que no sea realmente el reverso (p. ej. el frente subido dos veces), que es lo
+// que haría inútil exigir el dorso. Devuelve todos los `datos` en null a propósito.
+export type TipoDocumentoRegistro = 'cedula' | 'cedula_dorso' | 'licencia';
 export type ConfianzaOcr = 'alta' | 'media' | 'baja';
 export type MediaTypeImagen = 'image/jpeg' | 'image/png' | 'image/webp';
 
@@ -81,6 +88,24 @@ function fechaNacimientoValida(v: unknown): string | null {
  * campo vacío (que la persona escriba) antes que autocompletar con basura.
  */
 function normalizar(raw: Record<string, unknown>, tipoPedido: TipoDocumentoRegistro): LecturaDocumento {
+  const confianzaCruda = texto(raw.confianza)?.toLowerCase();
+  const confianzaLeida: ConfianzaOcr =
+    confianzaCruda === 'alta' || confianzaCruda === 'baja' ? confianzaCruda : 'media';
+
+  // El reverso no transcribe ningún campo del formulario (ver el comentario de
+  // TipoDocumentoRegistro): solo interesa si es legible y si de verdad es un reverso.
+  if (tipoPedido === 'cedula_dorso') {
+    return {
+      es_legible: raw.es_legible !== false,
+      coincide_tipo: raw.coincide_tipo === true,
+      tipo_detectado: texto(raw.tipo_detectado) || 'desconocido',
+      datos: { ...DATOS_VACIOS },
+      campos_no_leidos: [],
+      confianza: confianzaLeida,
+      nota: texto(raw.nota),
+    };
+  }
+
   const noLeidos = new Set<string>(
     Array.isArray(raw.campos_no_leidos)
       ? raw.campos_no_leidos.filter((c): c is string => typeof c === 'string')
@@ -119,9 +144,7 @@ function normalizar(raw: Record<string, unknown>, tipoPedido: TipoDocumentoRegis
   if (!nombre) noLeidos.add('nombre');
   if (!nacimiento && raw.fecha_nacimiento) noLeidos.add('fecha de nacimiento');
 
-  const confianzaRaw = texto(raw.confianza)?.toLowerCase();
-  const confianza: ConfianzaOcr =
-    confianzaRaw === 'alta' || confianzaRaw === 'baja' ? confianzaRaw : 'media';
+  const confianza: ConfianzaOcr = confianzaLeida;
 
   const tipoDetectado = texto(raw.tipo_detectado) || 'desconocido';
   const coincideTipo = raw.coincide_tipo === true;
@@ -146,6 +169,37 @@ function normalizar(raw: Record<string, unknown>, tipoPedido: TipoDocumentoRegis
 }
 
 function instrucciones(tipo: TipoDocumentoRegistro): string {
+  // Reverso: no se transcribe nada, solo se confirma que la foto SEA el reverso de un
+  // documento de identidad. Prompt aparte (más corto) porque pedir los campos del
+  // formulario aquí solo gastaría tokens en datos que `normalizar` descarta.
+  if (tipo === 'cedula_dorso') {
+    return `
+Eres un asistente de DrivePass, una plataforma colombiana de alquiler de vehículos (Medellín).
+La persona dice que la imagen de arriba es el REVERSO (la parte de atrás) de su documento de
+identidad: cédula de ciudadanía colombiana, cédula de extranjería o la página de datos del
+pasaporte. NO transcribas datos personales y NO verificas autenticidad ni identidad.
+
+Devuelve un JSON con EXACTAMENTE esta estructura (sin markdown, sin texto adicional):
+
+{
+  "es_legible": <true si la imagen se ve con suficiente nitidez, false si está muy borrosa, oscura o cortada>,
+  "coincide_tipo": <true SOLO si la imagen es el reverso de un documento de identidad, false en cualquier otro caso>,
+  "tipo_detectado": "<Reverso de documento de identidad|Frente de documento de identidad|Licencia de conducción|Otro documento|No es un documento>",
+  "confianza": "<alta|media|baja>",
+  "nota": "<una frase en español explicando qué dificultó la lectura o por qué no coincide, o null si todo se ve bien>"
+}
+
+CÓMO RECONOCER EL REVERSO:
+- Cédula de ciudadanía colombiana: la cara con la huella dactilar, la firma, el grupo sanguíneo (RH),
+  la estatura, el sexo, el lugar/fecha de nacimiento y la fecha y lugar de expedición. En la cédula
+  digital (policarbonato) el reverso trae además el código de dos líneas legible por máquina (MRZ).
+- El FRENTE es la cara con la FOTO grande del titular, el número de cédula y los apellidos/nombres:
+  si ves eso, es el frente, NO el reverso → "coincide_tipo": false.
+- Si es una licencia de conducción, un recibo, un selfie o cualquier otra cosa → "coincide_tipo": false.
+
+No incluyas ningún comentario fuera del JSON.`;
+  }
+
   const esperado = tipo === 'cedula'
     ? 'un documento de identidad (cédula de ciudadanía colombiana, cédula de extranjería o pasaporte)'
     : 'una licencia de conducción colombiana (pase)';

@@ -108,14 +108,19 @@ function CompletarPerfilForm() {
   // ── Atajo opcional: leer la foto de la cédula ──
   const [iaDisponible, setIaDisponible] = useState(false);
   const [consiente, setConsiente] = useState(false);
-  const [leyendo, setLeyendo] = useState(false);
+  const [leyendo, setLeyendo] = useState<'cedula' | 'cedula_dorso' | null>(null);
   const [errorIA, setErrorIA] = useState('');
   const [avisoIA, setAvisoIA] = useState('');
   const [camposIA, setCamposIA] = useState<Set<CampoIA>>(new Set());
   const inputRef = useRef<HTMLInputElement>(null);
+  const inputDorsoRef = useRef<HTMLInputElement>(null);
   // Foto ya guardada por el servidor al leerla (ver POST /api/registro/extraer-documento
   // → `urlGuardada`): se retiene en memoria para mandarla en el submit final.
   const [cedulaUrlGuardada, setCedulaUrlGuardada] = useState('');
+  // Reverso (tipo 'cedula_dorso' del mismo endpoint). Igual que el frente: opcional
+  // acá, pero se guarda en `usuarios.cedula_url_dorso` para no volver a pedirlo donde
+  // sí se exige (reserva y perfil del propietario).
+  const [cedulaDorsoUrlGuardada, setCedulaDorsoUrlGuardada] = useState('');
 
   useEffect(() => {
     let vivo = true;
@@ -156,14 +161,14 @@ function CompletarPerfilForm() {
     });
   };
 
-  const leerDocumento = async (file: File) => {
+  const leerDocumento = async (file: File, tipo: 'cedula' | 'cedula_dorso') => {
     setErrorIA(''); setAvisoIA(''); setError('');
-    setLeyendo(true);
+    setLeyendo(tipo);
     try {
       const imagen = await prepararImagen(file);
       const fd = new FormData();
-      fd.append('file', imagen, 'cedula.jpg');
-      fd.append('tipo', 'cedula');
+      fd.append('file', imagen, tipo === 'cedula_dorso' ? 'cedula-dorso.jpg' : 'cedula.jpg');
+      fd.append('tipo', tipo);
       fd.append('consiente', String(consiente));
       const res = await fetch('/api/registro/extraer-documento', { method: 'POST', body: fd });
       const data = await res.json().catch(() => ({}));
@@ -176,7 +181,14 @@ function CompletarPerfilForm() {
       // para mandarla en el submit final. Si no vino, el guardado no funcionó y
       // simplemente no se manda nada (no bloquea el resto del flujo).
       if (typeof data.urlGuardada === 'string' && data.urlGuardada) {
-        setCedulaUrlGuardada(data.urlGuardada);
+        if (tipo === 'cedula_dorso') setCedulaDorsoUrlGuardada(data.urlGuardada);
+        else setCedulaUrlGuardada(data.urlGuardada);
+      }
+
+      // El reverso no trae datos para el formulario (ver lib/registro-ocr.ts).
+      if (tipo === 'cedula_dorso') {
+        setAvisoIA('Listo, guardamos el dorso de tu documento.');
+        return;
       }
 
       const datos = (data.datos || {}) as DatosDocumento;
@@ -200,8 +212,9 @@ function CompletarPerfilForm() {
     } catch {
       setErrorIA('Sin conexión — revisa tu internet o escribe tus datos a mano.');
     } finally {
-      setLeyendo(false);
+      setLeyendo(null);
       if (inputRef.current) inputRef.current.value = '';
+      if (inputDorsoRef.current) inputDorsoRef.current.value = '';
     }
   };
 
@@ -232,6 +245,7 @@ function CompletarPerfilForm() {
           // Opcional: solo se manda si la persona usó el atajo de foto y el
           // servidor logró guardarla.
           ...(cedulaUrlGuardada ? { cedula_url: cedulaUrlGuardada } : {}),
+          ...(cedulaDorsoUrlGuardada ? { cedula_url_dorso: cedulaDorsoUrlGuardada } : {}),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -294,8 +308,8 @@ function CompletarPerfilForm() {
                 <div className="min-w-0">
                   <p className="font-bold text-ink text-sm">Complétalo en 10 segundos</p>
                   <p className="text-xs text-ink/60 mt-0.5 leading-relaxed">
-                    Toma una foto de tu cédula y llenamos el documento y la fecha de nacimiento por ti.
-                    Revisas los datos y corriges lo que haga falta.
+                    Toma una foto de tu cédula (frente y dorso) y llenamos el documento y la fecha de
+                    nacimiento por ti. Revisas los datos y corriges lo que haga falta.
                   </p>
                 </div>
               </div>
@@ -318,17 +332,39 @@ function CompletarPerfilForm() {
               {/* A propósito SIN `capture`: con solo accept="image/*" el navegador móvil
                   ofrece cámara y galería/archivo — forzar `capture` ocultaría esa opción. */}
               <input ref={inputRef} type="file" accept="image/*" className="hidden"
-                onChange={e => { const f = e.target.files?.[0]; if (f) leerDocumento(f); }} />
+                onChange={e => { const f = e.target.files?.[0]; if (f) leerDocumento(f, 'cedula'); }} />
+              <input ref={inputDorsoRef} type="file" accept="image/*" className="hidden"
+                onChange={e => { const f = e.target.files?.[0]; if (f) leerDocumento(f, 'cedula_dorso'); }} />
 
-              <button type="button"
-                onClick={() => inputRef.current?.click()}
-                disabled={!consiente || leyendo}
-                className="w-full mt-3 flex items-center justify-center gap-2 bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold py-2.5 px-3 rounded-xl transition">
-                {leyendo ? 'Leyendo tu documento…' : 'Foto de mi cédula'}
-              </button>
+              <div className="grid gap-2 mt-3 sm:grid-cols-2">
+                <button type="button"
+                  onClick={() => inputRef.current?.click()}
+                  disabled={!consiente || leyendo !== null}
+                  className="flex items-center justify-center gap-2 bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold py-2.5 px-3 rounded-xl transition">
+                  {leyendo === 'cedula'
+                    ? 'Leyendo tu documento…'
+                    : cedulaUrlGuardada ? '✓ Frente listo — cambiar' : 'Foto de mi cédula (frente)'}
+                </button>
+                <button type="button"
+                  onClick={() => inputDorsoRef.current?.click()}
+                  disabled={!consiente || leyendo !== null}
+                  className="flex items-center justify-center gap-2 border border-accent/40 text-accent hover:bg-accent/10 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-semibold py-2.5 px-3 rounded-xl transition bg-surface-2">
+                  {leyendo === 'cedula_dorso'
+                    ? 'Leyendo el dorso…'
+                    : cedulaDorsoUrlGuardada ? '✓ Dorso listo — cambiar' : 'Foto de mi cédula (dorso)'}
+                </button>
+              </div>
 
               {!consiente && (
                 <p className="text-[11px] text-ink/45 mt-2">Marca la casilla para poder subir la foto.</p>
+              )}
+              {/* Recordatorio, NO un bloqueo: este atajo es opcional. El dorso se exige
+                  después (al reservar, y en el perfil del propietario), salvo pasaporte,
+                  que no tiene dorso. */}
+              {cedulaUrlGuardada && !cedulaDorsoUrlGuardada && perfil.tipo_documento !== 'pasaporte' && (
+                <p className="text-[11px] text-warning mt-2">
+                  Falta el dorso de tu cédula. Te lo vamos a pedir igual más adelante — tómalo ahora y no lo repites.
+                </p>
               )}
               {avisoIA && (
                 <p className="text-[11px] text-success mt-2 flex items-start gap-1.5">

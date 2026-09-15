@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
     nombre, correo, password, rol,
     tipo_documento, documento_identidad, fecha_nacimiento,
     celular, celular_indicativo, numero_licencia,
-    codigo_referido, cedula_url, licencia_url,
+    codigo_referido, cedula_url, cedula_url_dorso, licencia_url,
   } = await req.json();
 
   if (!nombre || !correo || !password) {
@@ -79,7 +79,7 @@ export async function POST(req: NextRequest) {
 
   const hash = bcrypt.hashSync(password, 10);
 
-  // cedula_url / licencia_url (opcionales): vienen del atajo de foto del registro
+  // cedula_url / cedula_url_dorso / licencia_url (opcionales): vienen del atajo de foto del registro
   // (app/(auth)/registro/page.tsx → POST /api/registro/extraer-documento, que ya
   // subió la imagen a nuestro storage y devolvió `urlGuardada`). Quien llenó el
   // formulario a mano simplemente no manda estos campos. Se valida que la URL
@@ -88,7 +88,15 @@ export async function POST(req: NextRequest) {
   // request directa al endpoint (curl) no puede inyectar cualquier URL arbitraria
   // en el perfil de la cuenta recién creada. Si no es válida, se ignora en
   // silencio (no bloquea el registro, que es opcional).
+  //
+  // `cedula_url_dorso` (reverso) se trata EXACTAMENTE igual que el frente: mismo
+  // origen (tipo 'cedula_dorso' del mismo endpoint), misma validación de storage y
+  // mismo carácter opcional. No se exige en el registro porque el atajo de foto
+  // completo es opcional — la exigencia real del dorso vive donde se necesita el
+  // documento: al reservar (app/api/reservas) y en el perfil del propietario
+  // (PUT /api/auth/me). Guardarlo acá es lo que evita volver a pedirlo allá.
   const cedulaUrlFinal = typeof cedula_url === 'string' && cedula_url && esUrlDeStorageValida(cedula_url) ? cedula_url : '';
+  const cedulaUrlDorsoFinal = typeof cedula_url_dorso === 'string' && cedula_url_dorso && esUrlDeStorageValida(cedula_url_dorso) ? cedula_url_dorso : '';
   const licenciaUrlFinal = typeof licencia_url === 'string' && licencia_url && esUrlDeStorageValida(licencia_url) ? licencia_url : '';
 
   // Código de verificación de correo (activación de cuenta) — se genera y guarda
@@ -106,9 +114,9 @@ export async function POST(req: NextRequest) {
       (nombre, correo, password, rol,
        tipo_documento, documento_identidad, fecha_nacimiento,
        celular, celular_indicativo, direccion, ciudad, numero_licencia, contacto_emergencia,
-       cedula_url, licencia_url,
+       cedula_url, cedula_url_dorso, licencia_url,
        correo_verificado, correo_codigo, correo_codigo_expira, correo_codigo_generado_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
   `).run(
     nombre, correo, hash, rolFinal,
     tipo_documento || 'cedula',
@@ -121,6 +129,7 @@ export async function POST(req: NextRequest) {
     numero_licencia || '',
     '{}',
     cedulaUrlFinal,
+    cedulaUrlDorsoFinal,
     licenciaUrlFinal,
     codigoCorreo, codigoExpira, ahora.toISOString(),
   );

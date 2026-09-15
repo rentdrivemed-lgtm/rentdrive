@@ -120,16 +120,24 @@ function RegistroForm() {
      documentos de la reserva y la revisión del equipo. */
   const [iaDisponible, setIaDisponible] = useState(false);
   const [consiente, setConsiente] = useState(false);
-  const [leyendo, setLeyendo] = useState<'cedula' | 'licencia' | null>(null);
+  const [leyendo, setLeyendo] = useState<'cedula' | 'cedula_dorso' | 'licencia' | null>(null);
   const [errorIA, setErrorIA] = useState('');
   const [avisoIA, setAvisoIA] = useState('');
   const [camposIA, setCamposIA] = useState<Set<CampoIA>>(new Set());
   const inputCedulaRef = useRef<HTMLInputElement>(null);
+  const inputCedulaDorsoRef = useRef<HTMLInputElement>(null);
   const inputLicenciaRef = useRef<HTMLInputElement>(null);
   // Foto ya guardada por el servidor al leerla (ver POST /api/registro/extraer-documento
   // → `urlGuardada`): se retiene en memoria para mandarla en el submit final y que quede
   // asociada a la cuenta, sin tener que volver a pedirla más adelante (p. ej. al reservar).
   const [cedulaUrlGuardada, setCedulaUrlGuardada] = useState('');
+  // Reverso del documento de identidad: se sube por el mismo endpoint (tipo
+  // 'cedula_dorso') y se guarda en `usuarios.cedula_url_dorso`. El atajo entero
+  // sigue siendo opcional — quien no lo use escribe sus datos a mano igual que
+  // antes —, pero si se usa, el dorso se pide junto con el frente: es el
+  // documento que después se exige completo para reservar y para el perfil del
+  // propietario, y pedirlo aquí evita tener que volver a pedírselo más adelante.
+  const [cedulaDorsoUrlGuardada, setCedulaDorsoUrlGuardada] = useState('');
   const [licenciaUrlGuardada, setLicenciaUrlGuardada] = useState('');
 
   useEffect(() => {
@@ -150,7 +158,7 @@ function RegistroForm() {
     });
   };
 
-  const leerDocumento = async (file: File, tipo: 'cedula' | 'licencia') => {
+  const leerDocumento = async (file: File, tipo: 'cedula' | 'cedula_dorso' | 'licencia') => {
     setErrorIA(''); setAvisoIA(''); setError('');
     setLeyendo(tipo);
     try {
@@ -175,7 +183,15 @@ function RegistroForm() {
       // funcionando igual, solo sin el atajo de precarga en la próxima reserva.
       if (typeof data.urlGuardada === 'string' && data.urlGuardada) {
         if (tipo === 'cedula') setCedulaUrlGuardada(data.urlGuardada);
+        else if (tipo === 'cedula_dorso') setCedulaDorsoUrlGuardada(data.urlGuardada);
         else setLicenciaUrlGuardada(data.urlGuardada);
+      }
+
+      // El reverso no trae datos para el formulario (ver lib/registro-ocr.ts): solo
+      // confirma que la foto sea un reverso y deja la URL guardada.
+      if (tipo === 'cedula_dorso') {
+        setAvisoIA('Listo, guardamos el dorso de tu documento.');
+        return;
       }
 
       const datos = (data.datos || {}) as DatosDocumento;
@@ -206,6 +222,7 @@ function RegistroForm() {
     } finally {
       setLeyendo(null);
       if (inputCedulaRef.current) inputCedulaRef.current.value = '';
+      if (inputCedulaDorsoRef.current) inputCedulaDorsoRef.current.value = '';
       if (inputLicenciaRef.current) inputLicenciaRef.current.value = '';
     }
   };
@@ -300,6 +317,7 @@ function RegistroForm() {
           // servidor logró guardarla (ver leerDocumento). Quien llenó el
           // formulario a mano simplemente no manda estos campos.
           ...(cedulaUrlGuardada ? { cedula_url: cedulaUrlGuardada } : {}),
+          ...(cedulaDorsoUrlGuardada ? { cedula_url_dorso: cedulaDorsoUrlGuardada } : {}),
           ...(licenciaUrlGuardada ? { licencia_url: licenciaUrlGuardada } : {}),
         }),
       });
@@ -451,7 +469,7 @@ function RegistroForm() {
                     <div className="min-w-0">
                       <p className="font-bold text-ink text-sm">Regístrate en 30 segundos</p>
                       <p className="text-xs text-ink/60 mt-0.5 leading-relaxed">
-                        Toma una foto de tu cédula{rol === 'usuario' ? ' y de tu licencia' : ''} y llenamos el formulario por ti.
+                        Toma una foto de tu cédula por el frente y por el dorso{rol === 'usuario' ? ', y de tu licencia,' : ''} y llenamos el formulario por ti.
                         Después revisas los datos y corriges lo que haga falta.
                       </p>
                     </div>
@@ -480,28 +498,51 @@ function RegistroForm() {
                       opción de elegir un archivo en algunos navegadores — no lo hagas. */}
                   <input ref={inputCedulaRef} type="file" accept="image/*" className="hidden"
                     onChange={e => { const f = e.target.files?.[0]; if (f) leerDocumento(f, 'cedula'); }} />
+                  <input ref={inputCedulaDorsoRef} type="file" accept="image/*" className="hidden"
+                    onChange={e => { const f = e.target.files?.[0]; if (f) leerDocumento(f, 'cedula_dorso'); }} />
                   <input ref={inputLicenciaRef} type="file" accept="image/*" className="hidden"
                     onChange={e => { const f = e.target.files?.[0]; if (f) leerDocumento(f, 'licencia'); }} />
 
-                  <div className={`grid gap-2 mt-3 ${rol === 'usuario' ? 'sm:grid-cols-2' : ''}`}>
+                  <div className="grid gap-2 mt-3 sm:grid-cols-2">
                     <button type="button"
                       onClick={() => inputCedulaRef.current?.click()}
                       disabled={!consiente || leyendo !== null}
                       className="flex items-center justify-center gap-2 bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold py-2.5 px-3 rounded-xl transition">
-                      {leyendo === 'cedula' ? 'Leyendo tu documento…' : 'Foto de mi cédula'}
+                      {leyendo === 'cedula'
+                        ? 'Leyendo tu documento…'
+                        : cedulaUrlGuardada ? '✓ Frente listo — cambiar' : 'Foto de mi cédula (frente)'}
+                    </button>
+                    <button type="button"
+                      onClick={() => inputCedulaDorsoRef.current?.click()}
+                      disabled={!consiente || leyendo !== null}
+                      className="flex items-center justify-center gap-2 border border-accent/40 text-accent hover:bg-accent/10 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-semibold py-2.5 px-3 rounded-xl transition bg-surface-2">
+                      {leyendo === 'cedula_dorso'
+                        ? 'Leyendo el dorso…'
+                        : cedulaDorsoUrlGuardada ? '✓ Dorso listo — cambiar' : 'Foto de mi cédula (dorso)'}
                     </button>
                     {rol === 'usuario' && (
                       <button type="button"
                         onClick={() => inputLicenciaRef.current?.click()}
                         disabled={!consiente || leyendo !== null}
-                        className="flex items-center justify-center gap-2 border border-accent/40 text-accent hover:bg-accent/10 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-semibold py-2.5 px-3 rounded-xl transition bg-surface-2">
-                        {leyendo === 'licencia' ? 'Leyendo tu licencia…' : 'Foto de mi licencia'}
+                        className="flex items-center justify-center gap-2 sm:col-span-2 border border-accent/40 text-accent hover:bg-accent/10 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-semibold py-2.5 px-3 rounded-xl transition bg-surface-2">
+                        {leyendo === 'licencia'
+                          ? 'Leyendo tu licencia…'
+                          : licenciaUrlGuardada ? '✓ Licencia lista — cambiar' : 'Foto de mi licencia'}
                       </button>
                     )}
                   </div>
 
                   {!consiente && (
                     <p className="text-[11px] text-ink/45 mt-2">Marca la casilla para poder subir la foto.</p>
+                  )}
+                  {/* Recordatorio, NO un bloqueo: el atajo entero es opcional. Pero el dorso
+                      se exige después (al reservar, y en el perfil del propietario) salvo que
+                      el documento sea un pasaporte, que no tiene dorso — así que es mejor
+                      avisarlo acá que hacérselo subir dos veces. */}
+                  {cedulaUrlGuardada && !cedulaDorsoUrlGuardada && perfil.tipo_documento !== 'pasaporte' && (
+                    <p className="text-[11px] text-warning mt-2">
+                      Falta el dorso de tu cédula. Te lo vamos a pedir igual más adelante — tómalo ahora y no lo repites.
+                    </p>
                   )}
                   {avisoIA && (
                     <p className="text-[11px] text-success mt-2 flex items-start gap-1.5">
