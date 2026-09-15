@@ -285,6 +285,59 @@ CREATE TABLE IF NOT EXISTS tablero_elementos (
   updated_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
 );
 
+-- ─────────────── actas de respaldo del servicio ───────────────
+-- Reflejo en Postgres de `actas_servicio` (lib/db.ts). Una FOTOGRAFÍA CONGELADA del
+-- servicio: `datos` guarda el JSON con vehículo/cliente/fechas/lugares/precio/quién
+-- atendió y el resultado de la inspección con IA tal como estaban al generarse, y
+-- `fotos` la lista JSON [{url, fase}] de las fotos de salida y entrada. Quitar después
+-- una foto de la operación NO cambia el acta, y `lib/limpieza-documentos.ts` tiene
+-- prohibido borrar de Cloudinary cualquier URL referenciada acá.
+-- Regenerar NO pisa: cada generación inserta una `version` nueva (de ahí el UNIQUE).
+-- El PDF no se guarda; se arma al vuelo desde este snapshot (lib/acta-servicio-pdf.ts).
+--
+-- ⚠️ Paridad SQLite↔Supabase (mismo gap preexistente que ya documentan los bloques de
+-- `fotos_moderacion` y del cotizador de buses más abajo): este archivo NO tiene
+-- `CREATE TABLE operaciones` ni `CREATE TABLE reservas`, así que la FK a `operaciones`
+-- se deja ANOTADA y no declarada — declararla haría fallar el script contra un Supabase
+-- que aún no tenga esa tabla. Si en algún momento se reconstruye `CREATE TABLE
+-- operaciones` para Supabase, agregar entonces:
+--   ALTER TABLE actas_servicio ADD CONSTRAINT actas_servicio_operacion_fk
+--     FOREIGN KEY (operacion_id) REFERENCES operaciones(id);
+CREATE TABLE IF NOT EXISTS actas_servicio (
+  id                  SERIAL PRIMARY KEY,
+  operacion_id        INTEGER NOT NULL,
+  reserva_id          INTEGER NOT NULL,
+  version             INTEGER NOT NULL DEFAULT 1,
+  datos               TEXT NOT NULL DEFAULT '{}',
+  fotos               TEXT NOT NULL DEFAULT '[]',
+  -- 'sistema' = se generó sola al cerrarse el servicio; 'admin' = alguien pulsó
+  -- "Generar respaldo" en el panel de Operaciones.
+  generada_por        TEXT NOT NULL DEFAULT 'sistema' CHECK (generada_por IN ('sistema','admin')),
+  generada_por_id     INTEGER REFERENCES usuarios(id),
+  generada_por_nombre TEXT DEFAULT '',
+  created_at          TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
+  UNIQUE (operacion_id, version)
+);
+
+-- ─────────────── casillas guiadas de fotos del servicio (columnas de `operaciones`) ───────────────
+-- ⚠️ Paridad SQLite↔Supabase — MISMO gap preexistente que el bloque de arriba: este
+-- archivo NO tiene `CREATE TABLE operaciones`, así que las columnas nuevas de esa tabla
+-- no se pueden declarar aquí dentro de un CREATE, y un `ALTER TABLE operaciones` suelto
+-- haría fallar el script entero contra un Supabase que todavía no tiene la tabla. Quedan
+-- ANOTADAS. Cuando se reconstruya `CREATE TABLE operaciones` para Postgres hay que
+-- incluir estas dos columnas (equivalentes exactas de lib/db.ts):
+--
+--   fotos_omitidas TEXT DEFAULT '[]',   -- [{fase, casilla, motivo, autor, autor_tipo, fecha}]
+--   fotos_guiadas  INTEGER DEFAULT 0,   -- 1 = se le exigen las 8 casillas por fase
+--
+-- `fotos_salida` / `fotos_entrada` NO cambian de tipo: siguen siendo TEXT con un JSON
+-- array, solo que ahora ese array puede traer objetos {casilla, url} además de los
+-- strings sueltos del formato legado. `lib/fotos-servicio.ts` (módulo puro) lee los dos.
+--
+-- El DEFAULT de `fotos_guiadas` DEBE quedarse en 0: es lo que deja exentas del bloqueo a
+-- las operaciones que ya existían. El 1 lo pone explícitamente el INSERT de
+-- `crearOperacionParaReserva`.
+
 -- ─────────────── moderación de contenido (fotos de vehículo) — modelo ALLOW-LIST ───────────────
 -- Registro server-side de TODA foto subida por POST /api/upload (no solo las marcadas),
 -- con el resultado de moderación de la IA (misma llamada que detecta la placa) y quién

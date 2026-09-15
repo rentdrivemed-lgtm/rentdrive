@@ -111,7 +111,18 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { candidatos, huerfanos, conservados } = clasificarRecursos(db, recursos, horasAntiguedad);
+  // `clasificarRecursos` LANZA si no puede comprobar qué fotos están protegidas por
+  // un acta de respaldo (lib/limpieza-documentos.ts): en ese caso no se borra nada.
+  let clasificacion: ReturnType<typeof clasificarRecursos>;
+  try {
+    clasificacion = clasificarRecursos(db, recursos, horasAntiguedad);
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'No se pudo clasificar los recursos; no se borró nada.' },
+      { status: 500 },
+    );
+  }
+  const { candidatos, huerfanos, conservados } = clasificacion;
 
   let borrados: string[] = [];
   let errorBorrado: string | undefined;

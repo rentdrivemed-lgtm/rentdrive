@@ -111,6 +111,13 @@ function desvincularMetadataAdministrativaUsuario(db: DB, usuarioId: number) {
   db.prepare('DELETE FROM tablero_colaboradores WHERE usuario_id = ?').run(usuarioId);
   db.prepare('UPDATE nfc_cards SET created_by = NULL WHERE created_by = ?').run(usuarioId);
   db.prepare('UPDATE mensajes_soporte SET remitente_admin_id = NULL WHERE remitente_admin_id = ?').run(usuarioId);
+  // Actas de respaldo del servicio: `generada_por_id` apunta al admin que pulsó
+  // "Generar respaldo". El acta NO es historial de negocio de ESTE usuario (es del
+  // servicio), y el nombre de quien la generó ya quedó denormalizado en
+  // `generada_por_nombre`, así que el acta sigue diciendo quién fue. Sin este
+  // desvinculado, cualquier admin que hubiera generado un acta se volvía imposible de
+  // borrar: el DELETE fallaba por la FK y caía en silencio al archivado.
+  db.prepare('UPDATE actas_servicio SET generada_por_id = NULL WHERE generada_por_id = ?').run(usuarioId);
 }
 
 /**

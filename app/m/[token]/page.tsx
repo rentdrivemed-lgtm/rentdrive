@@ -1,8 +1,11 @@
 'use client';
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import InspeccionResultado, { type InspeccionResultado as InspRes } from '@/components/InspeccionResultado';
+import VisorFotos, { type FotoVisor } from '@/components/VisorFotos';
+import CasillasFotos from '@/components/CasillasFotos';
 import { lugarResumen, type Lugar } from '@/lib/lugares';
+import { parseFotosServicio, parseOmisiones, type CasillaId, type FaseFoto } from '@/lib/fotos-servicio';
 import { IconCheck } from '@/components/Icons';
 
 type Tarea = { id: number; tipo: string; titulo: string; detalle: string; estado: 'pendiente' | 'hecho'; orden: number };
@@ -14,13 +17,15 @@ type Detalle = {
 type Operacion = {
   id: number; reserva_id: number; estado: string;
   fotos_salida: string; fotos_entrada: string; inspeccion_ia: string; inspeccion_estado: string;
+  // Casillas guiadas de fotos (ver lib/fotos-servicio.ts). `fotos_guiadas` vale 0 en
+  // los servicios anteriores a las casillas: ahí no se exigen las 8 fotos.
+  fotos_omitidas: string; fotos_guiadas: number;
   detalle: Detalle; tareas: Tarea[];
 };
 
 const TAREA_ICON: Record<string, string> = { lavar: '🚿', tanquear: '⛽', entregar: '📤', recibir: '📥', inspeccion: '📸' };
 const OP_LABEL: Record<string, string> = { pendiente: 'Sin iniciar', asignada: 'Asignada', en_proceso: 'En proceso', finalizada: 'Finalizada' };
 
-function parseArr(s: string): string[] { try { const a = JSON.parse(s || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } }
 function parseInsp(s: string): InspRes | null { try { return s ? JSON.parse(s) as InspRes : null; } catch { return null; } }
 function resumenLugar(json: string): string { try { const o = JSON.parse(json || '{}') as Lugar; return lugarResumen(o.municipio ? o : null); } catch { return '—'; } }
 
@@ -34,7 +39,14 @@ export default function MensajeroPage() {
   const [invalido, setInvalido] = useState(false);
   const [inspeccionando, setInspeccionando] = useState<number | null>(null);
   const [errorInsp, setErrorInsp] = useState<Record<number, string>>({});
+  // Mensaje del servidor cuando rechaza marcar una tarea (faltan fotos) o falla una
+  // subida. Va por operación: en la pantalla hay varias tarjetas a la vez.
+  const [errorTarea, setErrorTarea] = useState<Record<number, string>>({});
   const [errorCarga, setErrorCarga] = useState('');
+  // Visor de fotos a pantalla completa (componente compartido con el panel de
+  // Operaciones del admin). El padre es el dueño del índice para poder abrirlo
+  // desde cualquier miniatura, de salida o de entrada.
+  const [visor, setVisor] = useState<{ fotos: FotoVisor[]; indice: number; titulo: string } | null>(null);
 
   const cargar = async () => {
     setCargando(true);
@@ -82,19 +94,52 @@ export default function MensajeroPage() {
     }
   };
 
-  const subirFotos = async (op: Operacion, fase: 'salida' | 'entrada', files: FileList) => {
-    const actuales = parseArr(fase === 'salida' ? op.fotos_salida : op.fotos_entrada);
-    const nuevas: string[] = [];
-    for (const f of Array.from(files)) {
-      const url = await subirArchivo(f);
-      if (url) nuevas.push(url);
+  // Una casilla a la vez: el servidor solo toca ESA casilla, así que dos guardados
+  // que se crucen con mala señal no se pisan entre sí.
+  const subirFotoCasilla = async (op: Operacion, fase: FaseFoto, casilla: CasillaId, file: File) => {
+    setErrorTarea(e => ({ ...e, [op.id]: '' }));
+    const url = await subirArchivo(file);
+    if (!url) {
+      setErrorTarea(e => ({ ...e, [op.id]: 'No se pudo subir la foto. Revisa tu señal e intenta de nuevo.' }));
+      return;
     }
-    if (nuevas.length) await accion({ accion: 'fotos', operacion_id: op.id, fase, urls: [...actuales, ...nuevas] });
+    const r = await accion({ accion: 'foto_casilla', operacion_id: op.id, fase, casilla, url });
+    if (!r.ok) setErrorTarea(e => ({ ...e, [op.id]: r.error || 'No se pudo guardar la foto.' }));
   };
 
-  const quitarFoto = async (op: Operacion, fase: 'salida' | 'entrada', url: string) => {
-    const actuales = parseArr(fase === 'salida' ? op.fotos_salida : op.fotos_entrada).filter(u => u !== url);
-    await accion({ accion: 'fotos', operacion_id: op.id, fase, urls: actuales });
+  const quitarFotoCasilla = async (op: Operacion, fase: FaseFoto, casilla: CasillaId) => {
+    await accion({ accion: 'foto_casilla', operacion_id: op.id, fase, casilla, url: '' });
+  };
+
+  const omitirCasilla = async (op: Operacion, fase: FaseFoto, casilla: CasillaId, motivo: string): Promise<string | null> => {
+    const r = await accion({ accion: 'omitir_casilla', operacion_id: op.id, fase, casilla, motivo });
+    return r.ok ? null : (r.error || 'No se pudo guardar el motivo.');
+  };
+
+  const quitarOmision = async (op: Operacion, fase: FaseFoto, casilla: CasillaId) => {
+    await accion({ accion: 'quitar_omision', operacion_id: op.id, fase, casilla });
+  };
+
+  // Fotos sueltas de servicios anteriores a las casillas. Se manda SOLO la URL que se
+  // quiere quitar y el servidor filtra dentro de una transacción. Antes esta pantalla
+  // reconstruía la lista completa desde su propia copia y la mandaba con la acción
+  // `fotos` (que reemplaza la fase entera): con el celular abierto un rato, eso
+  // devolvía un estado viejo y borraba lo que el administrador hubiera subido
+  // mientras tanto.
+  const quitarFotoSuelta = async (op: Operacion, fase: FaseFoto, url: string) => {
+    await accion({ accion: 'quitar_foto_suelta', operacion_id: op.id, fase, url });
+  };
+
+  // Marcar/desmarcar una tarea. El servidor puede RECHAZARLO si faltan fotos de la
+  // fase: ese mensaje hay que mostrarlo, o el mensajero toca la casilla y no pasa
+  // nada sin saber por qué.
+  const marcarTarea = async (op: Operacion, tarea: Tarea) => {
+    setErrorTarea(e => ({ ...e, [op.id]: '' }));
+    const r = await accion({
+      accion: 'tarea', operacion_id: op.id, tarea_id: tarea.id,
+      estado: tarea.estado === 'hecho' ? 'pendiente' : 'hecho',
+    });
+    if (!r.ok) setErrorTarea(e => ({ ...e, [op.id]: r.error || 'No se pudo marcar la tarea.' }));
   };
 
   const inspeccionar = async (op: Operacion) => {
@@ -143,8 +188,23 @@ export default function MensajeroPage() {
             {ops.map(op => {
               const d = op.detalle;
               const insp = parseInsp(op.inspeccion_ia);
-              const fotosSalida = parseArr(op.fotos_salida);
-              const fotosEntrada = parseArr(op.fotos_entrada);
+              // `parseFotosServicio` lee los DOS formatos: el array plano de strings de
+              // los servicios viejos y el `[{casilla, url}]` de las casillas guiadas.
+              const fotosSalida = parseFotosServicio(op.fotos_salida);
+              const fotosEntrada = parseFotosServicio(op.fotos_entrada);
+              const omisiones = parseOmisiones(op.fotos_omitidas);
+              const exigidas = Number(op.fotos_guiadas) === 1;
+              // Salida y entrada van en UNA sola lista para poder pasar de una a otra
+              // sin cerrar el visor; la etiqueta ("SALIDA 2 de 4") sale del grupo.
+              const fotosVisor: FotoVisor[] = [
+                ...fotosSalida.map(f => ({ url: f.url, grupo: 'SALIDA' })),
+                ...fotosEntrada.map(f => ({ url: f.url, grupo: 'ENTRADA' })),
+              ];
+              const tituloVisor = d ? `${d.marca} ${d.modelo} ${d.anio}${d.placa ? ` · ${d.placa}` : ''}` : `Servicio #${op.id}`;
+              const abrirVisor = (url: string) => {
+                const i = fotosVisor.findIndex(f => f.url === url);
+                if (i >= 0) setVisor({ fotos: fotosVisor, indice: i, titulo: tituloVisor });
+              };
               return (
                 <div key={op.id} className="bg-surface-2 rounded-2xl border border-border p-4 space-y-3">
                   <div className="flex items-start justify-between gap-2">
@@ -172,7 +232,7 @@ export default function MensajeroPage() {
                       {op.tareas.map(t => (
                         <li key={t.id}>
                           <button
-                            onClick={() => accion({ accion: 'tarea', operacion_id: op.id, tarea_id: t.id, estado: t.estado === 'hecho' ? 'pendiente' : 'hecho' })}
+                            onClick={() => marcarTarea(op, t)}
                             className="w-full flex items-start gap-2.5 text-left rounded-xl px-2.5 py-2 hover:bg-surface transition">
                             <span className={`mt-0.5 w-5 h-5 rounded-md border flex items-center justify-center shrink-0 ${t.estado === 'hecho' ? 'bg-success border-success text-white' : 'border-border'}`}>
                               {t.estado === 'hecho' && <IconCheck size={13} />}
@@ -185,13 +245,40 @@ export default function MensajeroPage() {
                         </li>
                       ))}
                     </ul>
+                    {errorTarea[op.id] && (
+                      <p className="text-[11px] text-danger mt-1.5 bg-danger/10 rounded-lg px-2.5 py-1.5">{errorTarea[op.id]}</p>
+                    )}
                   </div>
 
                   {/* Inspección con fotos */}
                   <div className="border-t border-border/60 pt-3 space-y-3">
-                    <p className="text-xs font-semibold text-ink/50 uppercase tracking-wide">Inspección de daños</p>
-                    <FaseFotos label="📸 Fotos de SALIDA (sede)" fotos={fotosSalida} onAdd={files => subirFotos(op, 'salida', files)} onRemove={u => quitarFoto(op, 'salida', u)} />
-                    <FaseFotos label="📸 Fotos de ENTRADA (devolución)" fotos={fotosEntrada} onAdd={files => subirFotos(op, 'entrada', files)} onRemove={u => quitarFoto(op, 'entrada', u)} />
+                    <p className="text-xs font-semibold text-ink/50 uppercase tracking-wide">Fotos del vehículo</p>
+                    <CasillasFotos
+                      fase="salida"
+                      titulo="📤 Al ENTREGAR el carro"
+                      fotos={fotosSalida}
+                      omisiones={omisiones}
+                      exigidas={exigidas}
+                      usarCamara
+                      onFoto={(casilla, file) => subirFotoCasilla(op, 'salida', casilla, file)}
+                      onQuitarFoto={casilla => quitarFotoCasilla(op, 'salida', casilla)}
+                      onOmitir={(casilla, motivo) => omitirCasilla(op, 'salida', casilla, motivo)}
+                      onQuitarOmision={casilla => quitarOmision(op, 'salida', casilla)}
+                      onVer={abrirVisor}
+                      onQuitarSuelta={url => quitarFotoSuelta(op, 'salida', url)} />
+                    <CasillasFotos
+                      fase="entrada"
+                      titulo="📥 Al RECIBIR el carro"
+                      fotos={fotosEntrada}
+                      omisiones={omisiones}
+                      exigidas={exigidas}
+                      usarCamara
+                      onFoto={(casilla, file) => subirFotoCasilla(op, 'entrada', casilla, file)}
+                      onQuitarFoto={casilla => quitarFotoCasilla(op, 'entrada', casilla)}
+                      onOmitir={(casilla, motivo) => omitirCasilla(op, 'entrada', casilla, motivo)}
+                      onQuitarOmision={casilla => quitarOmision(op, 'entrada', casilla)}
+                      onVer={abrirVisor}
+                      onQuitarSuelta={url => quitarFotoSuelta(op, 'entrada', url)} />
 
                     <button
                       onClick={() => inspeccionar(op)}
@@ -218,45 +305,15 @@ export default function MensajeroPage() {
           </div>
         )}
       </div>
-    </div>
-  );
-}
 
-function FaseFotos({ label, fotos, onAdd, onRemove }: {
-  label: string; fotos: string[];
-  onAdd: (files: FileList) => Promise<void>; onRemove: (url: string) => void;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [subiendo, setSubiendo] = useState(false);
-  const handle = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files?.length) return;
-    setSubiendo(true);
-    try {
-      await onAdd(e.target.files);
-    } finally {
-      setSubiendo(false);
-      if (inputRef.current) inputRef.current.value = '';
-    }
-  };
-  return (
-    <div>
-      <p className="text-[11px] text-ink/50 mb-1">{label}</p>
-      <div className="flex flex-wrap gap-2">
-        {fotos.map(u => (
-          <div key={u} className="relative w-16 h-16 rounded-lg overflow-hidden border border-border">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={u} alt="foto" className="w-full h-full object-cover" />
-            <button onClick={() => onRemove(u)} aria-label="Eliminar foto" className="absolute top-0.5 right-0.5 bg-black/60 text-white w-4 h-4 rounded-full text-[10px] leading-none">×</button>
-          </div>
-        ))}
-        <button
-          onClick={() => inputRef.current?.click()}
-          disabled={subiendo}
-          className="w-16 h-16 rounded-lg border-2 border-dashed border-border flex items-center justify-center text-ink/50 hover:border-accent/50 transition disabled:opacity-50">
-          {subiendo ? '…' : '+'}
-        </button>
-      </div>
-      <input ref={inputRef} type="file" accept="image/*" multiple capture="environment" className="hidden" onChange={handle} />
+      {visor && (
+        <VisorFotos
+          fotos={visor.fotos}
+          indice={visor.indice}
+          titulo={visor.titulo}
+          onIndice={i => setVisor(v => (v ? { ...v, indice: i } : v))}
+          onCerrar={() => setVisor(null)} />
+      )}
     </div>
   );
 }

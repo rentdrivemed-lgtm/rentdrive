@@ -118,8 +118,28 @@ function initDb(db: Database.Database) {
       notas TEXT DEFAULT '',
       wa_admin TEXT DEFAULT '',
       wa_mensajero TEXT DEFAULT '',
+      -- Fotos de cada fase. Conviven DOS formatos y los dos son válidos (ver
+      -- lib/fotos-servicio.ts): el legado ["url", "url"] de las operaciones que ya
+      -- estaban en producción, y el actual [{"casilla":"tablero","url":"..."}] con
+      -- las 8 casillas guiadas. Nunca se reescriben las filas viejas: todo lo que
+      -- lee estas columnas pasa por parseFotosServicio(), que acepta los dos.
       fotos_salida TEXT DEFAULT '[]',
       fotos_entrada TEXT DEFAULT '[]',
+      -- Casillas que el mensajero NO pudo fotografiar, con el motivo escrito a
+      -- mano, quién lo escribió y cuándo: [{fase, casilla, motivo, autor,
+      -- autor_tipo, fecha}]. Es la única forma de cerrar una fase sin las 8 fotos,
+      -- y sale impresa en el acta de respaldo.
+      fotos_omitidas TEXT DEFAULT '[]',
+      -- ¿A este servicio se le exigen las 8 casillas por fase?
+      -- 0 = no (operaciones que ya existían cuando se lanzaron las casillas, o que
+      -- estaban a medio hacer: bloquearlas retroactivamente dejaría servicios en
+      -- curso imposibles de cerrar, con el cliente esperando).
+      -- 1 = sí (operaciones creadas a partir de ese momento).
+      -- El ALTER de abajo deja en 0 todo lo que ya existía y
+      -- crearOperacionParaReserva() pone 1 explícitamente en cada INSERT nuevo: el
+      -- DEFAULT se queda en 0 a propósito para que el corte sea la fecha de
+      -- creación de la operación y no un descuido.
+      fotos_guiadas INTEGER DEFAULT 0,
       inspeccion_ia TEXT DEFAULT '',
       inspeccion_estado TEXT DEFAULT 'pendiente',
       created_at TEXT DEFAULT (datetime('now', 'localtime'))
@@ -134,6 +154,39 @@ function initDb(db: Database.Database) {
       estado TEXT NOT NULL DEFAULT 'pendiente' CHECK(estado IN ('pendiente','hecho')),
       orden INTEGER DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now', 'localtime'))
+    );
+
+    -- ── Acta de respaldo del servicio (una FOTOGRAFÍA CONGELADA) ────────────
+    -- Las fotos de salida/entrada viven en operaciones.fotos_salida/fotos_entrada
+    -- y se pueden quitar con el botón × de la miniatura, sin que quede constancia
+    -- de nada. Un respaldo que se puede borrar no es un respaldo: por eso el acta
+    -- guarda, EN EL MOMENTO EN QUE SE GENERA, una copia de los datos del servicio
+    -- (columna datos, JSON) y de la lista de fotos (columna fotos, JSON con
+    -- {url, fase}). Quitar después una foto de la operación NO altera ningún acta
+    -- ya generada, y lib/limpieza-documentos.ts tiene prohibido borrar de
+    -- Cloudinary cualquier URL referenciada acá (si no, el respaldo quedaría con
+    -- fotos rotas).
+    --
+    -- El PDF NO se guarda: se arma al vuelo desde este snapshot
+    -- (lib/acta-servicio-pdf.ts), así que lo que se descarga siempre corresponde a
+    -- la versión congelada, no a los datos de hoy.
+    --
+    -- Nunca se pisa una versión: cada generación inserta una fila nueva con la
+    -- versión siguiente de esa operación (historial completo y auditable).
+    CREATE TABLE IF NOT EXISTS actas_servicio (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      operacion_id INTEGER NOT NULL REFERENCES operaciones(id),
+      reserva_id INTEGER NOT NULL,
+      version INTEGER NOT NULL DEFAULT 1,
+      datos TEXT NOT NULL DEFAULT '{}',
+      fotos TEXT NOT NULL DEFAULT '[]',
+      -- 'sistema' = se generó sola al cerrarse el servicio; 'admin' = alguien pulsó
+      -- "Generar respaldo" en el panel de Operaciones.
+      generada_por TEXT NOT NULL DEFAULT 'sistema' CHECK(generada_por IN ('sistema','admin')),
+      generada_por_id INTEGER DEFAULT NULL REFERENCES usuarios(id),
+      generada_por_nombre TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now', 'localtime')),
+      UNIQUE(operacion_id, version)
     );
 
     CREATE TABLE IF NOT EXISTS config (
@@ -792,6 +845,15 @@ function initDb(db: Database.Database) {
   try { db.exec("ALTER TABLE operaciones ADD COLUMN fotos_salida TEXT DEFAULT '[]'"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE operaciones ADD COLUMN fotos_entrada TEXT DEFAULT '[]'"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE operaciones ADD COLUMN inspeccion_ia TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  // Casillas guiadas de fotos (ver el CREATE TABLE de arriba y lib/fotos-servicio.ts).
+  // `fotos_guiadas` entra con DEFAULT 0 a propósito: TODAS las operaciones que ya
+  // existían quedan exentas del bloqueo de las 8 fotos. Las que ya están cerradas no
+  // se pueden "descerrar" para cumplir un requisito que no existía, y las que están a
+  // medio hacer tienen al mensajero en la calle con el cliente delante. Solo las
+  // operaciones creadas a partir de acá nacen con 1 (lo pone el INSERT de
+  // `crearOperacionParaReserva`, no el DEFAULT).
+  try { db.exec("ALTER TABLE operaciones ADD COLUMN fotos_omitidas TEXT DEFAULT '[]'"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE operaciones ADD COLUMN fotos_guiadas INTEGER DEFAULT 0"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE operaciones ADD COLUMN inspeccion_estado TEXT DEFAULT 'pendiente'"); } catch { /* ya existe */ }
 
   // Cotizaciones sueltas (cotizador de venta, sin reserva ni cuenta de usuario): columnas
