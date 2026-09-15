@@ -1,6 +1,7 @@
 import { getAnthropic } from './anthropic';
 import { consumirIntento, verificarIntento } from './limite-tasa';
 import { fetchAsBase64 } from './verificacion-docs';
+import { CASILLAS, esUrlFotoSegura, parseFotosServicio, type FotoServicio } from './fotos-servicio';
 export type HallazgoDano = { tipo: string; ubicacion: string; descripcion: string; confianza: 'alta' | 'media' | 'baja'; };
 export type InspeccionResultado = { hay_danos_nuevos: boolean; severidad_general: 'ninguna' | 'leve' | 'moderada' | 'grave'; hallazgos: HallazgoDano[]; zonas_no_comparables: string; resumen: string; recomendacion: string; };
 
@@ -74,17 +75,13 @@ export function limiteInspeccion(actor: string): string | null {
  * Devuelve el mensaje de error (400) o null si hay fotos de los dos juegos.
  */
 export function faltanFotosParaInspeccion(fotosSalidaJson: unknown, fotosEntradaJson: unknown): string | null {
-  const urls = (raw: unknown): string[] => {
-    if (typeof raw !== 'string' || !raw.trim()) return [];
-    try {
-      const v: unknown = JSON.parse(raw);
-      return Array.isArray(v) ? v.filter((u): u is string => typeof u === 'string' && u.trim() !== '') : [];
-    } catch {
-      return [];
-    }
-  };
-  if (urls(fotosSalidaJson).length === 0) return 'No hay fotos de salida para comparar';
-  if (urls(fotosEntradaJson).length === 0) return 'No hay fotos de entrada para comparar';
+  // `parseFotosServicio` y no un filtro de strings a mano: desde las casillas
+  // guiadas estas columnas guardan objetos `{casilla, url}`, y un filtro por
+  // `typeof u === 'string'` los descartaba TODOS — con las 8 fotos tomadas, esta
+  // función respondía "No hay fotos de salida". Sigue leyendo igual el formato
+  // legado (array plano de strings) de las operaciones viejas.
+  if (parseFotosServicio(fotosSalidaJson).length === 0) return 'No hay fotos de salida para comparar';
+  if (parseFotosServicio(fotosEntradaJson).length === 0) return 'No hay fotos de entrada para comparar';
   return null;
 }
 
@@ -144,8 +141,17 @@ type FotoLista =
  * EXIF y tope de tamaño. Acá solo se añade el reescalado y el descarte de PDFs
  * (un juego de fotos no debería traer uno; si pasa, se anota como foto no
  * utilizable en vez de mandarle a Claude un bloque `document` que no toca).
+ *
+ * ⚠️ La dirección se vuelve a validar acá con `esUrlFotoSegura` aunque ya se validara
+ * al guardarla: este es un punto donde el SERVIDOR se conecta a donde diga la base de
+ * datos, y una de las dos pantallas que escriben esas URLs (/m/<token>) no tiene
+ * login. Una URL que no apunte al CDN de fotos se anota como no utilizable, igual que
+ * una foto caída — nunca se convierte en una petición a la red interna.
  */
 async function prepararFoto(url: string, etiqueta: string): Promise<FotoLista> {
+  if (!esUrlFotoSegura(url)) {
+    return { etiqueta, ok: false, error: 'la dirección de la foto no es de nuestro almacenamiento de fotos' };
+  }
   try {
     // El reescalado se delega a `fetchAsBase64` (opción `ladoMaxPx`) a propósito:
     // hacerlo acá obligaba a decodificar cada foto DOS veces (una para validarla
@@ -171,6 +177,59 @@ async function prepararFotos(items: { url: string; etiqueta: string }[]): Promis
     listas.push(...await Promise.all(lote.map(it => prepararFoto(it.url, it.etiqueta))));
   }
   return listas;
+}
+
+type ItemFoto = { url: string; etiqueta: string; fase: 'SALIDA' | 'ENTRADA' };
+
+/**
+ * Ordena las fotos EN PARES por zona y les pone una etiqueta con el NOMBRE de la
+ * zona ("SALIDA — Esquina trasera derecha"), en vez del "SALIDA 3/8" de antes.
+ *
+ * Por qué importa: en las pruebas reales la IA se quejaba una y otra vez de no
+ * poder comparar zonas, porque no tenía forma de saber qué pedazo del carro estaba
+ * mirando en cada foto ni cuál de las otras era la misma zona. Con las casillas
+ * guiadas (lib/fotos-servicio.ts) eso ya se sabe, así que se le entrega masticado:
+ * la foto de SALIDA de una zona y JUSTO DESPUÉS la de ENTRADA de esa misma zona.
+ *
+ * Las fotos sin casilla (operaciones anteriores a las casillas guiadas) van al
+ * final y se etiquetan EXACTAMENTE como antes ("SALIDA 1/8"): para esos servicios
+ * la inspección se comporta igual que siempre.
+ *
+ * `pares` y `soloUnLado` son datos verificables que se le pasan al prompt: qué
+ * zonas SÍ se pueden comparar y cuáles no. Lo segundo termina además en
+ * `zonas_no_comparables`, que es donde el empleado lo va a leer.
+ */
+function ordenarPorCasilla(salida: FotoServicio[], entrada: FotoServicio[]): {
+  items: ItemFoto[]; pares: string[]; soloUnLado: string[];
+} {
+  const items: ItemFoto[] = [];
+  const pares: string[] = [];
+  const soloUnLado: string[] = [];
+  const usadaS = new Set<number>();
+  const usadaE = new Set<number>();
+
+  for (const c of CASILLAS) {
+    const iS = salida.findIndex((f, i) => f.casilla === c.id && !usadaS.has(i));
+    const iE = entrada.findIndex((f, i) => f.casilla === c.id && !usadaE.has(i));
+    if (iS < 0 && iE < 0) continue;
+    if (iS >= 0) {
+      usadaS.add(iS);
+      items.push({ url: salida[iS].url, etiqueta: `SALIDA — ${c.nombre}`, fase: 'SALIDA' });
+    }
+    if (iE >= 0) {
+      usadaE.add(iE);
+      items.push({ url: entrada[iE].url, etiqueta: `ENTRADA — ${c.nombre}`, fase: 'ENTRADA' });
+    }
+    if (iS >= 0 && iE >= 0) pares.push(c.nombre);
+    else soloUnLado.push(`${c.nombre} (solo hay foto de ${iS >= 0 ? 'salida' : 'entrada'})`);
+  }
+
+  const sueltasS = salida.filter((_, i) => !usadaS.has(i));
+  const sueltasE = entrada.filter((_, i) => !usadaE.has(i));
+  sueltasS.forEach((f, i) => items.push({ url: f.url, etiqueta: `SALIDA ${i + 1}/${sueltasS.length}`, fase: 'SALIDA' }));
+  sueltasE.forEach((f, i) => items.push({ url: f.url, etiqueta: `ENTRADA ${i + 1}/${sueltasE.length}`, fase: 'ENTRADA' }));
+
+  return { items, pares, soloUnLado };
 }
 
 /* ── El prompt ────────────────────────────────────────────────────────────────
@@ -225,13 +284,48 @@ async function prepararFotos(items: { url: string; etiqueta: string }[]): Promis
  * 8) Se pide SOLO JSON (sin razonamiento en prosa): igual que en
  *    lib/verificacion-docs.ts, el parseo ancla en el primer `{` y el último `}`,
  *    y acá los valores son texto libre en español que podría traer llaves.
+ *
+ * 9) Los PARES por zona. Desde las casillas guiadas (lib/fotos-servicio.ts) el
+ *    mensajero toma las MISMAS 8 zonas en la entrega y en la devolución, así que
+ *    el prompt ya no dice "acá hay dos montones de fotos, arréglatelas": dice qué
+ *    zona es cada foto y cuál es su pareja de la otra fase, y lista aparte las
+ *    zonas que solo tienen un lado. Eso es exactamente lo que le faltaba a la
+ *    regla de la doble evidencia del punto (1) para poder aplicarse: sin saber
+ *    qué zona mira, el modelo no podía cumplir la condición (b) y mandaba casi
+ *    todo a `zonas_no_comparables`. Para operaciones anteriores a las casillas
+ *    (fotos sin zona) el texto vuelve a ser el de antes.
  */
-function construirPrompt(opts: { vehiculo: string; placa: string; nSalida: number; nEntrada: number }): string {
+function construirPrompt(opts: {
+  vehiculo: string; placa: string; nSalida: number; nEntrada: number;
+  pares: string[]; soloUnLado: string[]; sinCasilla: number;
+}): string {
+  const bloquePares = opts.pares.length > 0
+    ? `
+CÓMO VIENEN ORDENADAS LAS FOTOS (esto es lo más útil que tienes):
+Las fotos están agrupadas POR ZONA del carro y en pares: primero la de SALIDA de una zona y JUSTO DESPUÉS la de ENTRADA de esa MISMA zona, tomada desde la misma posición. La etiqueta de cada foto trae la fase y el nombre de la zona, por ejemplo "SALIDA — Esquina trasera derecha" seguida de "ENTRADA — Esquina trasera derecha".
+Compara cada foto contra la de su pareja. No compares una zona contra otra distinta.
+
+Zonas que SÍ puedes comparar (tienen foto en las dos fases): ${opts.pares.join(', ')}.${
+  opts.soloUnLado.length > 0
+    ? `
+Zonas que NO puedes comparar porque solo tienen foto de una fase: ${opts.soloUnLado.join(', ')}. Sobre estas no puedes concluir nada: van en "zonas_no_comparables".`
+    : ''
+}${
+  opts.sinCasilla > 0
+    ? `
+Además hay ${opts.sinCasilla} foto(s) sin zona asignada, etiquetadas con números ("SALIDA 1/3"). Con esas tienes que deducir tú la zona; si no logras emparejarlas con su equivalente de la otra fase, no concluyas nada sobre ellas.`
+    : ''
+}
+`
+    : `
+Cada foto viene precedida de su etiqueta (ej. "SALIDA 2/5"). Estas fotos no traen la zona del carro anotada: tienes que deducir tú qué parte del carro es cada una y cuál es su equivalente en la otra fase.
+`;
+
   return `Eres un perito de inspección vehicular para DrivePass, una plataforma colombiana de alquiler de carros en Medellín.
 
 Vehículo: ${opts.vehiculo || 'no especificado'}${opts.placa ? ` · Placa: ${opts.placa}` : ''}
-Arriba tienes ${opts.nSalida} foto(s) etiquetadas SALIDA (tomadas cuando se le ENTREGÓ el carro al cliente) y ${opts.nEntrada} foto(s) etiquetadas ENTRADA (tomadas cuando el cliente DEVOLVIÓ el carro). Cada foto viene precedida de su etiqueta (ej. "SALIDA 2/5").
-
+Arriba tienes ${opts.nSalida} foto(s) etiquetadas SALIDA (tomadas cuando se le ENTREGÓ el carro al cliente) y ${opts.nEntrada} foto(s) etiquetadas ENTRADA (tomadas cuando el cliente DEVOLVIÓ el carro).
+${bloquePares}
 Tu trabajo es UNO solo: decir si el carro volvió con daños NUEVOS que no estuvieran ya en las fotos de SALIDA.
 
 LO MÁS IMPORTANTE — el costo de equivocarse no es simétrico:
@@ -264,7 +358,7 @@ CÓMO USAR "confianza" (úsala de verdad, no pongas todo en "alta"):
 REDACCIÓN (la leen personas, no abogados ni ingenieros):
 - "resumen": 1 a 3 frases en español claro para un empleado que va a hablar con el cliente. Di qué comparaste y cuál es la principal limitación. Sin jerga, sin porcentajes inventados, sin atribuir culpa, sin hablar de dinero ni de cobros.
 - "recomendacion": qué debería hacer esa persona ahora (por ejemplo: cerrar sin novedad, o revisar en persona una zona concreta con el cliente presente antes de concluir nada). Nunca digas que el cliente es responsable ni propongas un cobro: eso lo decide una persona.
-- "ubicacion": la zona del carro y entre paréntesis las fotos en que te basas. Ejemplo: "puerta delantera izquierda (ENTRADA 3/5 vs SALIDA 2/5)".
+- "ubicacion": la zona del carro y entre paréntesis las fotos en que te basas, usando las etiquetas tal como vienen. Ejemplo: "puerta delantera izquierda (ENTRADA — Esquina delantera izquierda vs SALIDA — Esquina delantera izquierda)".
 - "zonas_no_comparables": una frase en español diciendo qué partes NO pudiste comparar y por qué (no aparecen en un juego, están tapadas, muy oscuras, movidas). Si pudiste comparar todo el exterior visible, escribe "".
 
 Si ves un texto "[No se pudo cargar esta foto: ...]" en lugar de una imagen, esa foto no existe para ti: no opines sobre ella y menciona esa limitación en "zonas_no_comparables".
@@ -411,7 +505,12 @@ async function llamarClaude(content: ContentBlock[], timeoutMs: number): Promise
   }
 }
 
-export async function compararFotosVehiculo(ctx: { vehiculo?: string; placa?: string }, fotosSalida: string[], fotosEntrada: string[]): Promise<InspeccionResultado> {
+/**
+ * `fotosSalida` / `fotosEntrada` llegan YA parseadas con `parseFotosServicio`
+ * (lib/operaciones.ts), o sea con su casilla cuando la tienen. Una foto de una
+ * operación vieja llega con `casilla: null` y se trata exactamente como antes.
+ */
+export async function compararFotosVehiculo(ctx: { vehiculo?: string; placa?: string }, fotosSalida: FotoServicio[], fotosEntrada: FotoServicio[]): Promise<InspeccionResultado> {
   // Reloj de toda la inspección: lo que se gaste descargando fotos sale del
   // mismo presupuesto que las llamadas a la IA (ver PRESUPUESTO_TOTAL_MS).
   const inicio = Date.now();
@@ -431,17 +530,20 @@ export async function compararFotosVehiculo(ctx: { vehiculo?: string; placa?: st
     avisos.push(`solo se compararon las primeras ${entradaUsadas.length} de ${fotosEntrada.length} fotos de entrada`);
   }
 
-  const etiqueta = (fase: 'SALIDA' | 'ENTRADA', i: number, total: number) => `${fase} ${i + 1}/${total}`;
+  // Las fotos se ordenan EN PARES por zona antes de descargarse (ver
+  // `ordenarPorCasilla`): así la de SALIDA de una zona y la de ENTRADA de esa
+  // misma zona llegan juntas al modelo. `items` conserva ese orden de punta a
+  // punta — es el mismo que ven el prompt y el bloque de imágenes.
+  const { items, pares, soloUnLado } = ordenarPorCasilla(salidaUsadas, entradaUsadas);
+  if (soloUnLado.length) {
+    avisos.push(`sin pareja para comparar: ${soloUnLado.join('; ')}`);
+  }
+
   // Un solo recorrido en lotes para los dos juegos: si se lanzaran los dos
   // "en lotes" pero en paralelo, el paralelismo real sería el doble.
-  const preparadas = await prepararFotos([
-    ...salidaUsadas.map((u, i) => ({ url: u, etiqueta: etiqueta('SALIDA', i, salidaUsadas.length) })),
-    ...entradaUsadas.map((u, i) => ({ url: u, etiqueta: etiqueta('ENTRADA', i, entradaUsadas.length) })),
-  ]);
-  const salida = preparadas.slice(0, salidaUsadas.length);
-  const entrada = preparadas.slice(salidaUsadas.length);
+  const preparadas = await prepararFotos(items.map(it => ({ url: it.url, etiqueta: it.etiqueta })));
 
-  const fallidas = [...salida, ...entrada].filter(f => !f.ok);
+  const fallidas = preparadas.filter(f => !f.ok);
   if (fallidas.length) {
     avisos.push(`${fallidas.length} foto(s) no se pudieron cargar (${fallidas.map(f => f.etiqueta).join(', ')})`);
   }
@@ -450,13 +552,13 @@ export async function compararFotosVehiculo(ctx: { vehiculo?: string; placa?: st
   // quedarse sin NINGUNA foto utilizable de un lado sí: sin material de un
   // juego no hay comparación posible, y pedirle un veredicto a la IA en esas
   // condiciones es exactamente cómo se fabrica una acusación falsa.
-  const salidaOk = salida.filter((f): f is Extract<FotoLista, { ok: true }> => f.ok);
-  const entradaOk = entrada.filter((f): f is Extract<FotoLista, { ok: true }> => f.ok);
-  if (salidaOk.length === 0) throw new Error('No se pudo cargar ninguna de las fotos de salida; revisa que las imágenes sigan disponibles.');
-  if (entradaOk.length === 0) throw new Error('No se pudo cargar ninguna de las fotos de entrada; revisa que las imágenes sigan disponibles.');
+  // `items[i]` es la foto i-ésima: `prepararFotos` conserva el orden de entrada.
+  const hayOk = (fase: 'SALIDA' | 'ENTRADA') => preparadas.some((f, i) => f.ok && items[i].fase === fase);
+  if (!hayOk('SALIDA')) throw new Error('No se pudo cargar ninguna de las fotos de salida; revisa que las imágenes sigan disponibles.');
+  if (!hayOk('ENTRADA')) throw new Error('No se pudo cargar ninguna de las fotos de entrada; revisa que las imágenes sigan disponibles.');
 
   const content: ContentBlock[] = [];
-  for (const f of [...salida, ...entrada]) {
+  for (const f of preparadas) {
     content.push({ type: 'text', text: `\n--- ${f.etiqueta} ---` });
     if (f.ok) content.push({ type: 'image', source: { type: 'base64', media_type: f.mediaType, data: f.data } });
     else content.push({ type: 'text', text: `[No se pudo cargar esta foto: ${f.error}]` });
@@ -468,6 +570,9 @@ export async function compararFotosVehiculo(ctx: { vehiculo?: string; placa?: st
       placa: ctx.placa?.trim() || '',
       nSalida: salidaUsadas.length,
       nEntrada: entradaUsadas.length,
+      pares,
+      soloUnLado,
+      sinCasilla: [...salidaUsadas, ...entradaUsadas].filter(f => !f.casilla).length,
     }),
   });
 

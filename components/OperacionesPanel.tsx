@@ -1,8 +1,19 @@
 'use client';
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { lugarResumen, type Lugar } from '@/lib/lugares';
 import { IconCheck, IconShield } from '@/components/Icons';
 import InspeccionResultado, { type InspeccionResultado as InspRes } from '@/components/InspeccionResultado';
+import VisorFotos, { type FotoVisor } from '@/components/VisorFotos';
+import CasillasFotos from '@/components/CasillasFotos';
+// `lib/fotos-servicio` sí se importa entero: es un módulo PURO (sin fs ni
+// better-sqlite3), como lib/lugares o lib/pico-placa.
+import {
+  casillasPendientes, parseFotosServicio, parseOmisiones, FASE_NOMBRE,
+  type CasillaId, type FaseFoto,
+} from '@/lib/fotos-servicio';
+// Solo el TIPO: `lib/acta-servicio` es server-only (better-sqlite3) y `import type`
+// se borra en compilación, así que no entra nada de servidor a este bundle.
+import type { ActaResumen } from '@/lib/acta-servicio';
 
 type Tarea = { id: number; tipo: string; titulo: string; detalle: string; estado: 'pendiente' | 'hecho'; orden: number };
 type Detalle = {
@@ -15,11 +26,17 @@ type Operacion = {
   notas: string; wa_admin: string; wa_mensajero: string; created_at: string;
   mensajero_nombre: string | null; mensajero_celular: string | null;
   fotos_salida: string; fotos_entrada: string; inspeccion_ia: string; inspeccion_estado: string;
+  // Casillas guiadas de fotos (ver lib/fotos-servicio.ts). `fotos_guiadas` vale 0 en
+  // los servicios anteriores a las casillas: ahí no se exigen las 8 fotos.
+  fotos_omitidas: string; fotos_guiadas: number;
   detalle: Detalle; tareas: Tarea[];
+  // Solo viene en la carga inicial (GET /api/operaciones). El PUT de acciones
+  // devuelve la operación sin este campo, por eso es opcional y por eso el
+  // historial de actas vive en su propio estado (ver `actas` más abajo).
+  actas?: ActaResumen[];
 };
 type Mensajero = { id: number; nombre: string; celular: string; activo: number; token?: string };
 
-function parseArr(s: string): string[] { try { const a = JSON.parse(s || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } }
 function parseInsp(s: string): InspRes | null { try { return s ? JSON.parse(s) as InspRes : null; } catch { return null; } }
 
 const TAREA_ICON: Record<string, string> = {
@@ -48,12 +65,27 @@ export default function OperacionesPanel() {
   const [iaDisponible, setIaDisponible] = useState(false);
   const [inspeccionando, setInspeccionando] = useState<number | null>(null);
   const [errInsp, setErrInsp] = useState<Record<number, string>>({});
+  // Mensaje del servidor al rechazar el marcado de una tarea (faltan fotos de esa fase)
+  // o al fallar una subida. Por operación: en el tablero hay varias tarjetas a la vez.
+  const [errTarea, setErrTarea] = useState<Record<number, string>>({});
   const [copiado, setCopiado] = useState<number | null>(null);
   const [cargando, setCargando] = useState(true);
   const [nuevoM, setNuevoM] = useState({ nombre: '', celular: '' });
   const [cfgMsg, setCfgMsg] = useState('');
   const [notasLocal, setNotasLocal] = useState<Record<number, string>>({});
   const [errorCarga, setErrorCarga] = useState('');
+  // Visor de fotos a pantalla completa (componente compartido con la pantalla del
+  // mensajero, /m/<token>).
+  const [visor, setVisor] = useState<{ fotos: FotoVisor[]; indice: number; titulo: string } | null>(null);
+  // Historial de respaldos por servicio. Va APARTE de `ops` a propósito: el PUT de
+  // /api/operaciones/<id> devuelve la operación sin `actas`, y si vivieran dentro de
+  // `ops` cualquier acción (marcar una tarea, guardar notas) los borraría de pantalla.
+  const [actas, setActas] = useState<Record<number, ActaResumen[]>>({});
+  const [generandoActa, setGenerandoActa] = useState<number | null>(null);
+  const [errActa, setErrActa] = useState<Record<number, string>>({});
+  // Cerrar / reabrir el servicio a mano. Por operación, igual que el resto: el tablero
+  // muestra varias tarjetas y solo la que se está tocando debe verse ocupada.
+  const [cambiandoEstado, setCambiandoEstado] = useState<number | null>(null);
 
   const cargar = async () => {
     setCargando(true);
@@ -73,6 +105,7 @@ export default function OperacionesPanel() {
       setIaDisponible(!!dataO.ia_disponible);
       setMensajeros(dataM.mensajeros || []);
       setNotasLocal(Object.fromEntries(operaciones.map(o => [o.id, o.notas || ''])));
+      setActas(Object.fromEntries(operaciones.map(o => [o.id, o.actas || []])));
     } catch {
       setErrorCarga('Sin conexión — revisa tu internet e intenta de nuevo.');
     } finally {
@@ -86,16 +119,21 @@ export default function OperacionesPanel() {
 
   const reemplazar = (op: Operacion) => setOps(list => list.map(o => o.id === op.id ? op : o));
 
-  const accion = async (opId: number, body: Record<string, unknown>) => {
+  // Devuelve el resultado para que quien lo necesite muestre el error. La mayoría de
+  // los llamadores lo ignoran a propósito (asignar mensajero, notas…): son acciones
+  // puntuales y, si falla la red, el estado local no cambia y se puede reintentar el
+  // clic. Marcar una tarea SÍ lo usa: el servidor puede rechazarla por fotos faltantes
+  // y ese mensaje hay que enseñarlo.
+  const accion = async (opId: number, body: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> => {
     try {
       const res = await fetch(`/api/operaciones/${opId}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.operacion) reemplazar(data.operacion as Operacion);
+      return { ok: res.ok, error: data.error };
     } catch {
-      // Silencioso a propósito: son acciones puntuales (marcar tarea, asignar mensajero, etc.);
-      // si falla la red, el estado local no cambia y el usuario puede reintentar el clic.
+      return { ok: false, error: 'Sin conexión — intenta de nuevo.' };
     }
   };
 
@@ -109,16 +147,141 @@ export default function OperacionesPanel() {
       return null;
     }
   };
-  const subirFotos = async (op: Operacion, fase: 'salida' | 'entrada', files: FileList) => {
-    const actuales = parseArr(fase === 'salida' ? op.fotos_salida : op.fotos_entrada);
-    const nuevas: string[] = [];
-    for (const f of Array.from(files)) { const url = await subirArchivo(f); if (url) nuevas.push(url); }
-    if (nuevas.length) await accion(op.id, { accion: 'fotos', fase, urls: [...actuales, ...nuevas] });
+  // Una casilla a la vez: el servidor solo toca ESA casilla, así que dos guardados
+  // que se crucen no se pisan entre sí (ver `guardarFotoCasilla` en lib/operaciones).
+  const subirFotoCasilla = async (op: Operacion, fase: FaseFoto, casilla: CasillaId, file: File) => {
+    setErrTarea(e => ({ ...e, [op.id]: '' }));
+    const url = await subirArchivo(file);
+    if (!url) { setErrTarea(e => ({ ...e, [op.id]: 'No se pudo subir la foto. Intenta de nuevo.' })); return; }
+    const r = await accion(op.id, { accion: 'foto_casilla', fase, casilla, url });
+    if (!r.ok) setErrTarea(e => ({ ...e, [op.id]: r.error || 'No se pudo guardar la foto.' }));
   };
-  const quitarFoto = async (op: Operacion, fase: 'salida' | 'entrada', url: string) => {
-    const actuales = parseArr(fase === 'salida' ? op.fotos_salida : op.fotos_entrada).filter(u => u !== url);
-    await accion(op.id, { accion: 'fotos', fase, urls: actuales });
+  const quitarFotoCasilla = async (op: Operacion, fase: FaseFoto, casilla: CasillaId) => {
+    await accion(op.id, { accion: 'foto_casilla', fase, casilla, url: '' });
   };
+  const omitirCasilla = async (op: Operacion, fase: FaseFoto, casilla: CasillaId, motivo: string): Promise<string | null> => {
+    const r = await accion(op.id, { accion: 'omitir_casilla', fase, casilla, motivo });
+    return r.ok ? null : (r.error || 'No se pudo guardar el motivo.');
+  };
+  const quitarOmision = async (op: Operacion, fase: FaseFoto, casilla: CasillaId) => {
+    await accion(op.id, { accion: 'quitar_omision', fase, casilla });
+  };
+  // Fotos sueltas de servicios anteriores a las casillas. Se manda SOLO la URL que se
+  // quiere quitar; el servidor la filtra dentro de una transacción. Antes se
+  // reconstruía acá la lista completa de la fase y se mandaba con la acción `fotos`
+  // (que reemplaza la fase entera), o sea que se le devolvía al servidor la copia que
+  // tenía el navegador: todo lo que el mensajero hubiera subido desde la calle
+  // mientras esta pestaña estaba abierta desaparecía sin dejar rastro.
+  const quitarFotoSuelta = async (op: Operacion, fase: FaseFoto, url: string) => {
+    await accion(op.id, { accion: 'quitar_foto_suelta', fase, url });
+  };
+  // El historial de respaldos NO viene en la respuesta del PUT de acciones, así que
+  // cuando el servidor congela un acta solo (al cerrar el servicio o al marcar una
+  // tarea de entrega/devolución) hay que ir a buscarlo. Si falla no se avisa nada: el
+  // acta ya quedó guardada, solo no se ve hasta recargar.
+  const refrescarActas = async (opId: number) => {
+    try {
+      const res = await fetch(`/api/operaciones/${opId}/acta`, { cache: 'no-store' });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok && Array.isArray(d.actas)) setActas(a => ({ ...a, [opId]: d.actas as ActaResumen[] }));
+    } catch { /* se verá al recargar la página */ }
+  };
+  // El servidor puede RECHAZAR el marcado si faltan fotos de la fase. Sin mostrar ese
+  // mensaje, la casilla simplemente no se marcaba y nadie sabía por qué.
+  const marcarTarea = async (op: Operacion, t: Tarea) => {
+    setErrTarea(e => ({ ...e, [op.id]: '' }));
+    const marcar = t.estado === 'hecho' ? 'pendiente' : 'hecho';
+    const r = await accion(op.id, { accion: 'tarea', tarea_id: t.id, estado: marcar });
+    if (!r.ok) setErrTarea(e => ({ ...e, [op.id]: r.error || 'No se pudo marcar la tarea.' }));
+    // Marcar una tarea de entrega/devolución (o la última del checklist) congela un
+    // respaldo en el servidor: se recarga el historial para que se vea de una vez.
+    else if (marcar === 'hecho') await refrescarActas(op.id);
+  };
+  // ── Cerrar y reabrir el servicio ──────────────────────────────────────────
+  //
+  // El cierre normal lo hace el checklist: cuando se marca la última tarea, el
+  // servidor pasa la operación a "finalizada" y congela el acta de respaldo. Pero el
+  // servicio real no siempre termina así (el mensajero no marcó nada, el carro volvió
+  // por otro lado, el cliente devolvió a mitad de camino), y hasta ahora el tablero no
+  // tenía cómo darlo por cerrado ni cómo volver a abrirlo para corregirlo.
+  //
+  // Decisión del dueño: el administrador CONSERVA el poder de cerrar aunque falten
+  // fotos. No se le bloquea — se le dice cuántas faltan y de qué fase antes de
+  // confirmar, y él decide. Cerrar igual congela el respaldo con lo que haya, que es
+  // mejor que no tener ninguno.
+
+  /** Cuántas casillas faltan por fase, en texto. '' = no falta ninguna. */
+  const faltanFotosTexto = (op: Operacion): string => {
+    // En los servicios anteriores a las casillas guiadas (`fotos_guiadas = 0`) no se
+    // exigen las 8 fotos, así que no tiene sentido advertir de algo que nadie pidió.
+    if (Number(op.fotos_guiadas) !== 1) return '';
+    const omisiones = parseOmisiones(op.fotos_omitidas);
+    const partes = ([
+      ['salida', parseFotosServicio(op.fotos_salida)],
+      ['entrada', parseFotosServicio(op.fotos_entrada)],
+    ] as const).flatMap(([fase, fotos]) => {
+      const n = casillasPendientes(fotos, omisiones, fase).length;
+      return n > 0 ? [`${n} de la ${FASE_NOMBRE[fase]}`] : [];
+    });
+    return partes.join(' y ');
+  };
+
+  const cerrarServicio = async (op: Operacion) => {
+    const faltan = faltanFotosTexto(op);
+    const pendientes = op.tareas.filter(t => t.estado !== 'hecho').length;
+    // Solo se pregunta si de verdad hay algo a medias. Cerrar un servicio que ya
+    // está completo no necesita confirmación: es lo que se espera que pase.
+    if (faltan || pendientes > 0) {
+      const detalle = [
+        faltan ? `• Faltan fotos: ${faltan}.` : '',
+        pendientes > 0 ? `• Quedan ${pendientes} tarea(s) del checklist sin marcar.` : '',
+      ].filter(Boolean).join('\n');
+      const ok = window.confirm(
+        `Vas a cerrar este servicio con cosas pendientes:\n\n${detalle}\n\n`
+        + 'El respaldo se va a guardar con lo que haya en este momento. Puedes reabrirlo después, '
+        + 'completarlo y cerrarlo de nuevo: se guarda una versión más y la anterior no se borra.\n\n'
+        + '¿Cerrar el servicio de todas formas?',
+      );
+      if (!ok) return;
+    }
+    setCambiandoEstado(op.id);
+    setErrTarea(e => ({ ...e, [op.id]: '' }));
+    const r = await accion(op.id, { accion: 'estado', estado: 'finalizada' });
+    if (!r.ok) setErrTarea(e => ({ ...e, [op.id]: r.error || 'No se pudo cerrar el servicio.' }));
+    // Al cerrar, el servidor congela el acta: se recarga el historial para que
+    // aparezca sin tener que refrescar la página.
+    else await refrescarActas(op.id);
+    setCambiandoEstado(null);
+  };
+
+  // Reabrir tiene un efecto que NO se puede deshacer (se borra el veredicto de la IA),
+  // así que el diálogo dice punto por punto qué pasa con cada cosa. El caso que lo
+  // originó fue un mensajero que fotografió un carro equivocado: el dueño reabre para
+  // rehacer el servicio y no puede llevarse la sorpresa de que algo se fue sin avisar.
+  const reabrirServicio = async (op: Operacion) => {
+    const hayInspeccion = !!parseInsp(op.inspeccion_ia);
+    const ok = window.confirm(
+      '¿Reabrir este servicio?\n\n'
+      + 'Vuelve a quedar EN PROCESO para poder corregirlo. Esto es lo que pasa con cada cosa:\n\n'
+      + '• Las FOTOS se conservan tal como están. Si hay que rehacerlas, las quitas tú una por una.\n'
+      + '• Las TAREAS del checklist se quedan como están, marcadas o sin marcar. No se desmarca ninguna.\n'
+      + (hayInspeccion
+        ? '• El RESULTADO DE LA INSPECCIÓN CON IA se borra. Es lo único que se pierde: ese veredicto '
+          + 'era de las fotos de antes, y si se van a rehacer ya no describe nada. Se vuelve a correr '
+          + 'cuando estén las fotos nuevas.\n'
+        : '• No hay resultado de inspección con IA guardado, así que no se borra nada.\n')
+      + '• Los RESPALDOS ya generados NO se tocan: el que se guardó al cerrar sigue diciendo lo que '
+      + 'decía, con su resultado de IA incluido. Al cerrarlo de nuevo se guarda una versión más.\n\n'
+      + '¿Reabrir?',
+    );
+    if (!ok) return;
+    setCambiandoEstado(op.id);
+    setErrTarea(e => ({ ...e, [op.id]: '' }));
+    const r = await accion(op.id, { accion: 'estado', estado: 'en_proceso' });
+    if (!r.ok) setErrTarea(e => ({ ...e, [op.id]: r.error || 'No se pudo reabrir el servicio.' }));
+    setCambiandoEstado(null);
+  };
+
   const inspeccionar = async (op: Operacion) => {
     setInspeccionando(op.id);
     setErrInsp(e => ({ ...e, [op.id]: '' }));
@@ -131,6 +294,23 @@ export default function OperacionesPanel() {
       setErrInsp(e => ({ ...e, [op.id]: 'Sin conexión — intenta de nuevo.' }));
     } finally {
       setInspeccionando(null);
+    }
+  };
+
+  // Congela una versión NUEVA del respaldo. Regenerar nunca pisa la anterior: si se
+  // agregaron fotos después del cierre, queda una versión más en el historial.
+  const generarRespaldo = async (op: Operacion) => {
+    setGenerandoActa(op.id);
+    setErrActa(e => ({ ...e, [op.id]: '' }));
+    try {
+      const res = await fetch(`/api/operaciones/${op.id}/acta`, { method: 'POST' });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok && d.acta) setActas(a => ({ ...a, [op.id]: [d.acta as ActaResumen, ...(a[op.id] || [])] }));
+      else setErrActa(e => ({ ...e, [op.id]: d.error || 'No se pudo generar el respaldo.' }));
+    } catch {
+      setErrActa(e => ({ ...e, [op.id]: 'Sin conexión — intenta de nuevo.' }));
+    } finally {
+      setGenerandoActa(null);
     }
   };
 
@@ -329,7 +509,7 @@ export default function OperacionesPanel() {
                       {op.tareas.map(t => (
                         <li key={t.id}>
                           <button
-                            onClick={() => accion(op.id, { accion: 'tarea', tarea_id: t.id, estado: t.estado === 'hecho' ? 'pendiente' : 'hecho' })}
+                            onClick={() => marcarTarea(op, t)}
                             className="w-full flex items-start gap-2 text-left text-sm rounded-lg px-2 py-1.5 hover:bg-surface transition">
                             <span className={`mt-0.5 w-4 h-4 rounded-md border flex items-center justify-center shrink-0 ${t.estado === 'hecho' ? 'bg-success border-success text-white' : 'border-border'}`}>
                               {t.estado === 'hecho' && <IconCheck size={11} />}
@@ -342,18 +522,92 @@ export default function OperacionesPanel() {
                         </li>
                       ))}
                     </ul>
+                    {errTarea[op.id] && (
+                      <p className="text-[11px] text-danger mt-1.5 bg-danger/10 rounded-lg px-2.5 py-1.5">{errTarea[op.id]}</p>
+                    )}
+
+                    {/* Cerrar / reabrir el servicio a mano.
+                        El checklist cierra solo al marcar la última tarea, pero el
+                        servicio real no siempre termina así. Cerrar acá congela el
+                        respaldo igual que el cierre automático. */}
+                    <div className="flex flex-wrap items-center gap-2 mt-2">
+                      {op.estado === 'finalizada' ? (
+                        <>
+                          <button
+                            onClick={() => reabrirServicio(op)}
+                            disabled={cambiandoEstado === op.id}
+                            className="text-[11px] font-semibold px-2.5 py-1.5 rounded-lg bg-surface text-ink/70 hover:text-ink border border-border transition disabled:opacity-40">
+                            {cambiandoEstado === op.id ? 'Reabriendo…' : '↩️ Reabrir servicio'}
+                          </button>
+                          <span className="text-[11px] text-ink/45">Servicio cerrado. Reábrelo si hay que corregir algo.</span>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => cerrarServicio(op)}
+                            disabled={cambiandoEstado === op.id}
+                            className="text-[11px] font-semibold px-2.5 py-1.5 rounded-lg bg-success/15 text-success hover:bg-success/25 transition disabled:opacity-40">
+                            {cambiandoEstado === op.id ? 'Cerrando…' : '✅ Cerrar servicio'}
+                          </button>
+                          <span className="text-[11px] text-ink/45">
+                            {faltanFotosTexto(op)
+                              ? `Faltan fotos: ${faltanFotosTexto(op)}. Puedes cerrarlo igual, te lo va a preguntar.`
+                              : 'Dar el servicio por terminado y guardar el respaldo.'}
+                          </span>
+                        </>
+                      )}
+                    </div>
                   </div>
 
                   {/* Inspección de daños con IA */}
                   {(() => {
-                    const fotosSalida = parseArr(op.fotos_salida);
-                    const fotosEntrada = parseArr(op.fotos_entrada);
+                    // `parseFotosServicio` lee los DOS formatos: el array plano de strings
+                    // de los servicios viejos y el `[{casilla, url}]` de las casillas.
+                    const fotosSalida = parseFotosServicio(op.fotos_salida);
+                    const fotosEntrada = parseFotosServicio(op.fotos_entrada);
+                    const omisiones = parseOmisiones(op.fotos_omitidas);
+                    const exigidas = Number(op.fotos_guiadas) === 1;
                     const insp = parseInsp(op.inspeccion_ia);
+                    // Salida y entrada van en UNA sola lista para poder pasar de una a
+                    // otra sin cerrar el visor; la etiqueta ("SALIDA 2 de 4") sale del grupo.
+                    const fotosVisor: FotoVisor[] = [
+                      ...fotosSalida.map(f => ({ url: f.url, grupo: 'SALIDA' })),
+                      ...fotosEntrada.map(f => ({ url: f.url, grupo: 'ENTRADA' })),
+                    ];
+                    const tituloVisor = d ? `${d.marca} ${d.modelo} ${d.anio}${d.placa ? ` · ${d.placa}` : ''}` : `Servicio #${op.id}`;
+                    const abrirVisor = (url: string) => {
+                      const i = fotosVisor.findIndex(f => f.url === url);
+                      if (i >= 0) setVisor({ fotos: fotosVisor, indice: i, titulo: tituloVisor });
+                    };
                     return (
                       <div className="border-t border-border/60 pt-3 space-y-2.5">
-                        <p className="text-xs font-semibold text-ink/50 uppercase tracking-wide">Inspección de daños (salida vs. entrada)</p>
-                        <AdminFaseFotos label="Salida (sede)" fotos={fotosSalida} onAdd={files => subirFotos(op, 'salida', files)} onRemove={u => quitarFoto(op, 'salida', u)} />
-                        <AdminFaseFotos label="Entrada (devolución)" fotos={fotosEntrada} onAdd={files => subirFotos(op, 'entrada', files)} onRemove={u => quitarFoto(op, 'entrada', u)} />
+                        <p className="text-xs font-semibold text-ink/50 uppercase tracking-wide">Fotos del vehículo (salida vs. entrada)</p>
+                        <CasillasFotos
+                          fase="salida"
+                          titulo="Salida — entrega al cliente"
+                          fotos={fotosSalida}
+                          omisiones={omisiones}
+                          exigidas={exigidas}
+                          compacto
+                          onFoto={(casilla, file) => subirFotoCasilla(op, 'salida', casilla, file)}
+                          onQuitarFoto={casilla => quitarFotoCasilla(op, 'salida', casilla)}
+                          onOmitir={(casilla, motivo) => omitirCasilla(op, 'salida', casilla, motivo)}
+                          onQuitarOmision={casilla => quitarOmision(op, 'salida', casilla)}
+                          onVer={abrirVisor}
+                          onQuitarSuelta={url => quitarFotoSuelta(op, 'salida', url)} />
+                        <CasillasFotos
+                          fase="entrada"
+                          titulo="Entrada — devolución"
+                          fotos={fotosEntrada}
+                          omisiones={omisiones}
+                          exigidas={exigidas}
+                          compacto
+                          onFoto={(casilla, file) => subirFotoCasilla(op, 'entrada', casilla, file)}
+                          onQuitarFoto={casilla => quitarFotoCasilla(op, 'entrada', casilla)}
+                          onOmitir={(casilla, motivo) => omitirCasilla(op, 'entrada', casilla, motivo)}
+                          onQuitarOmision={casilla => quitarOmision(op, 'entrada', casilla)}
+                          onVer={abrirVisor}
+                          onQuitarSuelta={url => quitarFotoSuelta(op, 'entrada', url)} />
                         <button
                           onClick={() => inspeccionar(op)}
                           disabled={inspeccionando === op.id || fotosSalida.length === 0 || fotosEntrada.length === 0 || !iaDisponible}
@@ -364,7 +618,66 @@ export default function OperacionesPanel() {
                         </button>
                         {!iaDisponible && <p className="text-[11px] text-warning">IA no configurada (falta ANTHROPIC_API_KEY). Puedes subir fotos igual.</p>}
                         {errInsp[op.id] && <p className="text-[11px] text-danger">{errInsp[op.id]}</p>}
-                        {insp && <div className="bg-surface rounded-xl p-3 border border-border/60"><InspeccionResultado res={insp} /></div>}
+                        {insp && (
+                          <div className="bg-surface rounded-xl p-3 border border-border/60 space-y-2">
+                            <InspeccionResultado res={insp} />
+                            {/* Sin este aviso, el resultado desaparece solo y parece un error de la
+                                app. Es la regla que impide que un veredicto sobreviva a las fotos
+                                que lo produjeron (pasó en producción con un carro equivocado). */}
+                            <p className="text-[10px] text-ink/40 border-t border-border/60 pt-2">
+                              Este resultado se borra solo si una de las dos fases se queda sin ninguna foto, o si
+                              reabres el servicio: sería un veredicto de unas fotos que ya no existen. Los respaldos
+                              ya generados lo conservan.
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                  {/* Respaldo descargable del servicio (acta) */}
+                  {(() => {
+                    const lista = actas[op.id] || [];
+                    return (
+                      <div className="border-t border-border/60 pt-3 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-xs font-semibold text-ink/50 uppercase tracking-wide">Respaldo del servicio</p>
+                          <button
+                            onClick={() => generarRespaldo(op)}
+                            disabled={generandoActa === op.id}
+                            className="text-[11px] px-2.5 py-1 rounded-lg bg-accent/15 text-accent hover:bg-accent/20 transition disabled:opacity-40">
+                            {generandoActa === op.id ? 'Generando…' : '🧾 Generar respaldo'}
+                          </button>
+                        </div>
+                        {lista.length === 0 ? (
+                          <p className="text-[11px] text-ink/50">
+                            Todavía no hay respaldos de este servicio. Se genera solo cuando se termina el checklist,
+                            y también puedes generarlo ahora: guarda los datos y las fotos tal como están en este
+                            momento, y quedan a salvo aunque después alguien borre una foto.
+                          </p>
+                        ) : (
+                          <ul className="space-y-1">
+                            {lista.map(a => (
+                              <li key={a.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] bg-surface rounded-xl px-2.5 py-1.5 border border-border/60">
+                                <a
+                                  href={`/api/operaciones/${op.id}/acta/${a.id}`}
+                                  className="font-semibold text-accent hover:underline">
+                                  ⬇️ {a.numero}
+                                </a>
+                                <span className="text-ink/50">{a.fotos_total} foto{a.fotos_total === 1 ? '' : 's'}</span>
+                                <span className="text-ink/50">· {a.created_at}</span>
+                                <span className="text-ink/50">
+                                  · {a.generada_por === 'sistema' ? 'automático al cerrar el servicio' : (a.generada_por_nombre || 'generado a mano')}
+                                </span>
+                                {!a.tiene_inspeccion && <span className="text-warning">· sin inspección de IA</span>}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        {errActa[op.id] && <p className="text-[11px] text-danger">{errActa[op.id]}</p>}
+                        <p className="text-[10px] text-ink/40">
+                          Cada respaldo es una copia congelada: si agregas fotos después, genera uno nuevo — el anterior no se borra.
+                        </p>
                       </div>
                     );
                   })()}
@@ -404,43 +717,15 @@ export default function OperacionesPanel() {
           </div>
         )}
       </div>
-    </div>
-  );
-}
 
-function AdminFaseFotos({ label, fotos, onAdd, onRemove }: {
-  label: string; fotos: string[];
-  onAdd: (files: FileList) => Promise<void>; onRemove: (url: string) => void;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [subiendo, setSubiendo] = useState(false);
-  const handle = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files?.length) return;
-    setSubiendo(true);
-    try {
-      await onAdd(e.target.files);
-    } finally {
-      setSubiendo(false);
-      if (inputRef.current) inputRef.current.value = '';
-    }
-  };
-  return (
-    <div>
-      <p className="text-[11px] text-ink/50 mb-1">{label}</p>
-      <div className="flex flex-wrap gap-1.5">
-        {fotos.map(u => (
-          <div key={u} className="relative w-14 h-14 rounded-lg overflow-hidden border border-border">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={u} alt="foto" className="w-full h-full object-cover" />
-            <button onClick={() => onRemove(u)} aria-label="Eliminar foto" className="absolute top-0.5 right-0.5 bg-black/60 text-white w-4 h-4 rounded-full text-[10px] leading-none">×</button>
-          </div>
-        ))}
-        <button onClick={() => inputRef.current?.click()} disabled={subiendo}
-          className="w-14 h-14 rounded-lg border-2 border-dashed border-border flex items-center justify-center text-ink/50 hover:border-accent/50 transition disabled:opacity-50">
-          {subiendo ? '…' : '+'}
-        </button>
-      </div>
-      <input ref={inputRef} type="file" accept="image/*" multiple className="hidden" onChange={handle} />
+      {visor && (
+        <VisorFotos
+          fotos={visor.fotos}
+          indice={visor.indice}
+          titulo={visor.titulo}
+          onIndice={i => setVisor(v => (v ? { ...v, indice: i } : v))}
+          onCerrar={() => setVisor(null)} />
+      )}
     </div>
   );
 }

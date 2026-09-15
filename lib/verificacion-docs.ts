@@ -1,6 +1,7 @@
 import sharp from 'sharp';
 import { getAnthropic } from './anthropic';
 import { normalizarOrientacion } from './blur-placas';
+import { descargarAcotado } from './descarga-remota';
 
 export type ResultadoRegla = 'pasa' | 'falla' | 'no_aplica';
 export type Veredicto    = 'aprobado' | 'rechazado' | 'revision';
@@ -44,6 +45,12 @@ type MediaType = 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif' | 'appl
 // ver docs de visión). Lo comprobamos nosotros para dar un error claro por
 // documento en vez de dejar que la llamada completa reviente.
 const MAX_BASE64_BYTES = 10 * 1024 * 1024;
+
+// Tope de lo que se baja de la red por archivo, antes de mirar nada más. Es el techo
+// duro que evita que una URL apuntando a un archivo gigante se traiga el proceso
+// abajo; la validación "este documento pesa demasiado para la IA" sigue siendo
+// MAX_BASE64_BYTES, que es más estricta y da un mensaje con la cifra real.
+const MAX_DESCARGA_BYTES = 20 * 1024 * 1024;
 
 type ImgMediaType = 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
 
@@ -92,10 +99,16 @@ function errorDeDecodificacion(e: unknown): Error {
  * Sin la opción, el comportamiento es exactamente el de antes.
  */
 export async function fetchAsBase64(url: string, opts?: { ladoMaxPx?: number }): Promise<{ data: string; mediaType: MediaType }> {
-  const resp = await fetch(url, { signal: AbortSignal.timeout(20000) });
-  if (!resp.ok) throw new Error(`No se pudo descargar ${url}: ${resp.status}`);
-  const buf = Buffer.from(await resp.arrayBuffer());
-  const ct = (resp.headers.get('content-type') || '').split(';')[0].trim();
+  // `descargarAcotado` (lib/descarga-remota.ts) en vez de un `fetch` a pelo: no sigue
+  // redirecciones —un CDN que responda 302 hacia una IP interna sería una petición del
+  // servidor contra su propia red— y corta el cuerpo en `maxBytes` leyendo por trozos,
+  // en vez de meter en memoria lo que sea que responda el otro lado. El tope va algo
+  // por encima de MAX_BASE64_BYTES para que los archivos que solo se pasan "un poco"
+  // sigan dando el mensaje de tamaño de siempre, con su cifra real.
+  const { buffer: buf, contentType: ct } = await descargarAcotado(url, {
+    timeoutMs: 20000,
+    maxBytes: MAX_DESCARGA_BYTES,
+  });
 
   const esPdf = ct === 'application/pdf' || (!ct && url.toLowerCase().split('?')[0].endsWith('.pdf'));
   if (esPdf) {

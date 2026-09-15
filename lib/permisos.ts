@@ -236,9 +236,17 @@ export function permisosDe(db: DB, userId: number): { nivel: AdminNivel | null; 
 }
 
 // Registro de auditoría (bitácora): quién hizo qué y a qué hora.
+//
+// `actor.id` admite `null` porque no todo el que puede tocar datos del negocio tiene
+// una fila en `usuarios`: el MENSAJERO entra por un enlace con token, sin login, y
+// aun así puede borrar fotos de un servicio o dejar sin efecto una inspección. Con
+// `id: null` el evento queda igual en la bitácora, identificado por el nombre y la
+// nota que escriba el llamador, y la columna `auditoria.usuario_id` (que es nullable
+// y ya admite NULL desde que se borra una cuenta, ver lib/eliminar.ts) se deja vacía
+// en vez de inventar un id de usuario que no existe.
 export function registrarAuditoria(
   db: DB,
-  actor: { id: number; nombre?: string; correo?: string; nivel?: string },
+  actor: { id: number | null; nombre?: string; correo?: string; nivel?: string },
   entry: { area: string; accion: string; detalle?: string; entidad?: string; entidad_id?: number | null },
 ) {
   try {
@@ -246,7 +254,7 @@ export function registrarAuditoria(
       `INSERT INTO auditoria (usuario_id, usuario_nombre, usuario_correo, usuario_nivel, area, accion, detalle, entidad, entidad_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
-      actor.id, actor.nombre || '', actor.correo || '', actor.nivel || '',
+      actor.id ?? null, actor.nombre || '', actor.correo || '', actor.nivel || '',
       entry.area, entry.accion, entry.detalle || '', entry.entidad || '', entry.entidad_id ?? null,
     );
   } catch (e) {
