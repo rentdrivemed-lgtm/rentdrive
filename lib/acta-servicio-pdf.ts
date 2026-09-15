@@ -223,13 +223,84 @@ export async function construirActaPDF(acta: ActaGuardada): Promise<jsPDF> {
     y += 13 + Math.min(40, (doc.splitTextToSize(d.operacion.notas, ANCHO_UTIL) as string[]).length * 4.5);
   }
 
-  // ── Inspección con IA ──
+  // ── Estado del vehículo al ENTREGARLO (paso 1) ──
+  //
+  // Va ANTES de la comparación y en su PROPIA sección, con su propio color de
+  // encabezado, porque las dos cosas no significan lo mismo y el acta no las puede
+  // dejar confundir: esto DESCRIBE cómo salió el carro (marcas que ya traía, de nadie
+  // en particular) y la sección siguiente DICTAMINA si volvió con algo nuevo. Leídas
+  // juntas, una lista de marcas previas puede parecer una lista de daños imputados —
+  // que es exactamente lo contrario de lo que dice.
+  //
+  // Se imprime siempre, aunque no haya inventario: en un documento de respaldo, "esto
+  // no se hizo" es información, y callarlo deja pensar que el carro salió sin marcas.
+  doc.setTextColor(0);
+  const entrega = d.entrega?.resultado;
+  if (entrega) {
+    const marcas = Array.isArray(entrega.marcas) ? entrega.marcas : [];
+    autoTable(doc, {
+      startY: y + 8,
+      head: [['Estado del vehículo al ENTREGARLO (antes de que lo usara el cliente)', '']],
+      body: [
+        ['Marcas registradas', `${marcas.length}`],
+        ['Resumen', entrega.resumen || '—'],
+        ['Zonas que no se pudieron revisar', entrega.zonas_no_cubiertas || 'Ninguna'],
+      ],
+      theme: 'grid',
+      headStyles: { fillColor: [88, 96, 105] },
+      styles: { fontSize: 9, cellWidth: 'wrap' },
+      columnStyles: { 0: { cellWidth: 60 }, 1: { cellWidth: ANCHO_UTIL - 60 } },
+      margin: { left: MARGEN, right: MARGEN },
+    });
+    y = finalY(doc, y + 40);
+
+    if (marcas.length > 0) {
+      autoTable(doc, {
+        startY: y + 4,
+        head: [['Marca previa', 'Ubicación', 'Descripción', 'Confianza']],
+        body: marcas.map(m => [
+          String(m.tipo || '').replace(/_/g, ' '),
+          m.ubicacion || '—',
+          m.descripcion || '—',
+          m.confianza || '—',
+        ]),
+        theme: 'grid',
+        headStyles: { fillColor: [88, 96, 105] },
+        styles: { fontSize: 8 },
+        margin: { left: MARGEN, right: MARGEN },
+      });
+      y = finalY(doc, y + 30);
+    }
+
+    y = asegurarEspacio(doc, y, 20);
+    doc.setFontSize(8); doc.setFont('helvetica', 'normal'); doc.setTextColor(120);
+    doc.text(
+      'Esta lista describe el estado en que SALIÓ el vehículo: son marcas de uso anteriores al servicio y no se le '
+      + 'atribuyen a nadie. Se levantó con apoyo de inteligencia artificial sobre las fotos de la entrega, como APOYO: '
+      + 'la revisión final del estado del vehículo la hizo una persona del equipo.',
+      MARGEN, y + 6, { maxWidth: ANCHO_UTIL },
+    );
+    y += 20;
+  } else {
+    y = asegurarEspacio(doc, y, 26);
+    doc.setFontSize(10); doc.setFont('helvetica', 'bold'); doc.setTextColor(0);
+    doc.text('Estado del vehículo al entregarlo', MARGEN, y + 10);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(120);
+    doc.text(
+      'Este servicio NO tiene registrado el estado con que salió el vehículo. Las marcas previas, si las había, '
+      + 'solo constan en las fotos de la entrega.',
+      MARGEN, y + 16, { maxWidth: ANCHO_UTIL },
+    );
+    y += 22;
+  }
+
+  // ── Inspección con IA: la comparación al RECIBIR el vehículo (paso 2) ──
   doc.setTextColor(0);
   const insp = d.inspeccion?.resultado;
   if (insp) {
     autoTable(doc, {
       startY: y + 8,
-      head: [['Inspección de daños con apoyo de IA', '']],
+      head: [['Inspección de daños al RECIBIRLO, con apoyo de IA', '']],
       body: [
         ['Resultado', SEV_LABEL[insp.severidad_general] || insp.severidad_general || '—'],
         ['¿Daños nuevos?', insp.hay_danos_nuevos ? 'Sí' : 'No'],

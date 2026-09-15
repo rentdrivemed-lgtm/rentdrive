@@ -5,6 +5,26 @@ import { CASILLAS, esUrlFotoSegura, parseFotosServicio, type FotoServicio } from
 export type HallazgoDano = { tipo: string; ubicacion: string; descripcion: string; confianza: 'alta' | 'media' | 'baja'; };
 export type InspeccionResultado = { hay_danos_nuevos: boolean; severidad_general: 'ninguna' | 'leve' | 'moderada' | 'grave'; hallazgos: HallazgoDano[]; zonas_no_comparables: string; resumen: string; recomendacion: string; };
 
+/**
+ * Una marca que el carro YA TRAÍA cuando salió. Misma forma que `HallazgoDano` a
+ * propósito (mismo `tipo` de la lista blanca, misma escala de `confianza`) para que
+ * las dos listas se lean igual y se puedan cruzar sin traducir nada — pero el tipo es
+ * distinto porque el SIGNIFICADO es distinto: un hallazgo acusa, una marca previa solo
+ * describe cómo estaba el carro antes de entregarlo.
+ */
+export type MarcaPrevia = { tipo: string; ubicacion: string; descripcion: string; confianza: 'alta' | 'media' | 'baja'; };
+
+/**
+ * El INVENTARIO del estado en que sale el vehículo: lo que produce
+ * `analizarEstadoEntrega` mirando solo las fotos de SALIDA. No es un veredicto y no
+ * compara contra nada — no hay contra qué comparar todavía.
+ *
+ * No tiene `hay_danos_nuevos`, ni `severidad_general`, ni `recomendacion` a propósito:
+ * nada de eso significa nada cuando el carro apenas va saliendo, y tenerlo invitaría a
+ * pintarlo como una alarma. Un carro de flota usado tiene marcas; eso es lo normal.
+ */
+export type EstadoEntregaResultado = { marcas: MarcaPrevia[]; zonas_no_cubiertas: string; resumen: string; };
+
 type ImgMediaType = 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
 
 // ── Límite de tasa ───────────────────────────────────────────────────────────
@@ -82,6 +102,16 @@ export function faltanFotosParaInspeccion(fotosSalidaJson: unknown, fotosEntrada
   // legado (array plano de strings) de las operaciones viejas.
   if (parseFotosServicio(fotosSalidaJson).length === 0) return 'No hay fotos de salida para comparar';
   if (parseFotosServicio(fotosEntradaJson).length === 0) return 'No hay fotos de entrada para comparar';
+  return null;
+}
+
+/**
+ * El mismo chequeo BARATO que `faltanFotosParaInspeccion`, pero para el análisis de
+ * entrega: ahí solo hace falta el juego de SALIDA (el carro todavía no ha vuelto).
+ * Sirve para rechazar ANTES de gastar un intento del límite de tasa.
+ */
+export function faltanFotosParaEntrega(fotosSalidaJson: unknown): string | null {
+  if (parseFotosServicio(fotosSalidaJson).length === 0) return 'No hay fotos de salida para analizar';
   return null;
 }
 
@@ -294,10 +324,39 @@ function ordenarPorCasilla(salida: FotoServicio[], entrada: FotoServicio[]): {
  *    qué zona mira, el modelo no podía cumplir la condición (b) y mandaba casi
  *    todo a `zonas_no_comparables`. Para operaciones anteriores a las casillas
  *    (fotos sin zona) el texto vuelve a ser el de antes.
+ *
+ * 10) El INVENTARIO de entrega (`opts.inventario`), cuando existe. Es la lista de
+ *    marcas que `analizarEstadoEntrega` levantó de las fotos de SALIDA en el momento
+ *    de entregar el carro, y entra al prompt como "esto es lo que el carro ya tenía".
+ *    Le ahorra al modelo tener que deducir de las fotos lo que alguien ya dedujo con
+ *    calma y sin prisa, y refuerza la condición (b) de la doble evidencia: una marca
+ *    que está en el inventario NO es daño nuevo por clarísima que se vea en la
+ *    devolución. Va con su reverso escrito: que algo NO esté en la lista no prueba
+ *    nada (el inventario puede estar incompleto), así que la doble evidencia se sigue
+ *    aplicando igual. Sin ese reverso, el inventario se convertiría en una máquina de
+ *    falsos positivos, que es justo lo contrario de lo que busca todo este prompt.
+ *    Es OPCIONAL: la mayoría de las operaciones no lo tienen y ahí el texto es
+ *    EXACTAMENTE el de siempre.
  */
+function bloqueInventario(inv: EstadoEntregaResultado | null | undefined): string {
+  if (!inv) return '';
+  const marcas = inv.marcas ?? [];
+  const lineas = marcas.map(m => `- ${m.tipo.replace(/_/g, ' ')} · ${m.ubicacion || 'sin zona anotada'} (anotado con confianza ${m.confianza}): ${m.descripcion || 'sin descripción'}`);
+  return `
+LO QUE EL CARRO YA TENÍA CUANDO SALIÓ (inventario levantado al entregarlo):
+Antes de entregarle el carro al cliente se revisaron las fotos de SALIDA y se anotó TODA marca visible. Esto es lo que ya estaba:
+${lineas.length > 0 ? lineas.join('\n') : '(no se anotó ninguna marca)'}${inv.zonas_no_cubiertas ? `\nZonas que ese inventario no pudo cubrir: ${inv.zonas_no_cubiertas}` : ''}
+
+CÓMO USAR ESA LISTA (importante):
+- Si algo que ves en ENTRADA corresponde a una marca de esa lista (misma zona y misma clase de marca), NO es daño nuevo: no lo reportes, por muy claro que se vea ahora.
+- Que una marca NO aparezca en la lista NO prueba que sea nueva: el inventario pudo quedarse corto. Para cualquier cosa que no esté en la lista sigue aplicando la REGLA DE LA DOBLE EVIDENCIA exactamente igual que si la lista no existiera.
+`;
+}
+
 function construirPrompt(opts: {
   vehiculo: string; placa: string; nSalida: number; nEntrada: number;
   pares: string[]; soloUnLado: string[]; sinCasilla: number;
+  inventario?: EstadoEntregaResultado | null;
 }): string {
   const bloquePares = opts.pares.length > 0
     ? `
@@ -336,7 +395,7 @@ Solo puedes reportar un daño si se cumplen las DOS cosas:
   (a) lo ves claramente en al menos una foto de ENTRADA, y
   (b) ves esa MISMA zona del carro en al menos una foto de SALIDA y ahí NO está.
 Si la zona no aparece en las fotos de SALIDA, no puedes saber si el daño ya existía: eso NO es un hallazgo, va en "zonas_no_comparables". Nunca compares contra "cómo debería verse un carro en buen estado": estos carros suelen tener marcas previas de uso.
-
+${bloqueInventario(opts.inventario)}
 NO ES DAÑO NUEVO (descarta estas explicaciones ANTES de reportar algo):
 - Diferencia de luz, de hora del día, de día nublado vs soleado, flash, sombras de árboles/postes/personas.
 - Reflejos en la pintura, en los vidrios o en el cromado; el reflejo del que toma la foto; reflejo del cielo o de edificios.
@@ -381,6 +440,123 @@ Responde ÚNICAMENTE con este JSON, sin markdown, sin texto antes ni después:
 }
 
 Si no encuentras daños nuevos: "hay_danos_nuevos": false, "severidad_general": "ninguna", "hallazgos": [] — y dilo con tranquilidad en el resumen. Ese es el resultado esperado en la mayoría de las entregas.`;
+}
+
+/* ── El prompt del ANÁLISIS DE ENTREGA ────────────────────────────────────────
+ *
+ * ⚠️ ACÁ EL SESGO ESTÁ AL REVÉS QUE EN EL PROMPT DE ARRIBA. No es un descuido ni una
+ * copia mal hecha: es la decisión central de esta función, y conviene entender por qué
+ * antes de "arreglarla" para que se parezca a la comparación.
+ *
+ * En la COMPARACIÓN los dos errores no cuestan lo mismo: un falso positivo significa
+ * acusar (y cobrarle) a un cliente por un daño que no hizo. Por eso ese prompt está
+ * sesgado hacia NO afirmar daño.
+ *
+ * Acá no se acusa a nadie. El carro sale como sale: las marcas que tenga son marcas que
+ * ya estaban, de nadie en particular, y anotarlas no le cuesta un peso a ningún cliente.
+ * En cambio, CADA MARCA QUE SE PASE POR ALTO ACÁ ES UNA MARCA QUE EN LA DEVOLUCIÓN VA A
+ * PARECER NUEVA — y que se le puede terminar cobrando a quien no la hizo. O sea que el
+ * error caro de este prompt es exactamente el contrario del otro: quedarse corto.
+ *
+ * De ahí las tres reglas que lo definen:
+ *
+ * 1) EXHAUSTIVIDAD explícita. Se le pide anotar TODO —rayones, raspones, piedrazos,
+ *    abolladuras, desgaste, tapicería, rines— por pequeño que sea, y se le dice que una
+ *    lista larga es el resultado NORMAL en un carro de flota usado. Sin decirlo así, un
+ *    modelo de visión tiende a resumir ("el vehículo se ve en buen estado general") y
+ *    ese resumen es justo lo que después deja a un cliente pagando un rayón ajeno.
+ *
+ * 2) ANTE LA DUDA, SÍ SE ANOTA (con `confianza: 'baja'`). Al revés de la comparación,
+ *    donde la duda manda a no reportar. Acá la duda se registra: una marca anotada de
+ *    más solo hace que la comparación sea un poco más prudente; una anotada de menos
+ *    puede volverse una acusación.
+ *
+ * 3) Lo que NO se anota son las cosas que CAMBIAN SOLAS entre la entrega y la
+ *    devolución (suciedad, polvo, gotas, objetos adentro, nivel de gasolina): no
+ *    describen el estado físico del carro y ensucian el inventario sin aportar nada.
+ *    Pero si algo podría ser suciedad O podría ser un rayón, se anota igual con
+ *    confianza baja: ese es el reverso de la regla 2.
+ *
+ * Lo demás se mantiene igual que en el otro prompt porque ya está resuelto ahí: `tipo`
+ * restringido a la lista blanca (y además IMPUESTO en `normalizarEntrega`: un prompt no
+ * valida nada), sólo JSON sin prosa, zonas no cubiertas DECLARADAS en vez de adivinadas,
+ * y el `resumen` escrito para una persona —acá, además, para leérselo al cliente en el
+ * punto de atención antes de entregarle el carro: sin jerga, sin culpar a nadie y sin
+ * hablar de plata.
+ */
+function construirPromptEntrega(opts: {
+  vehiculo: string; placa: string; nSalida: number; zonas: string[]; sinCasilla: number;
+}): string {
+  const bloqueZonas = opts.zonas.length > 0
+    ? `
+CÓMO VIENEN LAS FOTOS:
+Cada foto trae su etiqueta con el nombre de la zona del carro, por ejemplo "SALIDA — Esquina trasera derecha". Las zonas fotografiadas son: ${opts.zonas.join(', ')}.${
+  opts.sinCasilla > 0
+    ? `
+Además hay ${opts.sinCasilla} foto(s) sin zona asignada, etiquetadas con números ("SALIDA 1/3"): de esas tienes que deducir tú qué parte del carro es.`
+    : ''
+}
+`
+    : `
+CÓMO VIENEN LAS FOTOS:
+Cada foto viene precedida de su etiqueta (ej. "SALIDA 2/5"). No traen la zona anotada: tienes que deducir tú qué parte del carro es cada una.
+`;
+
+  return `Eres un perito de inspección vehicular para DrivePass, una plataforma colombiana de alquiler de carros en Medellín.
+
+Vehículo: ${opts.vehiculo || 'no especificado'}${opts.placa ? ` · Placa: ${opts.placa}` : ''}
+Arriba tienes ${opts.nSalida} foto(s) del carro tomadas JUSTO ANTES de entregárselo al cliente.
+${bloqueZonas}
+Tu trabajo es UNO solo: levantar el INVENTARIO del estado en que sale el vehículo. Anotar TODAS las marcas que el carro YA TIENE en este momento. No estás comparando nada con nada y no hay ningún daño que atribuirle a nadie: el carro está saliendo.
+
+LO MÁS IMPORTANTE — sé EXHAUSTIVO, quedarte corto es el error caro:
+Esta lista se va a usar después, cuando el cliente devuelva el carro, para saber qué marcas ya estaban. Toda marca que NO anotes ahora va a parecer nueva en la devolución, y se le puede terminar cobrando a un cliente que no la hizo. Por eso: anota TODO lo que veas, por pequeño que sea. Una lista larga es el resultado NORMAL: estos son carros de alquiler con kilómetros encima, no carros de vitrina.
+
+ANTE LA DUDA, ANÓTALO:
+Si no estás seguro de si eso es un rayón o es un reflejo, ANÓTALO igual y ponle "confianza": "baja". Anotar de más no perjudica a nadie; anotar de menos sí.
+
+QUÉ ANOTAR (todo lo que sea estado físico del carro):
+- Rayones, raspones y rayas de cualquier tamaño en la pintura; marcas de piedra o piedrazos en el capó y el frente.
+- Abolladuras, golpes, zonas hundidas, bómper rozado o descuadrado, molduras sueltas, rotas o faltantes.
+- Pintura saltada, opaca, despintada, oxidada o repintada de otro tono.
+- Vidrios o farolas con estrellas, fisuras, picaduras o rayas; espejos rayados, rotos o pegados.
+- Rines rayados, mordidos o con el borde golpeado; llantas gastadas, cortadas o desgastadas de un lado.
+- Interior: tapicería rota, rasgada, quemada, descosida o muy desgastada; manchas; tablero rayado o agrietado; manijas, botones o forros rotos o faltantes; baúl marcado.
+- Cualquier otra cosa visible que describa cómo está el carro físicamente.
+
+QUÉ NO ANOTAR (cambia solo entre la entrega y la devolución y no dice nada del estado):
+- Suciedad, polvo, barro, huellas, gotas de agua, carro mojado, hojas encima.
+- Objetos dentro del carro, posición de asientos o espejos, nivel de gasolina, kilometraje.
+- OJO: si algo PODRÍA ser suciedad o PODRÍA ser un rayón, anótalo igual con "confianza": "baja". Esta regla no es una excusa para dejar cosas fuera.
+
+CÓMO USAR "confianza" (úsala de verdad, no pongas todo en "alta"):
+- "alta": se ve clarísimo, no hay otra explicación posible.
+- "media": se ve, pero la foto no ayuda del todo (luz, ángulo, distancia, nitidez).
+- "baja": podría ser una sombra, un reflejo, suciedad o un desenfoque. Anótalo igual: por eso existe esta confianza.
+
+REDACCIÓN (la leen personas, y este texto se le muestra al cliente antes de entregarle el carro):
+- "ubicacion": la zona del carro y entre paréntesis las fotos en que te basas, con las etiquetas tal como vienen. Ejemplo: "puerta delantera izquierda (SALIDA — Esquina delantera izquierda)".
+- "descripcion": qué se ve y dónde exactamente, en una o dos frases claras. Sin jerga, sin culpar a nadie, sin hablar de dinero ni de cobros.
+- "zonas_no_cubiertas": una frase diciendo qué partes del carro NO pudiste revisar y por qué (no aparecen en ninguna foto, están tapadas, muy oscuras, movidas). Si pudiste revisar todo el exterior visible, escribe "".
+- "resumen": 1 a 3 frases en español claro que se le puedan leer al cliente: cuántas marcas se anotaron, de qué tipo en general y qué quedó sin revisar. Es una descripción del estado en que sale el carro, no una queja ni un reclamo.
+
+Si ves un texto "[No se pudo cargar esta foto: ...]" en lugar de una imagen, esa foto no existe para ti: no opines sobre ella y menciona esa limitación en "zonas_no_cubiertas".
+
+Responde ÚNICAMENTE con este JSON, sin markdown, sin texto antes ni después:
+{
+  "marcas": [
+    {
+      "tipo": "rayon"|"abolladura"|"hundido"|"vidrio_roto"|"espejo"|"faro"|"llanta"|"otro",
+      "ubicacion": "<zona del carro (fotos en que te basas)>",
+      "descripcion": "<qué se ve, en una o dos frases claras>",
+      "confianza": "alta"|"media"|"baja"
+    }
+  ],
+  "zonas_no_cubiertas": "<qué no pudiste revisar y por qué, o cadena vacía>",
+  "resumen": "<1 a 3 frases para leerle al cliente>"
+}
+
+Si de verdad no ves NINGUNA marca, devuelve "marcas": [] y dilo en el resumen — pero antes vuelve a mirar: en un carro de alquiler usado eso es poco común.`;
 }
 
 type ContentBlock =
@@ -460,6 +636,70 @@ function normalizar(bruto: Record<string, unknown>, avisos: string[]): Inspeccio
   };
 }
 
+/**
+ * Tope de marcas que se guardan de UN análisis de entrega. El prompt pide ser
+ * exhaustivo a propósito, así que una lista larga es lo esperado; esto no está para
+ * recortar el trabajo bien hecho sino para acotar el tamaño de la columna y de la
+ * pantalla si el modelo se va por las ramas y devuelve doscientas entradas. El recorte
+ * NUNCA es silencioso: se declara en `zonas_no_cubiertas`, que es donde alguien lo va
+ * a leer.
+ */
+const MAX_MARCAS = 40;
+
+/**
+ * Normaliza lo que devuelva el modelo a un `EstadoEntregaResultado` válido.
+ *
+ * Reutiliza `opcion`/`texto`/`TIPOS_HALLAZGO` igual que `normalizar` — la lista blanca
+ * de `tipo` es la misma porque los íconos y los nombres que dibuja la interfaz son los
+ * mismos. Lo que NO se replica acá es la corrección de coherencia de allá (bajar el
+ * veredicto cuando todo es de confianza baja): acá no hay veredicto que bajar, y una
+ * marca de confianza baja es exactamente lo que este análisis quiere capturar.
+ */
+function normalizarEntrega(bruto: Record<string, unknown>, avisos: string[]): EstadoEntregaResultado {
+  const brutas = Array.isArray(bruto.marcas) ? bruto.marcas : [];
+  const todas: MarcaPrevia[] = brutas
+    .filter((m): m is Record<string, unknown> => !!m && typeof m === 'object')
+    .map(m => ({
+      tipo: opcion(m.tipo, TIPOS_HALLAZGO, 'otro'),
+      ubicacion: texto(m.ubicacion),
+      descripcion: texto(m.descripcion),
+      confianza: opcion(m.confianza, CONFIANZAS, 'baja'),
+    }))
+    // Una marca sin ubicación NI descripción no es información: se dibujaría como una
+    // fila en blanco y contaría en el total.
+    .filter(m => m.ubicacion !== '' || m.descripcion !== '');
+
+  const marcas = todas.slice(0, MAX_MARCAS);
+  if (todas.length > marcas.length) {
+    avisos.push(`se guardaron las primeras ${marcas.length} de ${todas.length} marcas anotadas`);
+  }
+
+  const zonas = [texto(bruto.zonas_no_cubiertas), ...avisos].filter(Boolean).join(' · ');
+  return {
+    marcas,
+    zonas_no_cubiertas: zonas,
+    resumen: texto(bruto.resumen) || 'La IA no devolvió un resumen; revisa la lista de marcas y las fotos.',
+  };
+}
+
+/**
+ * Lee un inventario guardado en `operaciones.entrega_ia` (o cualquier cosa que venga de
+ * la base) y lo devuelve ya normalizado, o `null` si no hay nada legible.
+ *
+ * Pasa por `normalizarEntrega` y no por un `JSON.parse` a pelo a propósito: lo que sale
+ * de acá termina metido en el prompt de la comparación, así que se lee con la misma
+ * lista blanca de `tipo` y el mismo saneado de texto con que se escribió. Nunca lanza.
+ */
+export function parseEstadoEntrega(raw: unknown): EstadoEntregaResultado | null {
+  let valor: unknown = raw;
+  if (typeof raw === 'string') {
+    if (!raw.trim()) return null;
+    try { valor = JSON.parse(raw); } catch { return null; }
+  }
+  if (!valor || typeof valor !== 'object' || Array.isArray(valor)) return null;
+  return normalizarEntrega(valor as Record<string, unknown>, []);
+}
+
 /** Una llamada a Claude + parseo. Separada porque puede invocarse 2 veces (ver
  * `compararFotosVehiculo`).
  *
@@ -505,12 +745,116 @@ async function llamarClaude(content: ContentBlock[], timeoutMs: number): Promise
   }
 }
 
+// ── Lo común a las dos acciones de IA sobre fotos ───────────────────────────
+// `analizarEstadoEntrega` (paso 1, al entregar) y `compararFotosVehiculo` (paso 2, al
+// recibir) hacen lo MISMO con las fotos: bajarlas en lotes, anotar las que se cayeron,
+// armar los bloques etiqueta+imagen y llamar a Claude con su reintento dentro del
+// presupuesto. Lo único que cambia entre las dos es el prompt y cómo se lee la
+// respuesta. Está acá una sola vez para que el timeout, el presupuesto, el tope de
+// lotes y el criterio de reintento no puedan divergir entre las dos.
+
+/** Baja las fotos (en lotes) y deja anotadas en `avisos` las que no se pudieron traer. */
+async function bajarFotos(items: ItemFoto[], avisos: string[]): Promise<FotoLista[]> {
+  const preparadas = await prepararFotos(items.map(it => ({ url: it.url, etiqueta: it.etiqueta })));
+  const fallidas = preparadas.filter(f => !f.ok);
+  if (fallidas.length) {
+    avisos.push(`${fallidas.length} foto(s) no se pudieron cargar (${fallidas.map(f => f.etiqueta).join(', ')})`);
+  }
+  return preparadas;
+}
+
+/** Los bloques de contenido: cada foto precedida de su etiqueta; las caídas, anotadas. */
+function bloquesDeFotos(preparadas: FotoLista[]): ContentBlock[] {
+  const content: ContentBlock[] = [];
+  for (const f of preparadas) {
+    content.push({ type: 'text', text: `\n--- ${f.etiqueta} ---` });
+    if (f.ok) content.push({ type: 'image', source: { type: 'base64', media_type: f.mediaType, data: f.data } });
+    else content.push({ type: 'text', text: `[No se pudo cargar esta foto: ${f.error}]` });
+  }
+  return content;
+}
+
 /**
+ * La llamada con su reintento. La primera nunca baja de MIN_PARA_LLAMAR_MS (si las
+ * descargas se comieron el presupuesto igual hay que intentarlo una vez) ni pasa de
+ * TIMEOUT_LLAMADA_MS; la segunda solo ocurre si de verdad cabe y si el fallo era
+ * reintentable (ver `llamarClaude`). Lanza con un mensaje listo para el usuario.
+ */
+async function pedirJson(content: ContentBlock[], restanteMs: () => number, queEs: string): Promise<Record<string, unknown>> {
+  let intento = await llamarClaude(content, Math.max(MIN_PARA_LLAMAR_MS, Math.min(TIMEOUT_LLAMADA_MS, restanteMs())));
+  if (!intento.ok && intento.reintentable) {
+    const queda = restanteMs();
+    if (queda >= MIN_PARA_LLAMAR_MS) {
+      intento = await llamarClaude(content, Math.min(TIMEOUT_LLAMADA_MS, queda));
+    }
+  }
+  if (!intento.ok) throw new Error(`No se pudo completar ${queEs} con IA: ${intento.error}. Intenta de nuevo en un momento.`);
+  return intento.bruto;
+}
+
+/**
+ * PASO 1 — al ENTREGAR el carro. Levanta el inventario del estado en que SALE el
+ * vehículo mirando únicamente las fotos de SALIDA. No compara con nada (no hay contra
+ * qué: el carro apenas se está entregando) y no emite ningún veredicto.
+ *
+ * Su resultado se guarda y después se le entrega masticado al paso 2
+ * (`compararFotosVehiculo`), que así no tiene que deducir de las fotos qué marcas ya
+ * traía el carro. Ver el comentario de `construirPromptEntrega` para lo importante:
+ * acá el sesgo es EXHAUSTIVO, al revés que en la comparación.
+ */
+export async function analizarEstadoEntrega(ctx: { vehiculo?: string; placa?: string }, fotosSalida: FotoServicio[]): Promise<EstadoEntregaResultado> {
+  const inicio = Date.now();
+  const restanteMs = () => PRESUPUESTO_TOTAL_MS - (Date.now() - inicio);
+
+  const avisos: string[] = [];
+  const usadas = fotosSalida.slice(0, MAX_FOTOS_POR_JUEGO);
+  if (fotosSalida.length > usadas.length) {
+    avisos.push(`solo se revisaron las primeras ${usadas.length} de ${fotosSalida.length} fotos de salida`);
+  }
+
+  // Mismo etiquetado por zona que la comparación (`ordenarPorCasilla`): con el juego de
+  // entrada vacío devuelve solo las de SALIDA, cada una con el nombre de su zona
+  // ("SALIDA — Tablero encendido") y las sueltas numeradas al final, igual que siempre.
+  const { items } = ordenarPorCasilla(usadas, []);
+  const preparadas = await bajarFotos(items, avisos);
+  if (!preparadas.some(f => f.ok)) {
+    throw new Error('No se pudo cargar ninguna de las fotos de salida; revisa que las imágenes sigan disponibles.');
+  }
+
+  const content = bloquesDeFotos(preparadas);
+  content.push({
+    type: 'text',
+    text: construirPromptEntrega({
+      vehiculo: ctx.vehiculo?.trim() || '',
+      placa: ctx.placa?.trim() || '',
+      nSalida: usadas.length,
+      zonas: CASILLAS.filter(c => usadas.some(f => f.casilla === c.id)).map(c => c.nombre),
+      sinCasilla: usadas.filter(f => !f.casilla).length,
+    }),
+  });
+
+  return normalizarEntrega(await pedirJson(content, restanteMs, 'el análisis de entrega'), avisos);
+}
+
+/**
+ * PASO 2 — al RECIBIR el carro.
+ *
  * `fotosSalida` / `fotosEntrada` llegan YA parseadas con `parseFotosServicio`
  * (lib/operaciones.ts), o sea con su casilla cuando la tienen. Una foto de una
  * operación vieja llega con `casilla: null` y se trata exactamente como antes.
+ *
+ * `inventario` es el resultado del paso 1 (`analizarEstadoEntrega`) cuando ese servicio
+ * lo tiene: entra al prompt como "esto es lo que el carro ya tenía cuando salió" (ver el
+ * punto 10 del comentario del prompt). Es OPCIONAL y el camino sin él no cambia en NADA
+ * — la mayoría de las operaciones no lo van a tener, y para esas el comportamiento tiene
+ * que seguir siendo exactamente el de siempre.
  */
-export async function compararFotosVehiculo(ctx: { vehiculo?: string; placa?: string }, fotosSalida: FotoServicio[], fotosEntrada: FotoServicio[]): Promise<InspeccionResultado> {
+export async function compararFotosVehiculo(
+  ctx: { vehiculo?: string; placa?: string },
+  fotosSalida: FotoServicio[],
+  fotosEntrada: FotoServicio[],
+  inventario?: EstadoEntregaResultado | null,
+): Promise<InspeccionResultado> {
   // Reloj de toda la inspección: lo que se gaste descargando fotos sale del
   // mismo presupuesto que las llamadas a la IA (ver PRESUPUESTO_TOTAL_MS).
   const inicio = Date.now();
@@ -541,12 +885,7 @@ export async function compararFotosVehiculo(ctx: { vehiculo?: string; placa?: st
 
   // Un solo recorrido en lotes para los dos juegos: si se lanzaran los dos
   // "en lotes" pero en paralelo, el paralelismo real sería el doble.
-  const preparadas = await prepararFotos(items.map(it => ({ url: it.url, etiqueta: it.etiqueta })));
-
-  const fallidas = preparadas.filter(f => !f.ok);
-  if (fallidas.length) {
-    avisos.push(`${fallidas.length} foto(s) no se pudieron cargar (${fallidas.map(f => f.etiqueta).join(', ')})`);
-  }
+  const preparadas = await bajarFotos(items, avisos);
 
   // Una foto rota no debe tumbar la inspección (se anota y se sigue), pero
   // quedarse sin NINGUNA foto utilizable de un lado sí: sin material de un
@@ -557,12 +896,7 @@ export async function compararFotosVehiculo(ctx: { vehiculo?: string; placa?: st
   if (!hayOk('SALIDA')) throw new Error('No se pudo cargar ninguna de las fotos de salida; revisa que las imágenes sigan disponibles.');
   if (!hayOk('ENTRADA')) throw new Error('No se pudo cargar ninguna de las fotos de entrada; revisa que las imágenes sigan disponibles.');
 
-  const content: ContentBlock[] = [];
-  for (const f of preparadas) {
-    content.push({ type: 'text', text: `\n--- ${f.etiqueta} ---` });
-    if (f.ok) content.push({ type: 'image', source: { type: 'base64', media_type: f.mediaType, data: f.data } });
-    else content.push({ type: 'text', text: `[No se pudo cargar esta foto: ${f.error}]` });
-  }
+  const content = bloquesDeFotos(preparadas);
   content.push({
     type: 'text',
     text: construirPrompt({
@@ -573,20 +907,9 @@ export async function compararFotosVehiculo(ctx: { vehiculo?: string; placa?: st
       pares,
       soloUnLado,
       sinCasilla: [...salidaUsadas, ...entradaUsadas].filter(f => !f.casilla).length,
+      inventario,
     }),
   });
 
-  // Primera llamada: nunca menos de MIN_PARA_LLAMAR_MS (si las descargas se
-  // comieron el presupuesto igual hay que intentarlo una vez), nunca más de
-  // TIMEOUT_LLAMADA_MS.
-  let intento = await llamarClaude(content, Math.max(MIN_PARA_LLAMAR_MS, Math.min(TIMEOUT_LLAMADA_MS, restanteMs())));
-  if (!intento.ok && intento.reintentable) {
-    const queda = restanteMs();
-    if (queda >= MIN_PARA_LLAMAR_MS) {
-      intento = await llamarClaude(content, Math.min(TIMEOUT_LLAMADA_MS, queda));
-    }
-  }
-  if (!intento.ok) throw new Error(`No se pudo completar la inspección con IA: ${intento.error}. Intenta de nuevo en un momento.`);
-
-  return normalizar(intento.bruto, avisos);
+  return normalizar(await pedirJson(content, restanteMs, 'la inspección'), avisos);
 }

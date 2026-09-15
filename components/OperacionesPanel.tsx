@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { lugarResumen, type Lugar } from '@/lib/lugares';
 import { IconCheck, IconShield } from '@/components/Icons';
 import InspeccionResultado, { type InspeccionResultado as InspRes } from '@/components/InspeccionResultado';
+import EstadoEntregaResultado, { type EstadoEntrega } from '@/components/EstadoEntregaResultado';
 import VisorFotos, { type FotoVisor } from '@/components/VisorFotos';
 import CasillasFotos from '@/components/CasillasFotos';
 // `lib/fotos-servicio` sí se importa entero: es un módulo PURO (sin fs ni
@@ -26,6 +27,8 @@ type Operacion = {
   notas: string; wa_admin: string; wa_mensajero: string; created_at: string;
   mensajero_nombre: string | null; mensajero_celular: string | null;
   fotos_salida: string; fotos_entrada: string; inspeccion_ia: string; inspeccion_estado: string;
+  // Paso 1: inventario del estado en que SALE el vehículo (solo fotos de salida).
+  entrega_ia: string; entrega_estado: string;
   // Casillas guiadas de fotos (ver lib/fotos-servicio.ts). `fotos_guiadas` vale 0 en
   // los servicios anteriores a las casillas: ahí no se exigen las 8 fotos.
   fotos_omitidas: string; fotos_guiadas: number;
@@ -38,6 +41,12 @@ type Operacion = {
 type Mensajero = { id: number; nombre: string; celular: string; activo: number; token?: string };
 
 function parseInsp(s: string): InspRes | null { try { return s ? JSON.parse(s) as InspRes : null; } catch { return null; } }
+function parseEntrega(s: string): EstadoEntrega | null {
+  try {
+    const o = s ? JSON.parse(s) as EstadoEntrega : null;
+    return o && Array.isArray(o.marcas) ? o : null;
+  } catch { return null; }
+}
 
 const TAREA_ICON: Record<string, string> = {
   lavar: '🚿', tanquear: '⛽', entregar: '📤', recibir: '📥', inspeccion: '📸',
@@ -65,6 +74,10 @@ export default function OperacionesPanel() {
   const [iaDisponible, setIaDisponible] = useState(false);
   const [inspeccionando, setInspeccionando] = useState<number | null>(null);
   const [errInsp, setErrInsp] = useState<Record<number, string>>({});
+  // Paso 1 (analizar el estado de entrega). Estado propio y no compartido con el de la
+  // comparación: son dos botones distintos y solo el que se pulsó debe verse ocupado.
+  const [analizandoEntrega, setAnalizandoEntrega] = useState<number | null>(null);
+  const [errEntrega, setErrEntrega] = useState<Record<number, string>>({});
   // Mensaje del servidor al rechazar el marcado de una tarea (faltan fotos de esa fase)
   // o al fallar una subida. Por operación: en el tablero hay varias tarjetas a la vez.
   const [errTarea, setErrTarea] = useState<Record<number, string>>({});
@@ -280,6 +293,16 @@ export default function OperacionesPanel() {
     const r = await accion(op.id, { accion: 'estado', estado: 'en_proceso' });
     if (!r.ok) setErrTarea(e => ({ ...e, [op.id]: r.error || 'No se pudo reabrir el servicio.' }));
     setCambiandoEstado(null);
+  };
+
+  // Paso 1: el inventario de lo que el carro YA trae, con las fotos de salida. Se corre
+  // antes de entregarlo; el paso 2 (comparar) lo usa después como referencia.
+  const analizarEntrega = async (op: Operacion) => {
+    setAnalizandoEntrega(op.id);
+    setErrEntrega(e => ({ ...e, [op.id]: '' }));
+    const r = await accion(op.id, { accion: 'analisis_entrega' });
+    if (!r.ok) setErrEntrega(e => ({ ...e, [op.id]: r.error || 'No se pudo analizar el estado de entrega.' }));
+    setAnalizandoEntrega(null);
   };
 
   const inspeccionar = async (op: Operacion) => {
@@ -568,6 +591,7 @@ export default function OperacionesPanel() {
                     const omisiones = parseOmisiones(op.fotos_omitidas);
                     const exigidas = Number(op.fotos_guiadas) === 1;
                     const insp = parseInsp(op.inspeccion_ia);
+                    const entrega = parseEntrega(op.entrega_ia);
                     // Salida y entrada van en UNA sola lista para poder pasar de una a
                     // otra sin cerrar el visor; la etiqueta ("SALIDA 2 de 4") sale del grupo.
                     const fotosVisor: FotoVisor[] = [
@@ -595,6 +619,32 @@ export default function OperacionesPanel() {
                           onQuitarOmision={casilla => quitarOmision(op, 'salida', casilla)}
                           onVer={abrirVisor}
                           onQuitarSuelta={url => quitarFotoSuelta(op, 'salida', url)} />
+
+                        {/* PASO 1 — con las fotos de salida, ANTES de entregar el carro.
+                            Va pegado a las casillas de salida y no junto al botón de
+                            comparar para que el orden en pantalla sea el orden real del
+                            servicio: primero se entrega, después se recibe. */}
+                        <div className="space-y-1.5">
+                          <button
+                            onClick={() => analizarEntrega(op)}
+                            disabled={analizandoEntrega === op.id || fotosSalida.length === 0 || !iaDisponible}
+                            className="w-full flex items-center justify-center gap-2 bg-surface border border-border-strong text-ink py-2 rounded-xl font-semibold text-sm disabled:opacity-50 transition hover:bg-brand-muted">
+                            {analizandoEntrega === op.id
+                              ? <><span className="w-4 h-4 border-2 border-ink/20 border-t-ink/60 rounded-full animate-spin" /> Analizando…</>
+                              : '📋 Paso 1 · Analizar estado de entrega'}
+                          </button>
+                          <p className="text-[11px] text-ink/50">
+                            Solo con las fotos de salida: anota las marcas que el carro YA trae, para que en la
+                            devolución no cuenten como nuevas. No compara nada todavía.
+                          </p>
+                          {errEntrega[op.id] && <p className="text-[11px] text-danger">{errEntrega[op.id]}</p>}
+                          {entrega && (
+                            <div className="bg-surface rounded-xl p-3 border border-border/60">
+                              <EstadoEntregaResultado res={entrega} />
+                            </div>
+                          )}
+                        </div>
+
                         <CasillasFotos
                           fase="entrada"
                           titulo="Entrada — devolución"
@@ -614,8 +664,13 @@ export default function OperacionesPanel() {
                           className="w-full flex items-center justify-center gap-2 gradient-accent text-white py-2 rounded-xl font-semibold text-sm disabled:opacity-50 transition">
                           {inspeccionando === op.id
                             ? <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Comparando…</>
-                            : '🔍 Comparar y detectar daños con IA'}
+                            : '🔍 Paso 2 · Comparar y detectar daños con IA'}
                         </button>
+                        <p className="text-[11px] text-ink/50">
+                          {entrega
+                            ? 'Va a usar el estado de entrega del paso 1: lo que ya estaba no se cuenta como daño nuevo.'
+                            : 'Este servicio no tiene análisis de entrega (paso 1). La comparación funciona igual, pero con él es más difícil que una marca vieja parezca nueva.'}
+                        </p>
                         {!iaDisponible && <p className="text-[11px] text-warning">IA no configurada (falta ANTHROPIC_API_KEY). Puedes subir fotos igual.</p>}
                         {errInsp[op.id] && <p className="text-[11px] text-danger">{errInsp[op.id]}</p>}
                         {insp && (

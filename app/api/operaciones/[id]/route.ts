@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { guardArea } from '@/lib/guard';
 import {
   cargarDetalleServicio, mensajeMensajero, mensajeAdmin, getConfig, recomputarEstadoOperacion,
-  ejecutarInspeccion, appBaseUrl, bloqueoFotosTarea, guardarFotosFase, guardarFotoCasilla,
+  ejecutarInspeccion, ejecutarAnalisisEntrega, appBaseUrl, bloqueoFotosTarea,
+  guardarFotosFase, guardarFotoCasilla,
   quitarFotoSuelta, omitirCasilla, quitarOmision, congelarActa, congelarActaDeFase,
-  limpiarInspeccion, invalidarInspeccionSiFaseVacia, motivoFaseVacia, MAX_FOTOS_FASE,
+  limpiarIAServicio, invalidarInspeccionSiFaseVacia, motivoFaseVacia, MAX_FOTOS_FASE,
 } from '@/lib/operaciones';
 import { registrarAuditoria } from '@/lib/permisos';
 import {
@@ -13,7 +14,7 @@ import {
 } from '@/lib/fotos-servicio';
 import { enviarWhatsapp } from '@/lib/whatsapp';
 import { tieneClaveAnthropic } from '@/lib/anthropic';
-import { limiteInspeccion, faltanFotosParaInspeccion } from '@/lib/inspeccion-vehiculo';
+import { limiteInspeccion, faltanFotosParaInspeccion, faltanFotosParaEntrega } from '@/lib/inspeccion-vehiculo';
 
 export const dynamic = 'force-dynamic';
 // La inspección con IA manda hasta 16 fotos en una sola llamada a Claude: puede
@@ -82,7 +83,8 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     // nadie se enterara — justo el caso en que más falta hace, porque se cerró con
     // cosas a medias.
     //
-    // REABRIR limpia además el veredicto de la inspección con IA. Caso real: un
+    // REABRIR limpia además los resultados de IA (el inventario de entrega y el
+    // veredicto de la comparación). Caso real: un
     // mensajero fotografió un carro equivocado, la IA dictaminó "con daños" sobre el
     // capó de un vehículo que no era el de la reserva, y ese veredicto se quedó
     // guardado sin ninguna forma de quitarlo. Si el servicio se reabre es justamente
@@ -101,7 +103,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       // el cierre guarda lo que había, la limpieza solo ocurre al reabrir.
       if (body.estado === 'finalizada' && op.estado !== 'finalizada') congelarActa(db, opId);
       if (reabierto) {
-        const limpiada = limpiarInspeccion(db, opId);
+        const limpiada = limpiarIAServicio(db, opId);
         registrarAuditoria(db, { id: g.user.id, nombre: g.user.nombre, correo: g.user.correo, nivel: g.nivel }, {
           area: 'operaciones',
           accion: 'reabrir_servicio',
@@ -110,7 +112,8 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
           detalle: JSON.stringify({
             reserva_id: op.reserva_id,
             estado_nuevo: body.estado,
-            inspeccion_ia_limpiada: limpiada,
+            inspeccion_ia_limpiada: limpiada.inspeccion,
+            entrega_ia_limpiada: limpiada.entrega,
           }),
         });
       }
@@ -234,7 +237,31 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       break;
     }
 
-    // ── Ejecutar inspección de daños con IA ──
+    // ── PASO 1: analizar el estado en que SALE el vehículo ──
+    //
+    // Mismos chequeos baratos y MISMO cubo del límite de tasa que la inspección: las
+    // dos acciones mandan el mismo tipo de lote de fotos a Claude y comparten techo a
+    // propósito (el límite existe para acotar el gasto de IA, no para premiar con más
+    // cuota a quien alterna botones). Lo único que cambia es que acá solo se exigen
+    // fotos de SALIDA: el carro todavía no ha vuelto.
+    case 'analisis_entrega': {
+      if (!tieneClaveAnthropic()) {
+        return NextResponse.json({ error: 'El análisis con IA no está configurado: falta ANTHROPIC_API_KEY.' }, { status: 503 });
+      }
+      const fotosSal = db.prepare('SELECT fotos_salida FROM operaciones WHERE id = ?').get(opId) as { fotos_salida: string | null } | undefined;
+      const sinFotos = faltanFotosParaEntrega(fotosSal?.fotos_salida);
+      if (sinFotos) return NextResponse.json({ error: sinFotos }, { status: 400 });
+      const tope = limiteInspeccion(`admin:${g.user.id}`);
+      if (tope) return NextResponse.json({ error: tope }, { status: 429 });
+      try {
+        await ejecutarAnalisisEntrega(db, opId);
+      } catch (e) {
+        return NextResponse.json({ error: e instanceof Error ? e.message : 'Error en el análisis de entrega' }, { status: 400 });
+      }
+      break;
+    }
+
+    // ── PASO 2: inspección de daños con IA (comparar salida vs. entrada) ──
     case 'inspeccion': {
       if (!tieneClaveAnthropic()) {
         return NextResponse.json({ error: 'La inspección con IA no está configurada: falta ANTHROPIC_API_KEY.' }, { status: 503 });
@@ -284,14 +311,20 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   // automático). Va DESPUÉS del switch para que la operación que se devuelve abajo ya
   // salga sin el veredicto, y las actas ya congeladas no se tocan.
   if (ACCIONES_QUE_QUITAN_FOTOS.has(body.accion)) {
-    const faseVacia = invalidarInspeccionSiFaseVacia(db, opId);
-    if (faseVacia) {
+    const limpieza = invalidarInspeccionSiFaseVacia(db, opId);
+    if (limpieza) {
       registrarAuditoria(db, { id: g.user.id, nombre: g.user.nombre, correo: g.user.correo, nivel: g.nivel }, {
         area: 'operaciones',
         accion: 'limpiar_inspeccion_ia',
         entidad: 'operaciones',
         entidad_id: opId,
-        detalle: JSON.stringify({ reserva_id: op.reserva_id, motivo: motivoFaseVacia(faseVacia), accion: body.accion }),
+        detalle: JSON.stringify({
+          reserva_id: op.reserva_id,
+          motivo: motivoFaseVacia(limpieza.fase),
+          accion: body.accion,
+          inspeccion_ia_limpiada: limpieza.inspeccion,
+          entrega_ia_limpiada: limpieza.entrega,
+        }),
       });
     }
   }

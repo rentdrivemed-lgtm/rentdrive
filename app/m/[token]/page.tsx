@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import InspeccionResultado, { type InspeccionResultado as InspRes } from '@/components/InspeccionResultado';
+import EstadoEntregaResultado, { type EstadoEntrega } from '@/components/EstadoEntregaResultado';
 import VisorFotos, { type FotoVisor } from '@/components/VisorFotos';
 import CasillasFotos from '@/components/CasillasFotos';
 import { lugarResumen, type Lugar } from '@/lib/lugares';
@@ -17,6 +18,8 @@ type Detalle = {
 type Operacion = {
   id: number; reserva_id: number; estado: string;
   fotos_salida: string; fotos_entrada: string; inspeccion_ia: string; inspeccion_estado: string;
+  // Paso 1: inventario del estado en que SALE el vehículo (solo fotos de salida).
+  entrega_ia: string; entrega_estado: string;
   // Casillas guiadas de fotos (ver lib/fotos-servicio.ts). `fotos_guiadas` vale 0 en
   // los servicios anteriores a las casillas: ahí no se exigen las 8 fotos.
   fotos_omitidas: string; fotos_guiadas: number;
@@ -27,6 +30,12 @@ const TAREA_ICON: Record<string, string> = { lavar: '🚿', tanquear: '⛽', ent
 const OP_LABEL: Record<string, string> = { pendiente: 'Sin iniciar', asignada: 'Asignada', en_proceso: 'En proceso', finalizada: 'Finalizada' };
 
 function parseInsp(s: string): InspRes | null { try { return s ? JSON.parse(s) as InspRes : null; } catch { return null; } }
+function parseEntrega(s: string): EstadoEntrega | null {
+  try {
+    const o = s ? JSON.parse(s) as EstadoEntrega : null;
+    return o && Array.isArray(o.marcas) ? o : null;
+  } catch { return null; }
+}
 function resumenLugar(json: string): string { try { const o = JSON.parse(json || '{}') as Lugar; return lugarResumen(o.municipio ? o : null); } catch { return '—'; } }
 
 export default function MensajeroPage() {
@@ -39,6 +48,10 @@ export default function MensajeroPage() {
   const [invalido, setInvalido] = useState(false);
   const [inspeccionando, setInspeccionando] = useState<number | null>(null);
   const [errorInsp, setErrorInsp] = useState<Record<number, string>>({});
+  // Paso 1 (analizar el estado de entrega). Va aparte del estado de la comparación:
+  // son dos botones y solo el que se tocó debe verse ocupado.
+  const [analizandoEntrega, setAnalizandoEntrega] = useState<number | null>(null);
+  const [errorEntrega, setErrorEntrega] = useState<Record<number, string>>({});
   // Mensaje del servidor cuando rechaza marcar una tarea (faltan fotos) o falla una
   // subida. Va por operación: en la pantalla hay varias tarjetas a la vez.
   const [errorTarea, setErrorTarea] = useState<Record<number, string>>({});
@@ -142,6 +155,16 @@ export default function MensajeroPage() {
     if (!r.ok) setErrorTarea(e => ({ ...e, [op.id]: r.error || 'No se pudo marcar la tarea.' }));
   };
 
+  // Paso 1: antes de entregarle el carro al cliente, con las fotos de salida. Anota lo
+  // que el carro YA trae; el paso 2 (comparar, al recibirlo) lo usa como referencia.
+  const analizarEntrega = async (op: Operacion) => {
+    setAnalizandoEntrega(op.id);
+    setErrorEntrega(e => ({ ...e, [op.id]: '' }));
+    const r = await accion({ accion: 'analisis_entrega', operacion_id: op.id });
+    if (!r.ok) setErrorEntrega(e => ({ ...e, [op.id]: r.error || 'No se pudo analizar el estado de entrega.' }));
+    setAnalizandoEntrega(null);
+  };
+
   const inspeccionar = async (op: Operacion) => {
     setInspeccionando(op.id);
     setErrorInsp(e => ({ ...e, [op.id]: '' }));
@@ -188,6 +211,7 @@ export default function MensajeroPage() {
             {ops.map(op => {
               const d = op.detalle;
               const insp = parseInsp(op.inspeccion_ia);
+              const entrega = parseEntrega(op.entrega_ia);
               // `parseFotosServicio` lee los DOS formatos: el array plano de strings de
               // los servicios viejos y el `[{casilla, url}]` de las casillas guiadas.
               const fotosSalida = parseFotosServicio(op.fotos_salida);
@@ -266,6 +290,30 @@ export default function MensajeroPage() {
                       onQuitarOmision={casilla => quitarOmision(op, 'salida', casilla)}
                       onVer={abrirVisor}
                       onQuitarSuelta={url => quitarFotoSuelta(op, 'salida', url)} />
+
+                    {/* PASO 1 — con las fotos de salida, ANTES de entregarle el carro al
+                        cliente. Va justo debajo de esas casillas para que el orden de la
+                        pantalla sea el orden real del trabajo. */}
+                    <div className="space-y-1.5">
+                      <button
+                        onClick={() => analizarEntrega(op)}
+                        disabled={analizandoEntrega === op.id || fotosSalida.length === 0 || !iaDisponible}
+                        className="w-full flex items-center justify-center gap-2 bg-surface border border-border-strong text-ink py-2.5 rounded-xl font-bold text-sm disabled:opacity-50 transition">
+                        {analizandoEntrega === op.id
+                          ? <><span className="w-4 h-4 border-2 border-ink/20 border-t-ink/60 rounded-full animate-spin" /> Analizando…</>
+                          : '📋 Paso 1 · Analizar estado de entrega'}
+                      </button>
+                      <p className="text-[11px] text-ink/50 text-center">
+                        Anota las marcas que el carro YA tiene. Muéstraselas al cliente antes de entregárselo.
+                      </p>
+                      {errorEntrega[op.id] && <p className="text-[11px] text-danger text-center">{errorEntrega[op.id]}</p>}
+                      {entrega && (
+                        <div className="bg-surface rounded-xl p-3 border border-border/60">
+                          <EstadoEntregaResultado res={entrega} />
+                        </div>
+                      )}
+                    </div>
+
                     <CasillasFotos
                       fase="entrada"
                       titulo="📥 Al RECIBIR el carro"
@@ -286,7 +334,7 @@ export default function MensajeroPage() {
                       className="w-full flex items-center justify-center gap-2 gradient-accent text-white py-2.5 rounded-xl font-bold text-sm disabled:opacity-50 transition">
                       {inspeccionando === op.id
                         ? <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Comparando fotos…</>
-                        : '🔍 Comparar y detectar daños con IA'}
+                        : '🔍 Paso 2 · Comparar y detectar daños con IA'}
                     </button>
                     {!iaDisponible && <p className="text-[11px] text-warning text-center">La IA no está configurada todavía (falta la clave). Puedes subir las fotos igual.</p>}
                     {(fotosSalida.length === 0 || fotosEntrada.length === 0) && iaDisponible && (

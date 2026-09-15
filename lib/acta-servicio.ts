@@ -29,7 +29,7 @@
 import type Database from 'better-sqlite3';
 import { lugarResumen, type Lugar } from './lugares';
 import { getConfig } from './operaciones';
-import type { InspeccionResultado } from './inspeccion-vehiculo';
+import { parseEstadoEntrega, type EstadoEntregaResultado, type InspeccionResultado } from './inspeccion-vehiculo';
 import {
   esCasilla, parseFotosServicio, parseOmisiones,
   type CasillaId, type FaseFoto, type OmisionFoto,
@@ -72,6 +72,14 @@ export type DatosActa = {
   vehiculo: { marca: string; modelo: string; anio: number; placa: string };
   cliente: { nombre: string; celular: string; documento: string; tipo_documento: string };
   atendio: { mensajero_nombre: string; mensajero_celular: string };
+  /**
+   * PASO 1 de la IA de fotos: el inventario del estado en que SALIÓ el vehículo
+   * (lo que ya traía cuando se entregó). Va SEPARADO de `inspeccion` —que es el paso
+   * 2, la comparación al recibirlo— porque son dos cosas distintas y el acta no las
+   * puede mezclar: una describe, la otra dictamina. Opcional porque las actas
+   * anteriores a esta función no lo traen.
+   */
+  entrega?: { estado: string; resultado: EstadoEntregaResultado | null };
   inspeccion: { estado: string; resultado: InspeccionResultado | null };
   /**
    * Casillas del recorrido de fotos que NO se pudieron tomar, con el motivo escrito a
@@ -162,6 +170,7 @@ function ahora(): string {
 type FilaServicio = {
   id: number; estado: string; notas: string; reserva_id: number;
   fotos_salida: string; fotos_entrada: string; fotos_omitidas: string;
+  entrega_ia: string; entrega_estado: string;
   inspeccion_ia: string; inspeccion_estado: string;
   mensajero_nombre: string | null; mensajero_celular: string | null;
   fecha_inicio: string; fecha_fin: string; total: number; recargo: number;
@@ -179,6 +188,7 @@ export function armarDatosActa(db: DB, operacionId: number, actor: ActorActa): {
     SELECT o.id, o.estado, COALESCE(o.notas,'') AS notas, o.reserva_id,
            COALESCE(o.fotos_salida,'[]') AS fotos_salida, COALESCE(o.fotos_entrada,'[]') AS fotos_entrada,
            COALESCE(o.fotos_omitidas,'[]') AS fotos_omitidas,
+           COALESCE(o.entrega_ia,'') AS entrega_ia, COALESCE(o.entrega_estado,'') AS entrega_estado,
            COALESCE(o.inspeccion_ia,'') AS inspeccion_ia, COALESCE(o.inspeccion_estado,'') AS inspeccion_estado,
            m.nombre AS mensajero_nombre, COALESCE(m.celular,'') AS mensajero_celular,
            r.fecha_inicio, r.fecha_fin, r.total, COALESCE(r.recargo,0) AS recargo,
@@ -233,6 +243,10 @@ export function armarDatosActa(db: DB, operacionId: number, actor: ActorActa): {
     atendio: {
       mensajero_nombre: row.mensajero_nombre || '',
       mensajero_celular: row.mensajero_celular || '',
+    },
+    entrega: {
+      estado: row.entrega_estado,
+      resultado: parseEstadoEntrega(row.entrega_ia),
     },
     inspeccion: {
       estado: row.inspeccion_estado,
@@ -313,7 +327,14 @@ export function generarActaCierre(db: DB, operacionId: number): ActaGuardada | n
     const igualFotos = JSON.stringify(parseFotosActa(ultima.fotos)) === JSON.stringify(snapshot.fotos);
     const igualOmisiones = JSON.stringify(omisionesDeActa(datosPrevios)) === JSON.stringify(snapshot.datos.omisiones ?? []);
     const igualInspeccion = JSON.stringify(datosPrevios?.inspeccion ?? null) === JSON.stringify(snapshot.datos.inspeccion ?? null);
-    if (igualFotos && igualOmisiones && igualInspeccion) return null;
+    // El inventario de entrega cuenta por el mismo motivo que el veredicto: si se
+    // levantó (o se rehízo) después del último cierre, el respaldo cambió de contenido
+    // y merece su versión. Se compara el RESULTADO y no el objeto entero: en las actas
+    // anteriores a esta función el campo `entrega` ni existe, y comparar el envoltorio
+    // haría que el primer cierre de un servicio viejo generara una versión nueva sin
+    // que hubiera cambiado nada de verdad.
+    const igualEntrega = JSON.stringify(datosPrevios?.entrega?.resultado ?? null) === JSON.stringify(snapshot.datos.entrega?.resultado ?? null);
+    if (igualFotos && igualOmisiones && igualInspeccion && igualEntrega) return null;
   }
   return generarActa(db, operacionId, { tipo: 'sistema' });
 }
