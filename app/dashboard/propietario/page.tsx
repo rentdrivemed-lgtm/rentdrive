@@ -76,13 +76,26 @@ type Fotos = {
   cojineria: string; baul: string; tablero: string;
 };
 type NotifRaw = { id: number; tipo: string; titulo: string; mensaje: string; leida: number };
+type ConceptoCuenta = { tipo: 'descuento' | 'adicional'; concepto: string; monto: number; motivo?: string };
 type CuentaCobro = {
   id: number; numero: string; propietario_nombre: string; propietario_documento: string;
   vehiculo_descripcion: string; placa: string;
   fecha_inicio: string; fecha_fin: string; dias: number;
   bruto: number; comision_pct: number; comision_valor: number; neto: number;
   firmada_en: string; firma_ip: string; firma_imagen: string; firma_nombre_confirmado: string; created_at: string;
+  // Desglose congelado en el documento: cada descuento/adicional con su concepto. Lo que
+  // se firma tiene que poder leerse línea por línea, no solo el neto.
+  conceptos?: ConceptoCuenta[];
+  // Versión del documento — viaja con la firma para que el servidor rechace firmar una
+  // cuenta que cambió mientras estaba abierta en pantalla.
+  version?: number;
+  // Veredicto del sello de integridad de la firma (solo en las ya firmadas). Si `ok` es
+  // false, el documento cambió después de firmarse: el pago queda bloqueado en el servidor
+  // y aquí se le avisa al propietario, que es quien puede reclamar.
+  integridad?: { ok: boolean; alg: string; motivo: string } | null;
 };
+// Cuenta de cobro firmada que quedó anulada porque la liquidación se corrigió después.
+type CuentaAnulada = CuentaCobro & { anulada_en: string; motivo_anulacion: string };
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const FOTOS_VACIAS: Fotos = {
@@ -258,6 +271,7 @@ function DashboardPropietarioInner() {
   // Cuentas de cobro (remisiones a firmar)
   const [cuentasPendientes, setCuentasPendientes] = useState<CuentaCobro[]>([]);
   const [cuentasFirmadas, setCuentasFirmadas] = useState<CuentaCobro[]>([]);
+  const [cuentasAnuladas, setCuentasAnuladas] = useState<CuentaAnulada[]>([]);
   const [empresaCuentaCobro, setEmpresaCuentaCobro] = useState({ nombre: 'DrivePass', nit: '' });
   const [cargandoCuentas, setCargandoCuentas] = useState(false);
   const [errorCuentas, setErrorCuentas] = useState('');
@@ -333,6 +347,7 @@ function DashboardPropietarioInner() {
       const data = await res.json();
       setCuentasPendientes(data.pendientes || []);
       setCuentasFirmadas(data.firmadas || []);
+      setCuentasAnuladas(data.anuladas || []);
       if (data.empresa) setEmpresaCuentaCobro(data.empresa);
     } catch {
       setErrorCuentas('Error de red al cargar tus cuentas de cobro.');
@@ -348,9 +363,10 @@ function DashboardPropietarioInner() {
     setFirmandoId(remisionId);
     setCuentaMsg('');
     try {
+      const version = cuentasPendientes.find(c => c.id === remisionId)?.version;
       const res = await fetch('/api/propietario/cuentas-cobro', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ remision_id: remisionId, firma_imagen: firmaImagen, nombre_confirmado: nombreConfirmado }),
+        body: JSON.stringify({ remision_id: remisionId, firma_imagen: firmaImagen, nombre_confirmado: nombreConfirmado, version }),
       });
       const d = await res.json().catch(() => ({}));
       if (res.ok) {
@@ -1226,24 +1242,44 @@ function DashboardPropietarioInner() {
                             </div>
                           </div>
 
-                          <div className="grid grid-cols-3 gap-2 text-center bg-surface rounded-xl border border-border p-3">
-                            <div>
-                              <p className="text-[10px] text-ink/40 uppercase tracking-wide">Bruto</p>
-                              <p className="text-sm font-bold text-ink">{copCorto(c.bruto)}</p>
+                          {/* Desglose línea por línea: el propietario está FIRMANDO, tiene que ver
+                              exactamente de dónde sale el neto (bruto, comisión y cada ajuste). */}
+                          <div className="bg-surface rounded-xl border border-border p-3 space-y-1.5">
+                            <div className="flex items-center justify-between gap-3 text-sm">
+                              <span className="text-ink/60">Alquiler ({c.dias} día{c.dias !== 1 ? 's' : ''})</span>
+                              <span className="font-semibold text-ink">{copCorto(c.bruto)}</span>
                             </div>
-                            <div>
-                              <p className="text-[10px] text-ink/40 uppercase tracking-wide">Comisión ({(c.comision_pct * 100).toFixed(0)}%)</p>
-                              <p className="text-sm font-bold text-ink">- {copCorto(c.comision_valor)}</p>
+                            <div className="flex items-center justify-between gap-3 text-sm">
+                              <span className="text-ink/60">Comisión DrivePass ({(c.comision_pct * 100).toFixed(0)}%)</span>
+                              <span className="font-semibold text-ink">− {copCorto(c.comision_valor)}</span>
                             </div>
-                            <div>
-                              <p className="text-[10px] text-ink/40 uppercase tracking-wide">Neto</p>
-                              <p className="text-sm font-bold text-success">{copCorto(c.neto)}</p>
+                            {(c.conceptos || []).map((x, i) => (
+                              <div key={i} className="flex items-start justify-between gap-3 text-sm">
+                                <span className="text-ink/60">
+                                  {x.tipo === 'descuento' ? 'Descuento' : 'Adicional'}: {x.concepto}
+                                  {x.motivo ? <span className="block text-[11px] text-ink/40">{x.motivo}</span> : null}
+                                </span>
+                                <span className={`font-semibold flex-shrink-0 ${x.tipo === 'descuento' ? 'text-danger' : 'text-success'}`}>
+                                  {x.tipo === 'descuento' ? '−' : '+'} {copCorto(Math.abs(x.monto))}
+                                </span>
+                              </div>
+                            ))}
+                            <div className="flex items-center justify-between gap-3 text-sm border-t border-border pt-1.5">
+                              <span className="font-bold text-ink">{c.neto < 0 ? 'Saldo a favor de DrivePass' : 'Neto a recibir'}</span>
+                              <span className={`font-black ${c.neto < 0 ? 'text-danger' : 'text-success'}`}>{copCorto(c.neto)}</span>
                             </div>
                           </div>
 
                           <p className="text-sm text-ink/70 bg-accent-light border border-accent/20 rounded-xl px-3.5 py-2.5">
-                            Al firmar, autorizas a DrivePass a transferirte {copCorto(c.neto)} por el alquiler de tu {c.vehiculo_descripcion} del {c.fecha_inicio} al {c.fecha_fin}, ya descontada la comisión de administración del {(c.comision_pct * 100).toFixed(0)}%.
+                            {c.neto < 0
+                              ? `Al firmar, aceptas el saldo de ${copCorto(Math.abs(c.neto))} a favor de DrivePass por el alquiler de tu ${c.vehiculo_descripcion} del ${c.fecha_inicio} al ${c.fecha_fin}: los descuentos superaron el valor del alquiler. No habrá transferencia por este servicio.`
+                              : `Al firmar, autorizas a DrivePass a transferirte ${copCorto(c.neto)} por el alquiler de tu ${c.vehiculo_descripcion} del ${c.fecha_inicio} al ${c.fecha_fin}, ya descontada la comisión de administración del ${(c.comision_pct * 100).toFixed(0)}%${(c.conceptos || []).length > 0 ? ' y los ajustes del detalle' : ''}.`}
                           </p>
+                          {(c.version || 1) > 1 && (
+                            <p className="text-xs text-warning bg-warning/10 border border-warning/25 rounded-xl px-3.5 py-2.5">
+                              ⚠ Esta es una cuenta de cobro corregida ({c.numero}). La anterior que firmaste quedó anulada y la puedes consultar más abajo. Revisa el detalle antes de firmar.
+                            </p>
+                          )}
 
                           <div>
                             <label className="text-xs font-medium text-ink/60 block mb-1">Tu firma</label>
@@ -1290,6 +1326,16 @@ function DashboardPropietarioInner() {
                             <p className="text-sm font-semibold text-ink truncate">{c.vehiculo_descripcion}{c.placa ? ` · ${c.placa}` : ''}</p>
                             <p className="text-xs text-ink/50">{c.fecha_inicio} → {c.fecha_fin} · Cuenta {c.numero}</p>
                             <p className="text-[11px] text-success/80">✓ Firmada el {c.firmada_en.slice(0, 16).replace('T', ' ')}</p>
+                            {c.integridad && !c.integridad.ok && (
+                              <p className="text-[11px] text-danger font-semibold mt-0.5">
+                                ⚠ Esta cuenta no coincide con lo que firmaste: {c.integridad.motivo}. El pago está detenido — escríbenos.
+                              </p>
+                            )}
+                            {(c.conceptos || []).length > 0 && (
+                              <p className="text-[11px] text-ink/50">
+                                Incluye: {(c.conceptos || []).map(x => `${x.tipo === 'descuento' ? '−' : '+'}${copCorto(Math.abs(x.monto))} ${x.concepto}`).join(' · ')}
+                              </p>
+                            )}
                           </div>
                           <div className="flex items-center gap-2 flex-shrink-0">
                             <span className="text-sm font-bold text-ink">{copCorto(c.neto)}</span>
@@ -1304,6 +1350,33 @@ function DashboardPropietarioInner() {
                   </div>
                 )}
               </div>
+
+              {/* Cuentas que firmaste y que luego quedaron anuladas porque la liquidación se
+                  corrigió. Se conservan como constancia de lo que autorizaste en su momento. */}
+              {cuentasAnuladas.length > 0 && (
+                <div>
+                  <h3 className="font-bold text-ink text-sm mb-1">Anuladas</h3>
+                  <p className="text-xs text-ink/50 mb-3">Cuentas que firmaste y que se reemplazaron por una corregida. Las guardamos como constancia de lo que autorizaste.</p>
+                  <div className="space-y-2">
+                    {cuentasAnuladas.map(c => (
+                      <div key={`anulada-${c.id}`} className="flex items-center justify-between gap-3 bg-surface-2 rounded-xl px-4 py-3 border border-danger/25 flex-wrap">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-ink truncate">{c.vehiculo_descripcion}{c.placa ? ` · ${c.placa}` : ''}</p>
+                          <p className="text-xs text-ink/50">{c.fecha_inicio} → {c.fecha_fin} · Cuenta {c.numero}</p>
+                          <p className="text-[11px] text-danger">Anulada el {(c.anulada_en || '').slice(0, 16).replace('T', ' ')}{c.motivo_anulacion ? ` · ${c.motivo_anulacion}` : ''}</p>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <span className="text-sm font-bold text-ink/50 line-through">{copCorto(c.neto)}</span>
+                          <button onClick={() => descargarCuentaCobroPDF(empresaCuentaCobro, c)}
+                            className="text-xs border border-border text-ink/70 px-2.5 py-1.5 rounded-xl hover:bg-surface transition font-medium flex items-center gap-1">
+                            <IconExport size={12} /> PDF
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>

@@ -244,19 +244,34 @@ export function permisosDe(db: DB, userId: number): { nivel: AdminNivel | null; 
 // nota que escriba el llamador, y la columna `auditoria.usuario_id` (que es nullable
 // y ya admite NULL desde que se borra una cuenta, ver lib/eliminar.ts) se deja vacía
 // en vez de inventar un id de usuario que no existe.
-export function registrarAuditoria(
-  db: DB,
-  actor: { id: number | null; nombre?: string; correo?: string; nivel?: string },
-  entry: { area: string; accion: string; detalle?: string; entidad?: string; entidad_id?: number | null },
-) {
+export type ActorAuditoria = { id: number | null; nombre?: string; correo?: string; nivel?: string };
+export type EntradaAuditoria = { area: string; accion: string; detalle?: string; entidad?: string; entidad_id?: number | null };
+
+/**
+ * Variante ESTRICTA: no se traga los errores, los propaga.
+ *
+ * `registrarAuditoria` (abajo) es deliberadamente tolerante — para un evento informativo
+ * es mejor perder la línea de bitácora que tumbar la acción del usuario. Pero cuando lo
+ * que se registra es un MOVIMIENTO DE PLATA (editar una liquidación, crear o anular un
+ * ajuste, consumir ajustes pendientes, detectar una firma manipulada) esa tolerancia es
+ * un agujero: el cambio se confirmaba en la BD y el rastro podía no existir.
+ *
+ * Como estas acciones ocurren dentro de una transacción de better-sqlite3, lanzar aquí
+ * revierte TODO el cambio: o queda registrado, o no ocurre.
+ */
+export function registrarAuditoriaEstricta(db: DB, actor: ActorAuditoria, entry: EntradaAuditoria): void {
+  db.prepare(
+    `INSERT INTO auditoria (usuario_id, usuario_nombre, usuario_correo, usuario_nivel, area, accion, detalle, entidad, entidad_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    actor.id ?? null, actor.nombre || '', actor.correo || '', actor.nivel || '',
+    entry.area, entry.accion, entry.detalle || '', entry.entidad || '', entry.entidad_id ?? null,
+  );
+}
+
+export function registrarAuditoria(db: DB, actor: ActorAuditoria, entry: EntradaAuditoria) {
   try {
-    db.prepare(
-      `INSERT INTO auditoria (usuario_id, usuario_nombre, usuario_correo, usuario_nivel, area, accion, detalle, entidad, entidad_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      actor.id ?? null, actor.nombre || '', actor.correo || '', actor.nivel || '',
-      entry.area, entry.accion, entry.detalle || '', entry.entidad || '', entry.entidad_id ?? null,
-    );
+    registrarAuditoriaEstricta(db, actor, entry);
   } catch (e) {
     console.error('[auditoria] no se pudo registrar:', e instanceof Error ? e.message : e);
   }

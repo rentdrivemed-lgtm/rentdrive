@@ -4,6 +4,9 @@ import { IconCoin, IconCheck, IconExport, IconUpload, IconPhoto, IconX } from '@
 import { descargarCotizacionPDF, descargarFacturaPDF, descargarRemisionPDF, descargarGastoPDF } from '@/lib/contabilidad-pdf';
 import { descargarGastosExcel } from '@/lib/contabilidad-excel';
 import { calcularDiasAlquiler, calcularTotalAlquiler } from '@/lib/lugares';
+// Misma fórmula que usa el servidor para guardar (lib/liquidacion-calculo.ts, módulo puro):
+// la vista previa del modal no puede diferir ni en un peso de lo que se va a grabar.
+import { calcularTotalesLiquidacion } from '@/lib/liquidacion-calculo';
 
 type SubTab = 'resumen' | 'gastos' | 'cotizaciones' | 'facturas' | 'liquidaciones' | 'config';
 
@@ -77,15 +80,44 @@ type ReservaPendiente = {
   estado?: string; pago_estado?: string;
 };
 
+type TipoConceptoLiq = 'descuento' | 'adicional';
+type ConceptoLiq = {
+  id: number; liquidacion_id: number; tipo: TipoConceptoLiq; concepto: string; monto: number;
+  motivo: string; origen_ajuste_id: number | null; created_by_nombre: string; created_at: string;
+};
 type LiquidacionFila = {
+  id: number;
   reserva_id: number; bruto: number; comision_pct: number; comision_valor: number; neto: number;
   marca: string; modelo: string; anio: number; fecha_inicio: string; fecha_fin: string; usuario_nombre: string;
   remision_numero: string; propietario_documento: string; placa: string; firmada_en: string;
+  remision_version: number;
   comprobante: string; comprobante_url: string; pagado_en: string;
+  conceptos: ConceptoLiq[];
 };
 type LiquidacionGrupo = {
   propietario_id: number; propietario_nombre: string; propietario_correo: string;
   banco: string; numero_cuenta: string; total_neto: number; liquidaciones: LiquidacionFila[];
+};
+// Costo/adicional que quedó pendiente de aplicar porque la liquidación de ese servicio ya
+// se pagó: lo consume la SIGUIENTE liquidación del propietario.
+type AjustePendiente = {
+  id: number; propietario_id: number; propietario_nombre?: string; tipo: TipoConceptoLiq;
+  concepto: string; monto: number; motivo: string; reserva_origen_id: number | null;
+  created_by_nombre: string; created_at: string;
+};
+
+// Formulario de edición de UNA liquidación (modal). `bruto`/`comision_pct` se envían solo
+// si el admin los tocó; cada cambio lleva su motivo obligatorio.
+type LineaNueva = { tipo: TipoConceptoLiq; concepto: string; monto: string; motivo: string };
+const LINEA_NUEVA_VACIA: LineaNueva = { tipo: 'descuento', concepto: '', monto: '', motivo: '' };
+type EdicionState = {
+  grupo: LiquidacionGrupo;
+  fila: LiquidacionFila;
+  bruto: string; motivoBruto: string;
+  comisionPct: string; motivoComision: string;
+  nuevas: LineaNueva[];
+  quitar: Record<number, string>; // id del concepto → motivo para quitarlo
+  confirmarNegativo: boolean;
 };
 
 const ESTADO_BADGE: Record<string, string> = {
@@ -184,6 +216,13 @@ export default function ContabilidadPanel() {
   const [subiendoComprobante, setSubiendoComprobante] = useState(false);
   const [liqMsg, setLiqMsg] = useState('');
   const inputComprobanteRef = useRef<HTMLInputElement>(null);
+  // Edición de liquidaciones + ajustes pendientes por propietario
+  const [ajustesPendientes, setAjustesPendientes] = useState<AjustePendiente[]>([]);
+  const [edicion, setEdicion] = useState<EdicionState | null>(null);
+  const [guardandoEdicion, setGuardandoEdicion] = useState(false);
+  const [edicionMsg, setEdicionMsg] = useState('');
+  const [ajusteNuevo, setAjusteNuevo] = useState<{ grupo: LiquidacionGrupo; fila: LiquidacionFila; tipo: TipoConceptoLiq; concepto: string; monto: string; motivo: string } | null>(null);
+  const [guardandoAjuste, setGuardandoAjuste] = useState(false);
 
   // Config
   const [config, setConfig] = useState({
@@ -301,6 +340,7 @@ export default function ContabilidadPanel() {
       if (!res.ok) { setErrorLiq('No pudimos cargar las liquidaciones.'); return; }
       setLiquidaciones(d.por_propietario || []);
       setTotalLiquidaciones(d.total_general || 0);
+      setAjustesPendientes(d.ajustes_pendientes || []);
     } catch {
       setErrorLiq('Sin conexión — intenta de nuevo.');
     } finally {
@@ -560,6 +600,140 @@ export default function ContabilidadPanel() {
       setLiqMsg('Sin conexión al registrar el pago.');
     } finally {
       setPagandoIds(prev => { const n = new Set(prev); reservaIds.forEach(id => n.delete(id)); return n; });
+    }
+  };
+
+  // ── Edición de liquidaciones ──────────────────────────────────────────────
+  const abrirEdicion = (grupo: LiquidacionGrupo, fila: LiquidacionFila) => {
+    setEdicionMsg('');
+    setEdicion({
+      grupo, fila,
+      bruto: String(Math.round(fila.bruto)),
+      motivoBruto: '',
+      comisionPct: String(fila.comision_pct),
+      motivoComision: '',
+      nuevas: [],
+      quitar: {},
+      confirmarNegativo: false,
+    });
+  };
+
+  // Vista previa del neto con los cambios del modal aplicados, calculada con la MISMA
+  // función del servidor. Lo que el admin ve antes de guardar es lo que se guarda.
+  const previewEdicion = (e: EdicionState) => {
+    const conceptos = [
+      ...e.fila.conceptos.filter(c => e.quitar[c.id] === undefined).map(c => ({ tipo: c.tipo, monto: c.monto })),
+      ...e.nuevas.filter(n => Number(n.monto) > 0).map(n => ({ tipo: n.tipo, monto: Number(n.monto) })),
+    ];
+    const bruto = e.bruto.trim() === '' ? e.fila.bruto : Number(e.bruto);
+    const pct = e.comisionPct.trim() === '' ? e.fila.comision_pct : Number(e.comisionPct);
+    return calcularTotalesLiquidacion(bruto, pct, conceptos);
+  };
+
+  const guardarEdicion = async () => {
+    if (!edicion) return;
+    const e = edicion;
+    const brutoNum = Number(e.bruto);
+    const pctNum = Number(e.comisionPct);
+    const cambiaBruto = e.bruto.trim() !== '' && Math.round(brutoNum) !== Math.round(e.fila.bruto);
+    const cambiaPct = e.comisionPct.trim() !== '' && pctNum !== e.fila.comision_pct;
+    const nuevas = e.nuevas.filter(n => n.concepto.trim() || n.monto.trim() || n.motivo.trim());
+    const quitarIds = Object.keys(e.quitar).map(Number);
+
+    if (!cambiaBruto && !cambiaPct && nuevas.length === 0 && quitarIds.length === 0) {
+      setEdicionMsg('No hay cambios para guardar.'); return;
+    }
+    if (cambiaBruto && !e.motivoBruto.trim()) { setEdicionMsg('Escribe el motivo del cambio de base de liquidación.'); return; }
+    if (cambiaPct && !e.motivoComision.trim()) { setEdicionMsg('Escribe el motivo del cambio de comisión.'); return; }
+    for (const n of nuevas) {
+      if (!n.concepto.trim()) { setEdicionMsg('Cada línea necesita una descripción (ej. "Lavada").'); return; }
+      if (!(Number(n.monto) > 0)) { setEdicionMsg(`El monto de "${n.concepto}" debe ser mayor que cero.`); return; }
+      if (!n.motivo.trim()) { setEdicionMsg(`Falta el motivo de "${n.concepto}". Es obligatorio.`); return; }
+    }
+    for (const id of quitarIds) {
+      if (!(e.quitar[id] || '').trim()) { setEdicionMsg('Falta el motivo para quitar uno de los conceptos.'); return; }
+    }
+
+    setGuardandoEdicion(true); setEdicionMsg('');
+    try {
+      const res = await fetch('/api/contabilidad/liquidaciones', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reserva_id: e.fila.reserva_id,
+          ...(cambiaBruto ? { bruto: Math.round(brutoNum), motivo_bruto: e.motivoBruto.trim() } : {}),
+          ...(cambiaPct ? { comision_pct: pctNum, motivo_comision: e.motivoComision.trim() } : {}),
+          agregar: nuevas.map(n => ({ tipo: n.tipo, concepto: n.concepto.trim(), monto: Number(n.monto), motivo: n.motivo.trim() })),
+          quitar: quitarIds.map(id => ({ id, motivo: e.quitar[id].trim() })),
+          confirmar_neto_negativo: e.confirmarNegativo,
+        }),
+      });
+      const d = await res.json().catch(() => ({})) as {
+        error?: string; requiere_confirmacion?: boolean;
+        cuenta_cobro?: { accion: string; numero: string; neto: number; anulada: { numero: string; neto: number } | null };
+      };
+      if (!res.ok) {
+        setEdicionMsg(d.error || 'No se pudo guardar la edición.');
+        return;
+      }
+      const cc = d.cuenta_cobro;
+      setLiqMsg(cc?.anulada
+        ? `✓ Liquidación actualizada. Se anuló la cuenta ${cc.anulada.numero} (${cop(cc.anulada.neto)}) y se emitió ${cc.numero} por ${cop(cc.neto)}. El propietario ya fue avisado; el pago queda bloqueado hasta su nueva firma.`
+        : `✓ Liquidación actualizada. Cuenta de cobro ${cc?.numero || ''} regenerada por ${cop(cc?.neto || 0)}.`);
+      setEdicion(null);
+      cargarLiquidaciones();
+    } catch {
+      setEdicionMsg('Sin conexión al guardar la edición.');
+    } finally {
+      setGuardandoEdicion(false);
+    }
+  };
+
+  // ── Ajustes pendientes (liquidación YA PAGADA: no se toca, se cobra en la siguiente) ──
+  const guardarAjuste = async () => {
+    if (!ajusteNuevo) return;
+    if (!ajusteNuevo.concepto.trim()) { setLiqMsg('El ajuste necesita una descripción.'); return; }
+    if (!(Number(ajusteNuevo.monto) > 0)) { setLiqMsg('El monto del ajuste debe ser mayor que cero.'); return; }
+    if (!ajusteNuevo.motivo.trim()) { setLiqMsg('El motivo del ajuste es obligatorio.'); return; }
+    setGuardandoAjuste(true);
+    try {
+      const res = await fetch('/api/contabilidad/ajustes', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          propietario_id: ajusteNuevo.grupo.propietario_id,
+          tipo: ajusteNuevo.tipo,
+          concepto: ajusteNuevo.concepto.trim(),
+          monto: Number(ajusteNuevo.monto),
+          motivo: ajusteNuevo.motivo.trim(),
+          reserva_origen_id: ajusteNuevo.fila.reserva_id,
+        }),
+      });
+      const d = await res.json().catch(() => ({})) as { error?: string };
+      if (!res.ok) { setLiqMsg(d.error || 'No se pudo registrar el ajuste.'); return; }
+      setLiqMsg(`✓ Ajuste registrado. Se aplicará automáticamente a la próxima liquidación de ${ajusteNuevo.grupo.propietario_nombre}.`);
+      setAjusteNuevo(null);
+      cargarLiquidaciones();
+    } catch {
+      setLiqMsg('Sin conexión al registrar el ajuste.');
+    } finally {
+      setGuardandoAjuste(false);
+    }
+  };
+
+  const anularAjuste = async (a: AjustePendiente) => {
+    const motivo = window.prompt(`¿Por qué anulas el ajuste "${a.concepto}" (${cop(a.monto)})? El motivo queda en la bitácora.`);
+    if (motivo === null) return;
+    if (!motivo.trim()) { setLiqMsg('El motivo de anulación es obligatorio.'); return; }
+    try {
+      const res = await fetch('/api/contabilidad/ajustes', {
+        method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: a.id, motivo: motivo.trim() }),
+      });
+      const d = await res.json().catch(() => ({})) as { error?: string };
+      if (!res.ok) { setLiqMsg(d.error || 'No se pudo anular el ajuste.'); return; }
+      setLiqMsg('✓ Ajuste anulado.');
+      cargarLiquidaciones();
+    } catch {
+      setLiqMsg('Sin conexión al anular el ajuste.');
     }
   };
 
@@ -1733,10 +1907,23 @@ export default function ContabilidadPanel() {
                               <p className="text-sm font-semibold text-ink truncate">{l.marca} {l.modelo} {l.anio}{l.placa ? ` · ${l.placa}` : ''}</p>
                               <p className="text-xs text-ink/50">{l.fecha_inicio} → {l.fecha_fin} · {l.usuario_nombre}</p>
                               <p className="text-[11px] text-ink/40">Bruto {cop(l.bruto)} − comisión {(l.comision_pct * 100).toFixed(0)}% ({cop(l.comision_valor)})</p>
+                              {l.conceptos.length > 0 && (
+                                <div className="mt-1 space-y-0.5">
+                                  {l.conceptos.map(c => (
+                                    <p key={c.id} className={`text-[11px] ${c.tipo === 'descuento' ? 'text-danger' : 'text-success'}`}>
+                                      {c.tipo === 'descuento' ? '−' : '+'} {cop(c.monto)} · {c.concepto}
+                                      <span className="text-ink/40"> ({c.motivo}{c.created_by_nombre ? ` — ${c.created_by_nombre}` : ''})</span>
+                                    </p>
+                                  ))}
+                                </div>
+                              )}
+                              {l.neto < 0 && (
+                                <p className="text-[11px] text-danger font-semibold">⚠ Neto negativo: no hay nada que transferir — el propietario queda debiendo {cop(Math.abs(l.neto))}</p>
+                              )}
                               {estadoLiq === 'pendiente' && (
                                 l.firmada_en
-                                  ? <p className="text-[11px] text-success/80">✓ Cuenta de cobro firmada {l.firmada_en.slice(0, 10)}</p>
-                                  : <p className="text-[11px] text-warning">⚠ Falta la firma del propietario — no se puede pagar todavía</p>
+                                  ? <p className="text-[11px] text-success/80">✓ Cuenta de cobro {l.remision_numero} firmada {l.firmada_en.slice(0, 10)}</p>
+                                  : <p className="text-[11px] text-warning">⚠ Falta la firma del propietario{(l.remision_version || 1) > 1 ? ` de la cuenta reemitida ${l.remision_numero}` : ''} — no se puede pagar todavía</p>
                               )}
                               {estadoLiq === 'pagado' && (l.pagado_en || l.comprobante) && (
                                 <p className="text-[11px] text-success/80">✓ Pagado{l.pagado_en ? ` ${l.pagado_en.slice(0, 10)}` : ''}{l.comprobante ? ` · ref: ${l.comprobante}` : ''}</p>
@@ -1751,6 +1938,7 @@ export default function ContabilidadPanel() {
                                 fecha_inicio: l.fecha_inicio, fecha_fin: l.fecha_fin,
                                 dias: Math.max(1, Math.ceil((new Date(l.fecha_fin).getTime() - new Date(l.fecha_inicio).getTime()) / 86400000)),
                                 bruto: l.bruto, comision_pct: l.comision_pct, comision_valor: l.comision_valor, neto: l.neto,
+                                conceptos: l.conceptos.map(c => ({ tipo: c.tipo, concepto: c.concepto, monto: c.monto, motivo: c.motivo })),
                               })}
                                 className="text-xs border border-border text-ink/70 px-2.5 py-1.5 rounded-xl hover:bg-surface transition font-medium flex items-center gap-1">
                                 <IconExport size={12} /> Remisión
@@ -1761,11 +1949,26 @@ export default function ContabilidadPanel() {
                                   <IconExport size={12} /> Comprobante
                                 </a>
                               )}
-                              {estadoLiq === 'pendiente' && (
-                                <button onClick={() => marcarLiquidacionPagada([l.reserva_id])} disabled={enCurso || !l.firmada_en}
-                                  title={!l.firmada_en ? 'El propietario todavía no ha firmado su cuenta de cobro' : undefined}
-                                  className="text-xs border border-success/40 text-success px-2.5 py-1.5 rounded-xl hover:bg-success/10 transition disabled:opacity-50 font-medium">
-                                  {enCurso ? '…' : '✓ Pagar'}
+                              {estadoLiq === 'pendiente' ? (
+                                <>
+                                  <button onClick={() => abrirEdicion(grupo, l)} disabled={enCurso}
+                                    title="Agregar o quitar costos, corregir la base o la comisión de esta liquidación"
+                                    className="text-xs border border-border text-ink/70 px-2.5 py-1.5 rounded-xl hover:bg-surface transition disabled:opacity-50 font-medium">
+                                    ✎ Editar
+                                  </button>
+                                  <button onClick={() => marcarLiquidacionPagada([l.reserva_id])} disabled={enCurso || !l.firmada_en || l.neto < 0}
+                                    title={!l.firmada_en ? 'El propietario todavía no ha firmado su cuenta de cobro' : l.neto < 0 ? 'El neto quedó negativo: no hay nada que transferir' : undefined}
+                                    className="text-xs border border-success/40 text-success px-2.5 py-1.5 rounded-xl hover:bg-success/10 transition disabled:opacity-50 font-medium">
+                                    {enCurso ? '…' : '✓ Pagar'}
+                                  </button>
+                                </>
+                              ) : (
+                                // Regla C: lo pagado es constancia histórica y no se toca. Si aparece
+                                // un costo después, se cobra en la SIGUIENTE liquidación del propietario.
+                                <button onClick={() => setAjusteNuevo({ grupo, fila: l, tipo: 'descuento', concepto: '', monto: '', motivo: '' })}
+                                  title="Lo pagado no se modifica: el costo se aplicará a la próxima liquidación de este propietario"
+                                  className="text-xs border border-border text-ink/70 px-2.5 py-1.5 rounded-xl hover:bg-surface transition font-medium">
+                                  + Ajuste para la próxima
                                 </button>
                               )}
                             </div>
@@ -1776,6 +1979,270 @@ export default function ContabilidadPanel() {
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {/* Ajustes pendientes: costos detectados DESPUÉS de pagar una liquidación. Se
+              muestran siempre (aunque el propietario no tenga liquidaciones en el filtro
+              actual) para que ninguno quede olvidado si deja de tener reservas. */}
+          {ajustesPendientes.length > 0 && (
+            <div className="bg-warning/5 border border-warning/25 rounded-2xl p-5 space-y-3">
+              <div>
+                <p className="font-bold text-ink text-sm">Ajustes pendientes por aplicar ({ajustesPendientes.length})</p>
+                <p className="text-xs text-ink/50">
+                  Costos/adicionales de liquidaciones que ya estaban pagadas. Se aplican solos —una sola vez— a la PRÓXIMA liquidación de cada propietario.
+                  Un descuento que dejaría el neto en negativo espera a la siguiente. Si ya se cobró por fuera, anúlalo con su motivo.
+                </p>
+              </div>
+              <div className="space-y-2">
+                {ajustesPendientes.map(a => (
+                  <div key={a.id} className="flex items-center justify-between gap-3 bg-surface rounded-xl px-3 py-2.5 border border-border flex-wrap">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-ink truncate">
+                        {a.propietario_nombre || `Propietario #${a.propietario_id}`} · {a.concepto}
+                      </p>
+                      <p className="text-xs text-ink/50">
+                        {a.motivo}{a.reserva_origen_id ? ` · reserva #${a.reserva_origen_id}` : ''}{a.created_by_nombre ? ` · registrado por ${a.created_by_nombre}` : ''} · {(a.created_at || '').slice(0, 10)}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span className={`text-sm font-bold ${a.tipo === 'descuento' ? 'text-danger' : 'text-success'}`}>
+                        {a.tipo === 'descuento' ? '−' : '+'} {cop(a.monto)}
+                      </span>
+                      <button onClick={() => anularAjuste(a)}
+                        className="text-xs border border-border text-ink/60 px-2.5 py-1.5 rounded-xl hover:bg-surface-2 transition font-medium">
+                        Anular
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Modal: editar una liquidación pendiente */}
+          {edicion && (() => {
+            const e = edicion;
+            const prev = previewEdicion(e);
+            const hayCambios =
+              (e.bruto.trim() !== '' && Math.round(Number(e.bruto)) !== Math.round(e.fila.bruto)) ||
+              (e.comisionPct.trim() !== '' && Number(e.comisionPct) !== e.fila.comision_pct) ||
+              e.nuevas.length > 0 || Object.keys(e.quitar).length > 0;
+            const firmada = !!e.fila.firmada_en;
+            return (
+              <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => !guardandoEdicion && setEdicion(null)}>
+                <div className="bg-surface rounded-2xl border border-border max-w-2xl w-full max-h-[90vh] overflow-y-auto p-5 space-y-4" onClick={ev => ev.stopPropagation()}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-base font-bold text-ink">Editar liquidación · {e.fila.marca} {e.fila.modelo} {e.fila.anio}</p>
+                      <p className="text-xs text-ink/50">
+                        {e.grupo.propietario_nombre} · {e.fila.fecha_inicio} → {e.fila.fecha_fin} · cuenta {e.fila.remision_numero || '—'}
+                      </p>
+                    </div>
+                    <button onClick={() => setEdicion(null)} className="text-ink/40 hover:text-ink"><IconX size={18} /></button>
+                  </div>
+
+                  {/* Conceptos existentes */}
+                  {e.fila.conceptos.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-semibold text-ink/60">Costos y adicionales actuales</p>
+                      {e.fila.conceptos.map(c => {
+                        const quitando = e.quitar[c.id] !== undefined;
+                        return (
+                          <div key={c.id} className={`rounded-xl border p-3 space-y-2 ${quitando ? 'border-danger/30 bg-danger/5' : 'border-border bg-surface-2'}`}>
+                            <div className="flex items-center justify-between gap-3 flex-wrap">
+                              <div className="min-w-0">
+                                <p className={`text-sm font-semibold ${quitando ? 'text-ink/40 line-through' : 'text-ink'}`}>
+                                  {c.tipo === 'descuento' ? 'Descuento' : 'Adicional'}: {c.concepto}
+                                </p>
+                                <p className="text-[11px] text-ink/50">{c.motivo}{c.created_by_nombre ? ` · ${c.created_by_nombre}` : ''}{c.origen_ajuste_id ? ` · viene del ajuste pendiente #${c.origen_ajuste_id}` : ''}</p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className={`text-sm font-bold ${c.tipo === 'descuento' ? 'text-danger' : 'text-success'}`}>
+                                  {c.tipo === 'descuento' ? '−' : '+'} {cop(c.monto)}
+                                </span>
+                                <button
+                                  onClick={() => setEdicion(st => st && ({
+                                    ...st,
+                                    quitar: quitando
+                                      ? Object.fromEntries(Object.entries(st.quitar).filter(([k]) => Number(k) !== c.id))
+                                      : { ...st.quitar, [c.id]: '' },
+                                  }))}
+                                  className="text-xs border border-border text-ink/60 px-2.5 py-1.5 rounded-xl hover:bg-surface transition font-medium">
+                                  {quitando ? 'Conservar' : 'Quitar'}
+                                </button>
+                              </div>
+                            </div>
+                            {quitando && (
+                              <input value={e.quitar[c.id]} onChange={ev => setEdicion(st => st && ({ ...st, quitar: { ...st.quitar, [c.id]: ev.target.value } }))}
+                                placeholder="Motivo para quitarlo (obligatorio)"
+                                className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Nuevas líneas */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs font-semibold text-ink/60">Agregar costo o adicional</p>
+                      <button onClick={() => setEdicion(st => st && ({ ...st, nuevas: [...st.nuevas, { ...LINEA_NUEVA_VACIA }] }))}
+                        className="text-xs border border-accent/30 text-accent px-2.5 py-1.5 rounded-xl hover:bg-accent-light transition font-medium">
+                        + Agregar línea
+                      </button>
+                    </div>
+                    {e.nuevas.map((n, i) => (
+                      <div key={i} className="rounded-xl border border-border bg-surface-2 p-3 space-y-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          <select value={n.tipo}
+                            onChange={ev => setEdicion(st => st && ({ ...st, nuevas: st.nuevas.map((x, j) => j === i ? { ...x, tipo: ev.target.value as TipoConceptoLiq } : x) }))}
+                            className="bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink">
+                            <option value="descuento">Descuento (baja el neto)</option>
+                            <option value="adicional">Adicional (sube el neto)</option>
+                          </select>
+                          <input value={n.concepto} placeholder="Concepto (ej. Lavada)"
+                            onChange={ev => setEdicion(st => st && ({ ...st, nuevas: st.nuevas.map((x, j) => j === i ? { ...x, concepto: ev.target.value } : x) }))}
+                            className="bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                          <input value={n.monto} inputMode="numeric" placeholder="Monto"
+                            onChange={ev => setEdicion(st => st && ({ ...st, nuevas: st.nuevas.map((x, j) => j === i ? { ...x, monto: ev.target.value.replace(/[^0-9]/g, '') } : x) }))}
+                            className="bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                        </div>
+                        <div className="flex gap-2">
+                          <input value={n.motivo} placeholder="Motivo (obligatorio) — queda en la bitácora"
+                            onChange={ev => setEdicion(st => st && ({ ...st, nuevas: st.nuevas.map((x, j) => j === i ? { ...x, motivo: ev.target.value } : x) }))}
+                            className="flex-1 bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                          <button onClick={() => setEdicion(st => st && ({ ...st, nuevas: st.nuevas.filter((_, j) => j !== i) }))}
+                            className="text-xs border border-border text-ink/50 px-2.5 py-1.5 rounded-xl hover:bg-surface transition">Quitar</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Valores */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[11px] text-ink/50 block mb-1">Base de liquidación (bruto)</label>
+                      <input value={e.bruto} inputMode="numeric"
+                        onChange={ev => setEdicion(st => st && ({ ...st, bruto: ev.target.value.replace(/[^0-9]/g, '') }))}
+                        className="w-full bg-surface-2 border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                      <p className="text-[10px] text-ink/40 mt-0.5">
+                        NO cambia lo que pagó el cliente ni su factura: es solo la base sobre la que se le liquida al propietario.
+                      </p>
+                      {e.bruto.trim() !== '' && Math.round(Number(e.bruto)) !== Math.round(e.fila.bruto) && (
+                        <input value={e.motivoBruto} onChange={ev => setEdicion(st => st && ({ ...st, motivoBruto: ev.target.value }))}
+                          placeholder="Motivo del cambio (obligatorio)"
+                          className="w-full mt-2 bg-surface-2 border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                      )}
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-ink/50 block mb-1">Comisión de esta liquidación (0 a 1)</label>
+                      <input value={e.comisionPct} inputMode="decimal"
+                        onChange={ev => setEdicion(st => st && ({ ...st, comisionPct: ev.target.value.replace(/[^0-9.]/g, '') }))}
+                        className="w-full bg-surface-2 border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                      <p className="text-[10px] text-ink/40 mt-0.5">Solo esta liquidación — la comisión global de la plataforma no cambia.</p>
+                      {e.comisionPct.trim() !== '' && Number(e.comisionPct) !== e.fila.comision_pct && (
+                        <input value={e.motivoComision} onChange={ev => setEdicion(st => st && ({ ...st, motivoComision: ev.target.value }))}
+                          placeholder="Motivo del cambio (obligatorio)"
+                          className="w-full mt-2 bg-surface-2 border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Vista previa */}
+                  <div className="bg-surface-2 border border-border rounded-xl p-3 space-y-1 text-sm">
+                    <div className="flex justify-between"><span className="text-ink/60">Bruto</span><span className="font-semibold text-ink">{cop(prev.bruto)}</span></div>
+                    <div className="flex justify-between"><span className="text-ink/60">Comisión ({(prev.comision_pct * 100).toFixed(1)}%)</span><span className="font-semibold text-ink">− {cop(prev.comision_valor)}</span></div>
+                    {prev.total_descuentos > 0 && <div className="flex justify-between"><span className="text-ink/60">Descuentos</span><span className="font-semibold text-danger">− {cop(prev.total_descuentos)}</span></div>}
+                    {prev.total_adicionales > 0 && <div className="flex justify-between"><span className="text-ink/60">Adicionales</span><span className="font-semibold text-success">+ {cop(prev.total_adicionales)}</span></div>}
+                    <div className="flex justify-between border-t border-border pt-1.5">
+                      <span className="font-bold text-ink">Neto {e.fila.neto !== prev.neto ? `(antes ${cop(e.fila.neto)})` : ''}</span>
+                      <span className={`font-black ${prev.neto < 0 ? 'text-danger' : 'text-success'}`}>{cop(prev.neto)}</span>
+                    </div>
+                  </div>
+
+                  {prev.neto < 0 && (
+                    <div className="bg-danger/10 border border-danger/30 rounded-xl p-3 space-y-2">
+                      <p className="text-sm text-danger font-semibold">⚠ El neto queda NEGATIVO ({cop(prev.neto)}).</p>
+                      <p className="text-xs text-ink/70">
+                        Los descuentos superan el bruto menos la comisión: el propietario quedaría debiéndole {cop(Math.abs(prev.neto))} a DrivePass y esta liquidación NO se podrá pagar.
+                        Normalmente conviene dejar el excedente como ajuste pendiente para la próxima liquidación.
+                      </p>
+                      <label className="flex items-center gap-2 text-xs text-ink">
+                        <input type="checkbox" checked={e.confirmarNegativo} onChange={ev => setEdicion(st => st && ({ ...st, confirmarNegativo: ev.target.checked }))} />
+                        Entiendo y quiero guardar el neto en negativo.
+                      </label>
+                    </div>
+                  )}
+
+                  {/* Advertencia de anulación de la cuenta firmada (regla B) */}
+                  {firmada && hayCambios && (
+                    <div className="bg-warning/10 border border-warning/30 rounded-xl p-3 space-y-1">
+                      <p className="text-sm font-semibold text-warning">Esta cuenta de cobro YA está firmada. Al guardar:</p>
+                      <ul className="text-xs text-ink/70 list-disc pl-4 space-y-0.5">
+                        <li>La cuenta <strong>{e.fila.remision_numero}</strong> por <strong>{cop(e.fila.neto)}</strong>, firmada el {e.fila.firmada_en.slice(0, 10)}, queda <strong>ANULADA</strong> (se conserva como constancia).</li>
+                        <li>Se emite una cuenta <strong>nueva, con número nuevo</strong>, por <strong>{cop(prev.neto)}</strong>.</li>
+                        <li>Se le avisa a {e.grupo.propietario_nombre} para que la firme.</li>
+                        <li><strong>No se podrá pagar</strong> hasta que firme la nueva.</li>
+                      </ul>
+                    </div>
+                  )}
+
+                  {edicionMsg && <div className="text-sm px-4 py-2.5 rounded-xl border bg-danger/10 text-danger border-danger/25">{edicionMsg}</div>}
+
+                  <div className="flex gap-2 justify-end">
+                    <button onClick={() => setEdicion(null)} disabled={guardandoEdicion}
+                      className="text-sm border border-border text-ink/60 px-4 py-2 rounded-xl hover:bg-surface-2 transition font-medium">Cancelar</button>
+                    <button onClick={guardarEdicion} disabled={guardandoEdicion || !hayCambios || (prev.neto < 0 && !e.confirmarNegativo)}
+                      className="bg-accent text-white text-sm font-bold px-4 py-2 rounded-xl transition disabled:opacity-50">
+                      {guardandoEdicion ? 'Guardando…' : firmada ? 'Guardar, anular y reemitir' : 'Guardar y regenerar cuenta'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Modal: ajuste pendiente sobre una liquidación YA PAGADA */}
+          {ajusteNuevo && (
+            <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => !guardandoAjuste && setAjusteNuevo(null)}>
+              <div className="bg-surface rounded-2xl border border-border max-w-lg w-full p-5 space-y-4" onClick={ev => ev.stopPropagation()}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-base font-bold text-ink">Ajuste para la próxima liquidación</p>
+                    <p className="text-xs text-ink/50">
+                      La liquidación del {ajusteNuevo.fila.marca} {ajusteNuevo.fila.modelo} ({ajusteNuevo.fila.fecha_inicio} → {ajusteNuevo.fila.fecha_fin}) ya fue pagada y no se modifica.
+                      Este ajuste se aplicará, una sola vez, a la próxima liquidación de {ajusteNuevo.grupo.propietario_nombre}.
+                    </p>
+                  </div>
+                  <button onClick={() => setAjusteNuevo(null)} className="text-ink/40 hover:text-ink"><IconX size={18} /></button>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <select value={ajusteNuevo.tipo} onChange={ev => setAjusteNuevo(a => a && ({ ...a, tipo: ev.target.value as TipoConceptoLiq }))}
+                    className="bg-surface-2 border border-border rounded-xl px-3 py-2 text-sm text-ink">
+                    <option value="descuento">Descuento</option>
+                    <option value="adicional">Adicional</option>
+                  </select>
+                  <input value={ajusteNuevo.concepto} placeholder="Concepto (ej. Multa)"
+                    onChange={ev => setAjusteNuevo(a => a && ({ ...a, concepto: ev.target.value }))}
+                    className="bg-surface-2 border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                  <input value={ajusteNuevo.monto} inputMode="numeric" placeholder="Monto"
+                    onChange={ev => setAjusteNuevo(a => a && ({ ...a, monto: ev.target.value.replace(/[^0-9]/g, '') }))}
+                    className="bg-surface-2 border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                </div>
+                <input value={ajusteNuevo.motivo} placeholder="Motivo (obligatorio) — queda en la bitácora"
+                  onChange={ev => setAjusteNuevo(a => a && ({ ...a, motivo: ev.target.value }))}
+                  className="w-full bg-surface-2 border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+                <div className="flex gap-2 justify-end">
+                  <button onClick={() => setAjusteNuevo(null)} disabled={guardandoAjuste}
+                    className="text-sm border border-border text-ink/60 px-4 py-2 rounded-xl hover:bg-surface-2 transition font-medium">Cancelar</button>
+                  <button onClick={guardarAjuste} disabled={guardandoAjuste}
+                    className="bg-accent text-white text-sm font-bold px-4 py-2 rounded-xl transition disabled:opacity-50">
+                    {guardandoAjuste ? 'Guardando…' : 'Registrar ajuste'}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </div>

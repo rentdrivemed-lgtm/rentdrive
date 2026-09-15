@@ -135,6 +135,13 @@ CREATE TABLE IF NOT EXISTS remisiones (
   firma_imagen            TEXT DEFAULT '',
   firma_nombre_confirmado TEXT DEFAULT '',
   firma_hash              TEXT DEFAULT '',
+  -- Desglose congelado (JSON) de los conceptos que componen el neto al emitir/reemitir la
+  -- cuenta de cobro: [{tipo,concepto,monto,motivo}]. Lo que el propietario firma queda
+  -- guardado CON el documento, no se recalcula después.
+  conceptos_json          TEXT DEFAULT '[]',
+  -- 1 = documento original; 2, 3… = reemisión tras editar la liquidación (la versión
+  -- anterior queda copiada íntegra en remisiones_anuladas). REM-000012 → REM-000012-R2.
+  version                 INTEGER DEFAULT 1,
   created_at            TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
 );
 -- Nota: liquidaciones necesita además la columna comprobante_url:
@@ -146,6 +153,92 @@ CREATE TABLE IF NOT EXISTS remisiones (
 --   ALTER TABLE remisiones ADD COLUMN IF NOT EXISTS firma_imagen TEXT DEFAULT '';
 --   ALTER TABLE remisiones ADD COLUMN IF NOT EXISTS firma_nombre_confirmado TEXT DEFAULT '';
 --   ALTER TABLE remisiones ADD COLUMN IF NOT EXISTS firma_hash TEXT DEFAULT '';
+-- Nota: liquidaciones editables (reflejo de lib/db.ts):
+--   ALTER TABLE remisiones ADD COLUMN IF NOT EXISTS conceptos_json TEXT DEFAULT '[]';
+--   ALTER TABLE remisiones ADD COLUMN IF NOT EXISTS version INTEGER DEFAULT 1;
+
+-- ─────────────── liquidaciones editables (conceptos, ajustes y anulaciones) ───────────────
+-- Reflejo en Postgres del bloque equivalente de lib/db.ts (mismo orden, para comparar lado
+-- a lado). Reglas de negocio en lib/contabilidad.ts → editarLiquidacion.
+
+-- Copia íntegra de una cuenta de cobro YA FIRMADA que quedó anulada porque la liquidación
+-- se editó después de firmarla. NO se borra nunca: es la constancia de qué monto autorizó
+-- el propietario y cuándo. La tabla remisiones conserva una sola fila por reserva (la
+-- vigente, la única que se puede firmar y pagar); el histórico vive aquí.
+CREATE TABLE IF NOT EXISTS remisiones_anuladas (
+  id                      SERIAL PRIMARY KEY,
+  remision_id             INTEGER NOT NULL REFERENCES remisiones(id),
+  reserva_id              INTEGER NOT NULL REFERENCES reservas(id),
+  propietario_id          INTEGER NOT NULL REFERENCES usuarios(id),
+  numero                  TEXT NOT NULL DEFAULT '',
+  version                 INTEGER DEFAULT 1,
+  propietario_nombre      TEXT DEFAULT '',
+  propietario_documento   TEXT DEFAULT '',
+  vehiculo_descripcion    TEXT DEFAULT '',
+  placa                   TEXT DEFAULT '',
+  fecha_inicio            TEXT DEFAULT '',
+  fecha_fin               TEXT DEFAULT '',
+  dias                    INTEGER DEFAULT 0,
+  bruto                   REAL DEFAULT 0,
+  comision_pct            REAL DEFAULT 0,
+  comision_valor          REAL DEFAULT 0,
+  neto                    REAL DEFAULT 0,
+  conceptos_json          TEXT DEFAULT '[]',
+  firmada_en              TEXT DEFAULT '',
+  firma_ip                TEXT DEFAULT '',
+  firma_user_agent        TEXT DEFAULT '',
+  firma_imagen            TEXT DEFAULT '',
+  firma_nombre_confirmado TEXT DEFAULT '',
+  firma_hash              TEXT DEFAULT '',
+  emitida_en              TEXT DEFAULT '',
+  anulada_en              TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
+  anulada_por             INTEGER REFERENCES usuarios(id),
+  anulada_por_nombre      TEXT DEFAULT '',
+  motivo_anulacion        TEXT DEFAULT ''
+);
+
+-- Ajuste que quedó PENDIENTE de aplicar a un propietario porque la liquidación del servicio
+-- al que corresponde YA SE PAGÓ (lo pagado no se toca). generarLiquidacion los consume al
+-- crear la siguiente liquidación de ese propietario.
+CREATE TABLE IF NOT EXISTS ajustes_propietario (
+  id                         SERIAL PRIMARY KEY,
+  propietario_id             INTEGER NOT NULL REFERENCES usuarios(id),
+  tipo                       TEXT NOT NULL CHECK (tipo IN ('descuento','adicional')),
+  concepto                   TEXT NOT NULL,
+  monto                      REAL NOT NULL,
+  motivo                     TEXT NOT NULL DEFAULT '',
+  reserva_origen_id          INTEGER REFERENCES reservas(id),
+  estado                     TEXT NOT NULL DEFAULT 'pendiente' CHECK (estado IN ('pendiente','aplicado','anulado')),
+  aplicado_en_liquidacion_id INTEGER REFERENCES liquidaciones(id),
+  aplicado_en                TEXT DEFAULT '',
+  anulado_en                 TEXT DEFAULT '',
+  motivo_anulacion           TEXT DEFAULT '',
+  created_by                 INTEGER REFERENCES usuarios(id),
+  created_by_nombre          TEXT DEFAULT '',
+  created_at                 TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+);
+
+-- Líneas que ajustan el neto de UNA liquidación concreta. El neto nunca se escribe a mano:
+-- siempre es bruto − comisión − descuentos + adicionales (lib/liquidacion-calculo.ts).
+CREATE TABLE IF NOT EXISTS liquidacion_conceptos (
+  id                SERIAL PRIMARY KEY,
+  liquidacion_id    INTEGER NOT NULL REFERENCES liquidaciones(id),
+  tipo              TEXT NOT NULL CHECK (tipo IN ('descuento','adicional')),
+  concepto          TEXT NOT NULL,
+  monto             REAL NOT NULL,
+  motivo            TEXT NOT NULL DEFAULT '',
+  origen_ajuste_id  INTEGER REFERENCES ajustes_propietario(id),
+  created_by        INTEGER REFERENCES usuarios(id),
+  created_by_nombre TEXT DEFAULT '',
+  created_at        TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+);
+
+CREATE INDEX IF NOT EXISTS idx_liq_conceptos_liq ON liquidacion_conceptos(liquidacion_id);
+-- Garantía a nivel de BD de que un ajuste pendiente NO se puede aplicar dos veces.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_liq_conceptos_ajuste_unico
+  ON liquidacion_conceptos(origen_ajuste_id) WHERE origen_ajuste_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_ajustes_prop_pendientes ON ajustes_propietario(propietario_id, estado);
+CREATE INDEX IF NOT EXISTS idx_remisiones_anuladas_reserva ON remisiones_anuladas(reserva_id);
 
 -- ─────────────── cotizaciones ───────────────
 -- reserva_id es NULLABLE a propósito: una cotización puede ser "suelta" (cotizador de
