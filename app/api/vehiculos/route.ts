@@ -11,6 +11,7 @@ import { contieneLenguajeInapropiado, extraerUrlsFotos, fotosRegistradasEntre, n
 import { documentosConUrlsValidas } from '@/lib/storage';
 import { esCombustibleValido, inscripcionExencionConfirmada, requiereInscripcionExencion, sanitizarClaseVehiculo } from '@/lib/vehiculo-campos';
 import { filtrarVehiculos } from '@/lib/vehiculo-publico';
+import { validarDiasDisponibles } from '@/lib/dias-disponibles';
 
 function datesInRange(start: string, end: string): string[] {
   const dates: string[] = [];
@@ -233,6 +234,17 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Igual que en PUT /api/vehiculos/[id]: el calendario de disponibilidad se valida antes de
+  // escribirlo. Sin esto, un `dias_disponibles` que no parsee entra crudo a la BD y después
+  // todo el sistema lo lee con `try { JSON.parse } catch { dias = [] }` — que por la semántica
+  // invertida de la columna (ver lib/dias-disponibles.ts) deja el vehículo ABIERTO sin
+  // restricciones. Un vehículo recién creado no tiene reservas, así que acá solo aplica la
+  // validación de formato (la protección contra cerrar días reservados vive en el PUT).
+  const diasValidacion = validarDiasDisponibles(dias_disponibles ?? '[]');
+  if (!diasValidacion.ok) {
+    return NextResponse.json({ error: diasValidacion.error }, { status: 400 });
+  }
+
   // Igual que en PUT /api/vehiculos/[id]: `documentos` debe contener SOLO URLs que
   // realmente vengan de nuestro storage (Cloudinary vía uploadFile(), ver lib/storage.ts) —
   // nunca un string arbitrario inventado por el cliente.
@@ -301,7 +313,7 @@ export async function POST(req: NextRequest) {
     precioAuto, descripcion || '',
     fotos || '[]',
     fotos_detalle || '{}',
-    dias_disponibles || '[]',
+    diasValidacion.json,
     (placa || '').toString().toUpperCase().trim(),
     valorComercial, ajuste,
     documentos || '{}', documentosEstadoInicial,

@@ -8,6 +8,7 @@ import DocUploadDoble from '@/components/DocUploadDoble';
 import TelefonoInput from '@/components/TelefonoInput';
 import { validarCelular, validarDocumentoIdentidad, PAIS_TEL_DEFAULT } from '@/lib/validacion';
 import CalendarioDisponibilidad from '@/components/CalendarioDisponibilidad';
+import { conDiasOcupados, diasOcupadosPorReservas, parseDiasGuardados } from '@/lib/dias-disponibles';
 import DisponibilidadReglas from '@/components/DisponibilidadReglas';
 import ReferidosCard from '@/components/ReferidosCard';
 import CalendarioReservas, { type ReservaCalendario } from '@/components/CalendarioReservas';
@@ -172,6 +173,12 @@ function DashboardPropietarioInner() {
   const [vehiculos, setVehiculos] = useState<Vehiculo[]>([]);
   const [reservas, setReservas] = useState<Reserva[]>([]);
   const [loadingReservas, setLoadingReservas] = useState(false);
+  // ¿Se pudieron cargar las reservas? Mismo guard que el panel del admin: sin saber qué días
+  // están ocupados, el calendario de disponibilidad se muestra en SOLO LECTURA. Si no,
+  // `reservas` queda `[]`, no se preserva ningún día ocupado y el primer día que se marque en
+  // un vehículo irrestricto con una reserva activa devuelve un 400 imposible de resolver
+  // (las celdas que habría que marcar están deshabilitadas). `null` = todavía cargando.
+  const [reservasOk, setReservasOk] = useState<boolean | null>(null);
   const [errorReservas, setErrorReservas] = useState('');
   const [tab, setTab] = useState<TabPropietario>('vehiculos');
 
@@ -295,13 +302,16 @@ function DashboardPropietarioInner() {
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         setErrorReservas((err as { error?: string }).error || `Error ${res.status}`);
+        setReservasOk(false);
         setLoadingReservas(false);
         return;
       }
       const data = await res.json();
       setReservas(data.reservas || []);
+      setReservasOk(true);
     } catch {
       setErrorReservas('Error de red al cargar reservas.');
+      setReservasOk(false);
     }
     setLoadingReservas(false);
   };
@@ -544,7 +554,31 @@ function DashboardPropietarioInner() {
     if (user) cargarVehiculos(user.id);
   };
 
-  const guardarDias = async (vid: number, dias: string[]) => {
+  /**
+   * Días ya comprometidos por reservas activas de ESTE vehículo, con el MISMO criterio que
+   * usa el servidor para proteger el calendario (fin EXCLUSIVO y solo de hoy en adelante,
+   * ver lib/dias-disponibles.ts). Alimenta a la vez las celdas rojas deshabilitadas
+   * (`reservedDates`) y la unión de seguridad al guardar: lo que se pinta como intocable y lo
+   * que se preserva son el MISMO conjunto, en este panel y en el del admin.
+   */
+  const diasOcupadosVehiculo = (vid: number): string[] =>
+    [...diasOcupadosPorReservas(reservas.filter(r => r.vehiculo_id === vid))];
+
+  /** Lo que hay guardado HOY en BD para ese vehículo (filtrando filas legacy malformadas). */
+  const diasGuardadosVehiculo = (vid: number): string[] =>
+    parseDiasGuardados(vehiculos.find(v => v.id === vid)?.dias_disponibles);
+
+  const guardarDias = async (vid: number, diasElegidos: string[]) => {
+    // Sin las reservas cargadas no se guarda nada: ver `reservasOk` arriba.
+    if (reservasOk !== true) {
+      setDispMsg(m => ({ ...m, [vid]: 'No pudimos cargar tus reservas, así que el calendario está en solo lectura. Actualiza las reservas e intenta de nuevo.' }));
+      return;
+    }
+    // Los días con reserva activa que hoy están ABIERTOS se preservan siempre: el calendario no
+    // deja marcarlos (celdas deshabilitadas), así que sin esta unión un vehículo abierto sin
+    // restricciones (`[]`) con una reserva encima quedaba en un callejón sin salida — el primer
+    // día que se marcara cerraría los días reservados y el servidor lo rechazaría siempre.
+    const dias = conDiasOcupados(diasElegidos, diasOcupadosVehiculo(vid), diasGuardadosVehiculo(vid));
     setDispMsg(m => ({ ...m, [vid]: '' }));
     try {
       const res = await fetch(`/api/vehiculos/${vid}`, {
@@ -552,7 +586,13 @@ function DashboardPropietarioInner() {
         body: JSON.stringify({ dias_disponibles: JSON.stringify(dias) }),
       });
       if (res.ok) {
-        setVehiculos(vs => vs.map(v => v.id === vid ? { ...v, dias_disponibles: JSON.stringify(dias) } : v));
+        // Se sincroniza con el calendario que el servidor dice que quedó en BD, no con el que
+        // mandamos: si difirieran, manda la BD.
+        const d = await res.json().catch(() => ({}));
+        const guardados = Array.isArray((d as { dias_disponibles?: unknown }).dias_disponibles)
+          ? (d as { dias_disponibles: string[] }).dias_disponibles
+          : dias;
+        setVehiculos(vs => vs.map(v => v.id === vid ? { ...v, dias_disponibles: JSON.stringify(guardados) } : v));
       } else {
         const d = await res.json().catch(() => ({}));
         const detalle = (d as { problemas?: { detalle: string }[] }).problemas?.[0]?.detalle;
@@ -574,7 +614,9 @@ function DashboardPropietarioInner() {
       exencion_pico_placa_inscrita: !!v.exencion_pico_placa_inscrita,
     });
     setEditFotos({ ...FOTOS_VACIAS, ...parseJ<Partial<Fotos>>(v.fotos_detalle, {}) } as Fotos);
-    setEditDias(parseJ<string[]>(v.dias_disponibles, []));
+    // `parseDiasGuardados` y no `parseJ`: filtra entradas malformadas de filas legacy, que si no
+    // volverían intactas al primer guardado y el servidor rechazaría el calendario entero con 400.
+    setEditDias(parseDiasGuardados(v.dias_disponibles));
     setEditDocs(parseJ<Documentos>(v.documentos, {}));
     setVehiculoEditandoId(v.id);
     setSeccionMsg({});
@@ -595,11 +637,17 @@ function DashboardPropietarioInner() {
   }, [vehiculos, searchParams]);
 
   // ── Section savers in edit mode ────────────────────────────────────────────
-  const guardarSeccion = async (seccion: string, body: Record<string, unknown>): Promise<boolean> => {
-    if (!vehiculoEditandoId || !user) return false;
+  /**
+   * Guarda una sección del editor. Además de si funcionó, devuelve el vehículo YA RECARGADO
+   * desde el servidor (o `null` si no se pudo recargar), para que la sección pueda sincronizar
+   * su estado local con lo que realmente quedó en BD — lo usa el calendario de disponibilidad.
+   */
+  const guardarSeccion = async (seccion: string, body: Record<string, unknown>): Promise<{ ok: boolean; vehiculo: Vehiculo | null }> => {
+    if (!vehiculoEditandoId || !user) return { ok: false, vehiculo: null };
     setGuardandoSeccion(g => ({ ...g, [seccion]: true }));
     setSeccionMsg(m => ({ ...m, [seccion]: '' }));
     let exito = false;
+    let actualizado: Vehiculo | null = null;
     try {
       const res = await fetch(`/api/vehiculos/${vehiculoEditandoId}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
@@ -610,6 +658,7 @@ function DashboardPropietarioInner() {
         setSeccionMsg(m => ({ ...m, [seccion]: '✓ Guardado' }));
         const vs = await cargarVehiculos(user.id);
         const vAct = vs.find(v => v.id === vehiculoEditandoId);
+        actualizado = vAct ?? null;
         if (vAct) {
           const { pct } = calcProgreso(vAct);
           if (pct === 100) setPopupCompleto(`${vAct.marca} ${vAct.modelo} ${vAct.anio}`);
@@ -622,7 +671,7 @@ function DashboardPropietarioInner() {
       setSeccionMsg(m => ({ ...m, [seccion]: 'Error de red' }));
     }
     setGuardandoSeccion(g => ({ ...g, [seccion]: false }));
-    return exito;
+    return { ok: exito, vehiculo: actualizado };
   };
 
   // ── Solicitar reajuste de precio (Punto 3) ─────────────────────────────────
@@ -733,20 +782,11 @@ function DashboardPropietarioInner() {
   };
 
   // ── Reservas helper ────────────────────────────────────────────────────────
-  const reservasDatesVehiculo = (vid: number): string[] => {
-    const set = new Set<string>();
-    reservas.filter(r => r.vehiculo_id === vid && r.estado !== 'cancelada').forEach(r => {
-      const [sy, sm, sd] = r.fecha_inicio.slice(0, 10).split('-').map(Number);
-      const [ey, em, ed] = r.fecha_fin.slice(0, 10).split('-').map(Number);
-      const c = new Date(sy, sm - 1, sd);
-      const f = new Date(ey, em - 1, ed);
-      while (c < f) {
-        set.add(`${c.getFullYear()}-${String(c.getMonth() + 1).padStart(2, '0')}-${String(c.getDate()).padStart(2, '0')}`);
-        c.setDate(c.getDate() + 1);
-      }
-    });
-    return [...set];
-  };
+  // Las celdas rojas del calendario salen del MISMO helper que decide qué días se preservan al
+  // guardar (`diasOcupadosVehiculo`). Antes esto tenía su propia derivación y las dos no
+  // coincidían: el día de `fecha_fin` se pintaba como celda normal y clicable, pero al guardar
+  // la unión lo devolvía sin ningún aviso — un botón muerto. Cualquier cambio de criterio va
+  // en lib/dias-disponibles.ts, para los dos paneles a la vez.
 
   if (!user) return <div className="text-center py-20 text-ink/50">Cargando...</div>;
 
@@ -878,7 +918,7 @@ function DashboardPropietarioInner() {
           ) : vehiculos.map(v => {
             const { pct, items } = calcProgreso(v);
             const faltantes = items.filter(i => !i.done).map(i => i.label);
-            const dias = parseJ<string[]>(v.dias_disponibles, []);
+            const dias = parseDiasGuardados(v.dias_disponibles);
             const editando = calTab === v.id;
             const docsEstado = v.documentos_estado;
 
@@ -986,13 +1026,29 @@ function DashboardPropietarioInner() {
                     {dispMsg[v.id] && (
                       <p className="text-xs text-danger bg-danger/10 border border-danger/25 rounded-xl px-3 py-2">{dispMsg[v.id]}</p>
                     )}
+                    {reservasOk !== true && (
+                      <div className="text-xs bg-warning/10 border border-warning/25 rounded-xl px-3 py-2 flex items-center justify-between gap-2 flex-wrap">
+                        <span className="text-ink/70">
+                          {reservasOk === null
+                            ? 'Cargando tus reservas… el calendario queda en solo lectura hasta terminar.'
+                            : 'No pudimos cargar tus reservas, así que no sabemos qué días están ocupados. El calendario queda en SOLO LECTURA para no cerrar sin querer un día reservado.'}
+                        </span>
+                        {reservasOk === false && (
+                          <button onClick={cargarReservas} disabled={loadingReservas}
+                            className="font-semibold text-warning hover:underline">
+                            {loadingReservas ? 'Cargando…' : 'Reintentar'}
+                          </button>
+                        )}
+                      </div>
+                    )}
                     <CalendarioDisponibilidad
                       value={dias}
                       onChange={nuevos => guardarDias(v.id, nuevos)}
+                      readOnly={reservasOk !== true}
                       placa={v.placa}
                       combustible={v.combustible}
                       exencionInscrita={v.exencion_pico_placa_inscrita}
-                      reservedDates={reservasDatesVehiculo(v.id)}
+                      reservedDates={diasOcupadosVehiculo(v.id)}
                     />
                   </div>
                 )}
@@ -1733,19 +1789,42 @@ function DashboardPropietarioInner() {
                   guardar. `placa` ya se comportaba así antes de estos campos; se mantiene el
                   mismo criterio para los tres para no dejar la vista a medias (media preview,
                   media BD). */}
+              {reservasOk !== true && (
+                <div className="text-xs bg-warning/10 border border-warning/25 rounded-xl px-3 py-2 mb-3 flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-ink/70">
+                    {reservasOk === null
+                      ? 'Cargando tus reservas… el calendario queda en solo lectura hasta terminar.'
+                      : 'No pudimos cargar tus reservas, así que no sabemos qué días están ocupados. El calendario queda en SOLO LECTURA para no cerrar sin querer un día reservado.'}
+                  </span>
+                  {reservasOk === false && (
+                    <button type="button" onClick={cargarReservas} disabled={loadingReservas}
+                      className="font-semibold text-warning hover:underline">
+                      {loadingReservas ? 'Cargando…' : 'Reintentar'}
+                    </button>
+                  )}
+                </div>
+              )}
               <CalendarioDisponibilidad
                 value={editDias}
-                onChange={async (dias) => {
+                onChange={async (elegidos) => {
                   const anterior = editDias;
+                  // Misma red de seguridad que `guardarDias` (ver arriba): nunca se manda un
+                  // conjunto que cierre un día ya comprometido por una reserva activa que hoy
+                  // esté abierta. `anterior` es lo último confirmado por el servidor.
+                  const dias = conDiasOcupados(elegidos, diasOcupadosVehiculo(vehiculoEditandoId!), anterior);
                   setEditDias(dias);
-                  const ok = await guardarSeccion('dias', { dias_disponibles: JSON.stringify(dias) });
-                  // Si el servidor rechazó el cambio, no dejamos el checkbox mostrando algo que no se guardó.
-                  if (!ok) setEditDias(anterior);
+                  const r = await guardarSeccion('dias', { dias_disponibles: JSON.stringify(dias) });
+                  // Si el servidor rechazó el cambio, no dejamos el calendario mostrando algo que
+                  // no se guardó; si lo aceptó, se sincroniza con la fila tal como quedó en BD
+                  // (si la recarga de vehículos falló, se queda con lo que se acaba de guardar).
+                  if (!r.ok) setEditDias(anterior);
+                  else if (r.vehiculo) setEditDias(parseDiasGuardados(r.vehiculo.dias_disponibles));
                 }}
+                readOnly={reservasOk !== true}
                 placa={editForm.placa}
                 combustible={editForm.combustible}
                 exencionInscrita={editForm.exencion_pico_placa_inscrita}
-                reservedDates={reservasDatesVehiculo(vehiculoEditandoId!)}
+                reservedDates={diasOcupadosVehiculo(vehiculoEditandoId!)}
               />
               {seccionMsg.dias && (
                 <span className={`text-xs font-medium mt-2 block ${seccionMsg.dias.startsWith('✓') ? 'text-success' : 'text-danger'}`}>

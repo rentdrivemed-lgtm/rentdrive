@@ -2,6 +2,7 @@
 import { Fragment, Suspense, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import CalendarioReservas, { type ReservaCalendario } from '@/components/CalendarioReservas';
+import CalendarioDisponibilidad from '@/components/CalendarioDisponibilidad';
 import PicoPlacaConfig from '@/components/PicoPlacaConfig';
 import ContabilidadPanel from '@/components/ContabilidadPanel';
 import BusesPanel from '@/components/buses/BusesPanel';
@@ -15,6 +16,7 @@ import {
   parsePermisosExtra, type AdminNivel, type PermisosExtra, type PermisosExtraDelta,
 } from '@/lib/permisos';
 import { parsePicoPlaca, picoPlacaVacio, placaRestringida, type PicoPlaca } from '@/lib/pico-placa';
+import { conDiasOcupados, diasOcupadosPorReservas, parseDiasGuardados } from '@/lib/dias-disponibles';
 import { tecnoRequerida } from '@/lib/tecnomecanica';
 import { fechaHoraRecogida, esNoShowAplicable } from '@/lib/cancelacion';
 import { IconUser, IconCar, IconX, IconCheck, IconCalendar, IconShield, IconExport } from '@/components/Icons';
@@ -46,6 +48,11 @@ type Vehiculo = {
   id: number; marca: string; modelo: string; anio: number; tipo: string;
   precio_dia: number; propietario_id: number; propietario_nombre: string; disponible: number;
   fotos: string; fotos_detalle: string; placa?: string; documentos?: string;
+  // Calendario de disponibilidad (array JSON de fechas 'YYYY-MM-DD'). Llega en el
+  // `SELECT v.*` del panel y NO está entre los campos sensibles de lib/vehiculo-publico.ts.
+  // ⚠️ `'[]'` NO significa "cerrado": significa "abierto sin restricciones" (ver
+  // lib/dias-disponibles.ts).
+  dias_disponibles?: string;
   combustible?: string; clase_vehiculo?: string; exencion_pico_placa_inscrita?: number;
   documentos_estado?: string; documentos_nota?: string; documentos_revisiones?: string;
   en_vitrina?: number; archivado?: number;
@@ -307,6 +314,21 @@ function DashboardAdminInner() {
   const [precioEdit, setPrecioEdit] = useState<Record<number, string>>({});
   const [fotoModal, setFotoModal] = useState<{ v: Vehiculo } | null>(null);
   const [docModal, setDocModal] = useState<{ v: Vehiculo } | null>(null);
+  // Editor de calendario del admin (mismas capacidades que el propietario, ver modal abajo).
+  const [dispModal, setDispModal] = useState<{ v: Vehiculo } | null>(null);
+  const [dispDias, setDispDias] = useState<string[]>([]);
+  // Copia de lo que hay GUARDADO en BD para este vehículo: el calendario del modal edita
+  // `dispDias` en local y solo se persiste al tocar "Guardar", así que hace falta con qué
+  // comparar para saber si quedan cambios pendientes (antes cada clic disparaba un PUT, y
+  // cada PUT le mandaba una notificación al propietario).
+  const [dispOriginal, setDispOriginal] = useState<string[]>([]);
+  const [dispMsg, setDispMsg] = useState('');
+  const [dispGuardando, setDispGuardando] = useState(false);
+  // ¿Se pudieron cargar las reservas? GET /api/reservas está gateado por el área `reservas`,
+  // NO por `vehiculos`: un admin con `vehiculos` pero sin `reservas` recibe 403 y vería el
+  // calendario SIN los días bloqueados, pudiendo pisar reservas sin enterarse. `null` = aún
+  // cargando; `false` = no se pudieron cargar -> el calendario se muestra en SOLO LECTURA.
+  const [reservasOk, setReservasOk] = useState<boolean | null>(null);
   const [docNota, setDocNota] = useState('');
   const [filtroEstado, setFiltroEstado] = useState('');
   const [filtroBusq, setFiltroBusq] = useState('');
@@ -456,8 +478,20 @@ function DashboardAdminInner() {
   const cargarVehiculos = () =>
     fetch('/api/vehiculos?panelAdmin=1').then(r => r.json()).then(d => setVehiculos(d.vehiculos || [])).catch(() => setErrorListas(e => ({ ...e, vehiculos: true })));
 
+  // `reservasOk` se marca aparte de `errorListas.reservas` a propósito: `errorListas` solo
+  // controla el recuadro de "Reintentar" de la pestaña Reservas (que un admin sin esa área ni
+  // siquiera ve) y se deja exactamente como estaba; `reservasOk` es lo que consume el editor
+  // de calendario para no dejar editar a ciegas cuando el 403 del área `reservas` nos dejó
+  // sin saber qué días están reservados.
   const cargarReservas = () =>
-    fetch('/api/reservas').then(r => r.json()).then(d => setReservas(d.reservas || [])).catch(() => setErrorListas(e => ({ ...e, reservas: true })));
+    fetch('/api/reservas')
+      .then(async r => {
+        if (!r.ok) { setReservasOk(false); return; }
+        const d = await r.json();
+        setReservas(d.reservas || []);
+        setReservasOk(true);
+      })
+      .catch(() => { setReservasOk(false); setErrorListas(e => ({ ...e, reservas: true })); });
 
   const toggleEstado = async (u: Usuario) => {
     const nuevo = u.estado_cuenta === 'activa' ? 'inactiva' : 'activa';
@@ -787,6 +821,104 @@ function DashboardAdminInner() {
     setIaError('');
     setIaCargando(false);
     setDocModal({ v });
+  };
+
+  // ── Editor de calendario (disponibilidad) del admin ───────────────────────────────────
+  // Mismas capacidades que el propietario: marcar/desmarcar días. Sin poderes extra.
+  // El servidor (PUT /api/vehiculos/[id]) audita el cambio y le avisa al propietario cuando
+  // es un admin tocando un vehículo ajeno, y rechaza con 400 si el cambio cerraría un día
+  // que ya tiene una reserva activa.
+
+  /**
+   * Días ya comprometidos por reservas activas de ESTE vehículo, con el MISMO criterio que
+   * usa el servidor (fin EXCLUSIVO y solo de hoy en adelante, ver lib/dias-disponibles.ts).
+   * Alimenta tanto las celdas rojas deshabilitadas como la unión de seguridad al guardar, así
+   * que lo que se pinta y lo que se protege es exactamente el mismo conjunto.
+   */
+  const diasOcupadosVehiculo = (vid: number): string[] =>
+    [...diasOcupadosPorReservas(reservas.filter(r => r.vehiculo_id === vid))];
+
+  /** ¿Quedan cambios sin guardar en el modal de disponibilidad? (orden irrelevante) */
+  const dispHayCambios = (() => {
+    if (dispDias.length !== dispOriginal.length) return true;
+    const guardados = new Set(dispOriginal);
+    return dispDias.some(d => !guardados.has(d));
+  })();
+
+  const abrirDispModal = (v: Vehiculo) => {
+    const guardados = parseDiasGuardados(v.dias_disponibles);
+    setDispDias(guardados);
+    setDispOriginal(guardados);
+    setDispMsg('');
+    setDispGuardando(false);
+    setDispModal({ v });
+  };
+
+  /** Cierra el modal, pidiendo confirmación si hay cambios que nunca se guardaron. */
+  const cerrarDispModal = () => {
+    if (dispHayCambios && !dispGuardando) {
+      const seguir = confirm('Tienes cambios en el calendario sin guardar. Si cierras ahora se pierden.\n\n¿Cerrar de todos modos?');
+      if (!seguir) return;
+    }
+    setDispModal(null);
+  };
+
+  const guardarDispDias = async (v: Vehiculo, elegidos: string[]) => {
+    const anterior = dispOriginal;
+
+    // ⚠️ SEMÁNTICA INVERTIDA: dejar el calendario sin ningún día marcado NO cierra el
+    // vehículo, lo deja ABIERTO SIN RESTRICCIONES (ver lib/dias-disponibles.ts) — justo lo
+    // contrario de lo que sugiere el botón "Limpiar todo" del componente. Se confirma antes
+    // de guardar en vez de cambiar la semántica del dato o el componente compartido.
+    if (elegidos.length === 0 && anterior.length > 0) {
+      const seguir = confirm(
+        `Vas a dejar el calendario de ${v.marca} ${v.modelo} SIN ningún día marcado.\n\n` +
+        'OJO: eso NO cierra el vehículo — lo deja ABIERTO SIN RESTRICCIONES (todos los días ' +
+        'quedan disponibles para reservar).\n\n¿Continuar?'
+      );
+      if (!seguir) return;
+    }
+
+    // Los días con reserva activa se preservan siempre: el componente no deja marcarlos
+    // (celdas deshabilitadas), así que sin esta unión un vehículo irrestricto con una reserva
+    // encima quedaba en un callejón sin salida — el primer día que marcaras cerraría los días
+    // reservados y el servidor rechazaría el guardado siempre.
+    const dias = conDiasOcupados(elegidos, diasOcupadosVehiculo(v.id), anterior);
+
+    setDispDias(dias);
+    setDispMsg('');
+    setDispGuardando(true);
+    try {
+      const res = await fetch(`/api/vehiculos/${v.id}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dias_disponibles: JSON.stringify(dias) }),
+      });
+      if (res.ok) {
+        // La UI se sincroniza con lo que el servidor dice que quedó en BD (normalizado), no
+        // con lo que mandamos: si difirieran, lo que manda es la BD.
+        const d = await res.json().catch(() => ({}));
+        const guardados = Array.isArray((d as { dias_disponibles?: unknown }).dias_disponibles)
+          ? ((d as { dias_disponibles: string[] }).dias_disponibles)
+          : dias;
+        setDispDias(guardados);
+        setDispOriginal(guardados);
+        setVehiculos(vs => vs.map(x => x.id === v.id ? { ...x, dias_disponibles: JSON.stringify(guardados) } : x));
+        setDispMsg(guardados.length === 0
+          ? '✓ Guardado — el vehículo quedó abierto sin restricciones.'
+          : `✓ Guardado — ${guardados.length} día${guardados.length !== 1 ? 's' : ''} marcado${guardados.length !== 1 ? 's' : ''}.`);
+      } else {
+        // Rollback a lo último confirmado por el servidor: si rechazó el cambio, el calendario
+        // no puede quedar mostrando algo que no se guardó.
+        const d = await res.json().catch(() => ({}));
+        setDispDias(anterior);
+        setDispMsg((d as { error?: string }).error || 'No se pudo guardar el calendario.');
+      }
+    } catch {
+      setDispDias(anterior);
+      setDispMsg('Sin conexión — intenta de nuevo.');
+    } finally {
+      setDispGuardando(false);
+    }
   };
 
   // Abre el modal de documentos de un vehículo puntual al llegar desde una notificación
@@ -1426,6 +1558,11 @@ function DashboardAdminInner() {
                       className="flex items-center gap-1 text-xs border border-accent/30 text-accent px-2.5 py-1.5 rounded-xl hover:bg-accent-light transition font-medium">
                       Fotos
                     </button>
+                    <button onClick={() => abrirDispModal(v)}
+                      title="Ver y modificar el calendario de disponibilidad de este vehículo"
+                      className="flex items-center gap-1 text-xs border border-accent/30 text-accent px-2.5 py-1.5 rounded-xl hover:bg-accent-light transition font-medium">
+                      📅 Disponibilidad
+                    </button>
                     <button onClick={() => abrirDocModal(v)}
                       className={`flex items-center gap-1 text-xs border px-2.5 py-1.5 rounded-xl transition font-medium ${
                         v.documentos_estado === 'en_revision'
@@ -1998,6 +2135,125 @@ function DashboardAdminInner() {
                   <p className="text-ink/50">Este vehículo no tiene fotos detalladas.</p>
                 </div>
               )}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Modal disponibilidad (calendario del vehículo) */}
+      {dispModal && (() => {
+        const v = dispModal.v;
+        // Un admin con la sección "vehiculos" puede NO tener la sección "reservas" (GET
+        // /api/reservas responde 403): en ese caso no sabemos qué días están reservados, así
+        // que el calendario se muestra en SOLO LECTURA. Editar a ciegas podría pisar una
+        // reserva sin que el admin lo vea (el servidor lo rechazaría, pero la UI no debe
+        // ofrecer una edición que no puede verificar).
+        const puedeEditar = reservasOk === true;
+        const ocupadas = puedeEditar ? diasOcupadosVehiculo(v.id) : [];
+        // El recuadro informativo habla de lo que hay HOY EN BD (`dispOriginal`), no del
+        // borrador que se está editando: el borrador ya se ve en el propio calendario.
+        const irrestricto = dispOriginal.length === 0;
+        // Un admin puede ser también el propietario del vehículo: ahí no hay "calendario
+        // ajeno" ni notificación al propietario (el servidor no se auto-notifica).
+        const esAjeno = Number(v.propietario_id) !== miId;
+
+        return (
+          <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={cerrarDispModal}>
+            <div className="bg-surface-2 rounded-3xl shadow-2xl max-w-3xl w-full p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+
+              {/* Header */}
+              <div className="flex justify-between items-start mb-4">
+                <div>
+                  <h3 className="font-bold text-ink">{v.marca} {v.modelo} {v.anio} — Disponibilidad</h3>
+                  {v.placa && <p className="text-xs text-ink/50 mt-0.5">Placa: {v.placa}</p>}
+                  <p className="text-xs text-ink/50 mt-0.5">Propietario: <span className="font-semibold text-ink/70">{v.propietario_nombre}</span></p>
+                </div>
+                <button onClick={cerrarDispModal} aria-label="Cerrar"
+                  className="p-1.5 rounded-xl text-ink/50 hover:text-ink hover:bg-surface transition">
+                  <IconX size={18} />
+                </button>
+              </div>
+
+              {/* Aviso: se está tocando el calendario de otra persona */}
+              <div className="bg-warning/10 border border-warning/25 rounded-xl p-3 mb-4">
+                <p className="text-xs text-warning font-semibold">
+                  {esAjeno
+                    ? `Estás editando el calendario de ${v.propietario_nombre}.`
+                    : 'Estás editando el calendario de tu propio vehículo.'}
+                </p>
+                <p className="text-[11px] text-ink/60 mt-1">
+                  {esAjeno
+                    ? 'Todo cambio queda registrado en la Bitácora y se le notifica al propietario. Los días con una reserva activa no se pueden cerrar.'
+                    : 'Los días con una reserva activa no se pueden cerrar.'}
+                </p>
+              </div>
+
+              {!puedeEditar && (
+                <div className="bg-danger/10 border border-danger/25 rounded-xl p-3 mb-4">
+                  <p className="text-xs text-danger font-semibold">
+                    {reservasOk === null ? 'Cargando reservas…' : 'No podemos verificar las reservas de este vehículo.'}
+                  </p>
+                  <p className="text-[11px] text-ink/60 mt-1">
+                    {reservasOk === null
+                      ? 'El calendario queda en solo lectura hasta terminar de cargar las reservas.'
+                      : 'Tu cuenta no tiene acceso a la sección Reservas, así que no sabemos qué días están ocupados. El calendario queda en SOLO LECTURA para no pisar una reserva sin verla. Pídele a un administrador principal el permiso de "Reservas".'}
+                  </p>
+                </div>
+              )}
+
+              {/* Semántica invertida: sin días marcados = abierto, no cerrado */}
+              <div className={`rounded-xl p-3 mb-4 border ${irrestricto ? 'bg-accent-light border-accent/25' : 'bg-surface border-border'}`}>
+                <p className="text-xs text-ink/70">
+                  {irrestricto
+                    ? <>Hoy este vehículo está <span className="font-bold text-accent">abierto sin restricciones</span>: no hay ningún día marcado, así que todos los días quedan disponibles para reservar.</>
+                    : <>Hoy este vehículo tiene <span className="font-bold text-accent">{dispOriginal.length} día{dispOriginal.length !== 1 ? 's' : ''}</span> marcado{dispOriginal.length !== 1 ? 's' : ''} como disponible{dispOriginal.length !== 1 ? 's' : ''}; el resto está cerrado.</>}
+                </p>
+                <p className="text-[11px] text-ink/50 mt-1">
+                  Ojo con “Limpiar todo”: dejar el calendario vacío NO cierra el vehículo, lo abre por completo.
+                </p>
+                {dispHayCambios && (
+                  <p className="text-[11px] text-warning font-semibold mt-1">
+                    Estás editando un borrador: quedaría en {dispDias.length === 0 ? 'abierto sin restricciones (0 días marcados)' : `${dispDias.length} día${dispDias.length !== 1 ? 's' : ''} marcado${dispDias.length !== 1 ? 's' : ''}`}. Nada se guarda hasta que toques “Guardar cambios”.
+                  </p>
+                )}
+              </div>
+
+              {/* Edición LOCAL: el calendario emite `onChange` por cada celda, así que guardar
+                  ahí mismo significaba un PUT (y una notificación al propietario) por clic.
+                  Se acumula en el estado y se persiste con el botón "Guardar cambios". */}
+              <CalendarioDisponibilidad
+                value={dispDias}
+                onChange={(dias) => { setDispDias(dias); setDispMsg(''); }}
+                readOnly={!puedeEditar || dispGuardando}
+                reservedDates={ocupadas}
+                placa={v.placa}
+                combustible={v.combustible}
+                exencionInscrita={v.exencion_pico_placa_inscrita}
+              />
+
+              <div className="mt-4 flex items-center justify-between gap-3 flex-wrap">
+                <span className={`text-xs font-medium ${dispMsg.startsWith('✓') ? 'text-success' : 'text-danger'}`}>
+                  {dispGuardando
+                    ? <span className="text-ink/50">Guardando…</span>
+                    : dispMsg || (dispHayCambios
+                      ? <span className="text-warning">Tienes cambios sin guardar.</span>
+                      : null)}
+                </span>
+                <div className="flex items-center gap-2">
+                  <button onClick={cerrarDispModal}
+                    className="text-xs border border-border text-ink/60 px-3 py-2 rounded-xl hover:bg-surface transition font-medium">
+                    Cerrar
+                  </button>
+                  {puedeEditar && (
+                    <button
+                      onClick={() => { void guardarDispDias(v, dispDias); }}
+                      disabled={dispGuardando || !dispHayCambios}
+                      className="text-xs bg-accent text-white px-4 py-2 rounded-xl hover:bg-accent-hover transition font-semibold disabled:opacity-40 disabled:cursor-not-allowed">
+                      {dispGuardando ? 'Guardando…' : 'Guardar cambios'}
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         );

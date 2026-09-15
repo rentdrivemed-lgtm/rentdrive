@@ -10,6 +10,10 @@ import { documentosConUrlsValidas } from '@/lib/storage';
 import { tecnoRequerida } from '@/lib/tecnomecanica';
 import { esCombustibleValido, inscripcionExencionConfirmada, requiereInscripcionExencion, sanitizarClaseVehiculo } from '@/lib/vehiculo-campos';
 import { filtrarVehiculo } from '@/lib/vehiculo-publico';
+import {
+  diasDeRango, diasOcupadosPorReservas, diasQueSeCierran,
+  parseDiasGuardados, validarDiasDisponibles,
+} from '@/lib/dias-disponibles';
 
 // Documentos que hoy se le piden al propietario. `todo_riesgo` YA NO está en la lista
 // (sep-2026): DrivePass expide la póliza directamente, así que dejó de pedirse, mostrarse
@@ -50,18 +54,9 @@ function computeEstado(docs: Record<string, { url?: string } | undefined>, revs:
   return 'en_revision';
 }
 
-/** Expande un rango 'YYYY-MM-DD'..'YYYY-MM-DD' (inclusive) en días, en hora local (sin desfase UTC). */
-function* rangoDias(a: string, b: string): Generator<string> {
-  const [ay, am, ad] = a.split('-').map(Number);
-  const [by, bm, bd] = b.split('-').map(Number);
-  if (!ay || !by) return;
-  const cur = new Date(ay, am - 1, ad);
-  const end = new Date(by, bm - 1, bd);
-  while (cur <= end) {
-    yield `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}-${String(cur.getDate()).padStart(2, '0')}`;
-    cur.setDate(cur.getDate() + 1);
-  }
-}
+// Nota: la expansión de rangos 'YYYY-MM-DD'..'YYYY-MM-DD' (inclusive, hora local) vive ahora
+// en lib/dias-disponibles.ts (`diasDeRango`) — la comparten el GET de acá y la protección del
+// calendario del PUT, para que no haya dos derivaciones del mismo conjunto en un solo archivo.
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -104,7 +99,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
   const ocupadasSet = new Set<string>();
   for (const r of reservas) {
-    for (const d of rangoDias(r.fecha_inicio, r.fecha_fin)) ocupadasSet.add(d);
+    for (const d of diasDeRango(r.fecha_inicio, r.fecha_fin)) ocupadasSet.add(d);
   }
 
   // Ruta pública (ficha del vehículo y página de pago, ambas sin sesión): los campos
@@ -224,6 +219,91 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       ? inscripcionExencionConfirmada(body.exencion_pico_placa_inscrita)
       : inscripcionExencionConfirmada(vehiculo.exencion_pico_placa_inscrita);
     body.exencion_pico_placa_inscrita = requiereInscripcionExencion(combustibleEfectivo) && confirmada ? 1 : 0;
+  }
+
+  // ── `dias_disponibles`: formato + protección de reservas activas ──────────────────────
+  //
+  // Esta columna la escriben DOS editores (el del propietario y, desde sep-2026, el del
+  // admin en el panel) y hasta ahora entraba a la BD SIN NINGUNA validación ni protección:
+  //
+  //  · Formato: un string que no fuera JSON (o un JSON que no fuera lista de fechas) se
+  //    guardaba tal cual y luego reventaba en silencio en cada `try { JSON.parse } catch
+  //    { dias = [] }` del sistema. Y por la SEMÁNTICA INVERTIDA de esta columna (ver
+  //    lib/dias-disponibles.ts: `[]` = "abierto sin restricciones", NO "cerrado"), ese
+  //    fallback dejaba el vehículo abierto de par en par sin que nadie se enterara.
+  //  · Reservas: que no se pueda cerrar un día ya reservado era solo una regla de CLIENTE
+  //    (el componente deshabilita esas celdas). Un PUT directo la evadía. Se cierra acá,
+  //    para propietario Y admin por igual — no es una regla del panel de admin, es una
+  //    regla del dato.
+  //
+  // El conjunto que se compara es el EFECTIVO (ver `estaAbierto` en lib/dias-disponibles.ts):
+  // pasar de `[]` a una lista cierra todo lo que no esté en la lista, y pasar de una lista a
+  // `[]` no cierra nada.
+  let diasResumen: { antes: number; despues: number; agregados: number; quitados: number } | null = null;
+  // Lista normalizada que quedó en BD: se devuelve en la respuesta para que el editor muestre
+  // exactamente lo guardado y no su propia versión del conjunto.
+  let diasFinales: string[] | null = null;
+  if (body.dias_disponibles !== undefined) {
+    const validacion = validarDiasDisponibles(body.dias_disponibles);
+    if (!validacion.ok) return NextResponse.json({ error: validacion.error }, { status: 400 });
+
+    const previos = parseDiasGuardados(vehiculo.dias_disponibles);
+    const nuevos = validacion.dias;
+
+    // Reservas activas del vehículo (todo salvo `cancelada`); `diasOcupadosPorReservas`
+    // descarta además los días ya pasados — una reserva completada del mes pasado no debe
+    // impedir cerrar esos días hoy. LEFT JOIN: el nombre del cliente es para el mensaje de
+    // error, no una condición; si la cuenta ya no existe, la reserva igual debe proteger.
+    const reservasActivas = db.prepare(`
+      SELECT r.id, r.fecha_inicio, r.fecha_fin, r.estado, COALESCE(u.nombre, '') AS usuario_nombre
+      FROM reservas r LEFT JOIN usuarios u ON r.usuario_id = u.id
+      WHERE r.vehiculo_id = ? AND r.estado NOT IN ('cancelada')
+      ORDER BY r.fecha_inicio
+    `).all(Number(id)) as { id: number; fecha_inicio: string; fecha_fin: string; estado: string; usuario_nombre: string }[];
+
+    const ocupados = diasOcupadosPorReservas(reservasActivas);
+    const cerrados = new Set(diasQueSeCierran(previos, nuevos, ocupados));
+
+    if (cerrados.size > 0) {
+      // El mensaje tiene que decir QUÉ fechas y DE QUÉ reserva (decisión del dueño): sin eso
+      // el propietario ve un rechazo sin forma de resolverlo.
+      const detalles: string[] = [];
+      for (const r of reservasActivas) {
+        const suyas = diasDeRango(r.fecha_inicio, r.fecha_fin).filter(d => cerrados.has(d));
+        if (suyas.length === 0) continue;
+        const muestra = suyas.slice(0, 6).join(', ') + (suyas.length > 6 ? ` y ${suyas.length - 6} más` : '');
+        const cliente = r.usuario_nombre ? ` de ${r.usuario_nombre}` : '';
+        detalles.push(`${muestra} (reserva #${r.id}${cliente}, ${String(r.fecha_inicio).slice(0, 10)} a ${String(r.fecha_fin).slice(0, 10)}, ${r.estado})`);
+        if (detalles.length >= 3) break;
+      }
+      return NextResponse.json({
+        error: `No puedes cerrar días que ya tienen una reserva activa: ${detalles.join('; ')}.`,
+        dias_bloqueados: [...cerrados],
+      }, { status: 400 });
+    }
+
+    // Se guarda SIEMPRE la versión normalizada (misma lista, serializada por nosotros), nunca
+    // el string crudo del cliente — y EXACTAMENTE lo que pidió quien edita, sin agregarle días.
+    //
+    // Acá NO se hace la unión con los días ocupados (`conDiasOcupados`): esa es una ayuda de
+    // cliente y en el servidor sería dañina. Si el cambio cerraba un día ocupado, el 400 de
+    // arriba ya salió; el único caso que llegaría a esta línea es un día ocupado que YA venía
+    // cerrado desde antes, y unirlo lo ABRIRÍA solo — dejando abierto para siempre un día que
+    // el propietario había cerrado a propósito (p. ej. el de la devolución) sin que nadie lo
+    // marcara.
+    const finales = nuevos;
+    body.dias_disponibles = JSON.stringify(finales);
+    diasFinales = finales;
+    // Sets en vez de `Array.includes`: el tope es MAX_DIAS_DISPONIBLES (1100) por lado y
+    // comparar lista contra lista sería O(n²).
+    const setPrevios = new Set(previos);
+    const setFinales = new Set(finales);
+    diasResumen = {
+      antes: previos.length,
+      despues: finales.length,
+      agregados: finales.filter(d => !setPrevios.has(d)).length,
+      quitados: previos.filter(d => !setFinales.has(d)).length,
+    };
   }
 
   // ── Admin: review individual document ──
@@ -612,6 +692,44 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     db.prepare(`UPDATE vehiculos SET ${pairs.join(', ')} WHERE id = ?`).run(...values, Number(id));
   }
 
+  // ── Calendario tocado por el admin: bitácora + aviso al propietario ───────────────────
+  // Decisión del dueño (sep-2026): el admin tiene las MISMAS capacidades que el propietario
+  // sobre el calendario, pero cada vez que toca el de OTRO queda registro y el propietario se
+  // entera. El propietario editando lo suyo NO genera entradas de bitácora (sería ruido).
+  //
+  // Va DESPUÉS del UPDATE, a diferencia de las auditorías de `archivado`/`contenido_revision`
+  // de más arriba (que se registran antes de escribir): así no queda una entrada de bitácora
+  // de un cambio que después se rechazó por otra validación posterior del mismo request.
+  // `agregados === 0 && quitados === 0` = el conjunto quedó idéntico (reguardado sin cambios):
+  // no se audita ni se notifica, para no inundar al propietario con avisos de "+0 / −0".
+  if (isAdmin && diasResumen && (diasResumen.agregados > 0 || diasResumen.quitados > 0)) {
+    const etiquetaVehiculo = `${vehiculo.marca} ${vehiculo.modelo} ${vehiculo.anio}`;
+    // Recordar la semántica invertida: 0 días marcados = ABIERTO sin restricciones.
+    const describeCantidad = (n: number) => (n === 0 ? 'abierto sin restricciones (0 días marcados)' : `${n} días marcados`);
+    const delta = `+${diasResumen.agregados} / −${diasResumen.quitados}`;
+    registrarAuditoria(db, user, {
+      area: 'vehiculos', accion: 'editar_calendario_vehiculo',
+      entidad: 'vehiculo', entidad_id: Number(id),
+      detalle: `Modificó el calendario de disponibilidad de ${etiquetaVehiculo} (propietario #${vehiculo.propietario_id}): de ${describeCantidad(diasResumen.antes)} a ${describeCantidad(diasResumen.despues)} (${delta})`,
+    });
+
+    // Aviso al propietario — best-effort: si la notificación falla, el guardado NO se cae.
+    // Solo si el vehículo es AJENO: un admin que además sea dueño no se auto-notifica.
+    if (Number(vehiculo.propietario_id) !== user.id) {
+      try {
+        db.prepare('INSERT INTO notificaciones (destinatario_id, tipo, titulo, mensaje, referencia_id, referencia_tipo) VALUES (?, ?, ?, ?, ?, ?)')
+          .run(
+            Number(vehiculo.propietario_id), 'calendario_actualizado_admin',
+            '📅 DrivePass actualizó tu calendario',
+            `${user.nombre} (equipo DrivePass) modificó la disponibilidad de ${etiquetaVehiculo}: de ${describeCantidad(diasResumen.antes)} a ${describeCantidad(diasResumen.despues)} (${delta}). Revísalo en tu panel.`,
+            Number(id), 'vehiculo',
+          );
+      } catch (e) {
+        console.error('[vehiculos] no se pudo notificar el cambio de calendario:', e instanceof Error ? e.message : e);
+      }
+    }
+  }
+
   // ── Precio automático de mercado ──
   // Regla: el precio se deriva de la categoría + valor comercial (lib/precioMercado.ts) y se
   // recalcula solo cuando cambia algo que lo afecta, salvo que el admin lo haya fijado a mano.
@@ -633,7 +751,13 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     }
   }
 
-  return NextResponse.json({ ok: true, ...(precioFinal !== null ? { precio_dia: precioFinal } : {}) });
+  return NextResponse.json({
+    ok: true,
+    ...(precioFinal !== null ? { precio_dia: precioFinal } : {}),
+    // Se devuelve el calendario tal como quedó en BD (normalizado) para que el cliente
+    // sincronice con eso en vez de con lo que él creía estar guardando.
+    ...(diasFinales !== null ? { dias_disponibles: diasFinales } : {}),
+  });
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
