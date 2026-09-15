@@ -71,9 +71,31 @@ const ORIGENES_PERMITIDOS = new Set([
   ...(EN_PRODUCCION ? [] : LAN_DEV_ORIGINS.map(host => `http://${host}:3100`)),
 ]);
 
+// Fuera de producción se acepta CUALQUIER PUERTO de esos mismos hosts de desarrollo.
+// El puerto oficial es 3100, pero `next dev` salta al siguiente libre si está ocupado
+// (y hay quien levanta una segunda instancia a propósito): con la allowlist fija en
+// ":3100" el propio equipo se quedaba fuera con un 403 "Origen no permitido" y la
+// tentación pasaba a ser NO aplicar el control en el llamador — justo lo que no se
+// quiere. El relajo está acotado por `EN_PRODUCCION` y por el host: en producción
+// esta función no aporta ni un origen extra.
+const HOSTS_DEV = new Set(LAN_DEV_ORIGINS);
+
+function esOrigenDeDesarrollo(origin: string): boolean {
+  if (EN_PRODUCCION) return false;
+  try {
+    const u = new URL(origin);
+    // Mismo guard de protocolo que `aOrigin`: un Origin "null" (iframe sandbox, URL
+    // data:) no es una URL válida y cae en el catch → no se exenta de nada.
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+    return HOSTS_DEV.has(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
 export function origenNoPermitido(req: NextRequest): NextResponse | null {
   const origin = req.headers.get('origin');
-  if (origin && !ORIGENES_PERMITIDOS.has(origin)) {
+  if (origin && !ORIGENES_PERMITIDOS.has(origin) && !esOrigenDeDesarrollo(origin)) {
     return NextResponse.json({ error: 'Origen no permitido.' }, { status: 403 });
   }
   return null;

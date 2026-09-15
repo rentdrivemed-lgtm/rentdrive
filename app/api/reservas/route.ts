@@ -2,15 +2,24 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
 import { adminTieneArea, sinPermisoArea } from '@/lib/guard';
-import { esUrlDeStorageValida } from '@/lib/storage';
-import { calcularRecargo, calcularDiasAlquiler, calcularTotalAlquiler, lugarValido, type Lugar } from '@/lib/lugares';
 import { enviarCorreo } from '@/lib/email';
 import { generarCotizacion } from '@/lib/contabilidad';
 import { consumirCreditos } from '@/lib/referidos';
-import { MIN_NOCHES_RESERVA } from '@/lib/disponibilidad-reglas';
-import { validarDireccion, validarCiudad, validarNombreContacto, validarTelefonoContacto } from '@/lib/validacion';
 import { perfilIncompleto, CODIGO_PERFIL_INCOMPLETO } from '@/lib/perfil';
 import { correoNoVerificado, CODIGO_CORREO_NO_VERIFICADO } from '@/lib/verificacion-correo';
+// Reglas de negocio compartidas con la vía de mostrador (POST /api/admin/reservas).
+// Ver lib/reserva-core.ts: ahí viven mínimo de noches, documentos (incluido el
+// contraste del pasaporte contra el tipo de documento registrado), lugares,
+// vehículo reservable, solapamiento, calendario del propietario, datos de la
+// operación, cobro e INSERT. Esta ruta conserva TODO lo que es propio de ella
+// (solo rol 'usuario', gates de correo verificado y perfil completo, reserva que
+// nace pendiente y correo de "solicitud recibida").
+import {
+  validarNochesMinimas, validarDocumentosReserva, resolverDocumentosIdentidad, validarLugaresReserva,
+  cargarVehiculoReservable, validarDisponibilidadFechas,
+  leerPerfilOperacion, resolverDatosOperacion, guardarDatosOperacionEnPerfil,
+  precargarDocumentosEnPerfil, calcularCobroReserva, insertarReserva,
+} from '@/lib/reserva-core';
 
 export const dynamic = 'force-dynamic';
 
@@ -129,15 +138,18 @@ export async function POST(req: NextRequest) {
   if (!vehiculo_id || !fecha_inicio || !fecha_fin) {
     return NextResponse.json({ error: 'Faltan datos' }, { status: 400 });
   }
-  const nochesSolicitadas = Math.ceil((new Date(fecha_fin).getTime() - new Date(fecha_inicio).getTime()) / 86400000);
-  if (nochesSolicitadas < MIN_NOCHES_RESERVA) {
-    return NextResponse.json({ error: `El alquiler mínimo es de ${MIN_NOCHES_RESERVA} noches.` }, { status: 400 });
-  }
-  if (!documento_id_url) return NextResponse.json({ error: 'Debes subir tu documento de identidad.' }, { status: 400 });
-  // El dorso se valida más abajo: la exención por pasaporte NO se puede creer del
-  // body (ver `esPasaporte`), hay que contrastarla con el tipo de documento que la
-  // persona tiene registrado, y para eso hace falta la BD.
-  if (!licencia_url || !licencia_url_dorso) return NextResponse.json({ error: 'Debes subir frente y dorso de tu licencia de conducción.' }, { status: 400 });
+  const errNoches = validarNochesMinimas(fecha_inicio, fecha_fin);
+  if (errNoches) return NextResponse.json({ error: errNoches.error }, { status: errNoches.status });
+
+  const documentosBody = {
+    documento_id_url, documento_id_url_dorso, documento_es_pasaporte,
+    licencia_url, licencia_url_dorso,
+  };
+  // El DORSO se valida más abajo (`resolverDocumentosIdentidad`): la exención por
+  // pasaporte NO se puede creer del body, hay que contrastarla con el tipo de
+  // documento que la persona tiene registrado, y para eso hace falta la BD.
+  const errDocs = validarDocumentosReserva(documentosBody);
+  if (errDocs) return NextResponse.json({ error: errDocs.error }, { status: errDocs.status });
   if (!firma_contrato) return NextResponse.json({ error: 'Debes aceptar el contrato.' }, { status: 400 });
 
   const db = getDb();
@@ -147,9 +159,8 @@ export async function POST(req: NextRequest) {
   // y el contacto de emergencia solo hacen falta cuando de verdad hay un alquiler.
   // Solo se le piden a quien todavía no los tiene guardados (p. ej. de una reserva
   // anterior); si ya están en su perfil, se usan esos y no se vuelve a preguntar.
-  const perfil = db.prepare(
-    'SELECT tipo_documento, direccion, ciudad, contacto_emergencia FROM usuarios WHERE id = ?'
-  ).get(user.id) as { tipo_documento: string | null; direccion: string | null; ciudad: string | null; contacto_emergencia: string | null } | undefined;
+  // La misma lectura trae `tipo_documento`, que es lo que hace falta para el dorso.
+  const perfil = leerPerfilOperacion(db, user.id);
 
   // ── Dorso del documento de identidad (obligatorio) ────────────────────────
   // La única excepción legítima es el pasaporte, que no tiene dorso (solo la
@@ -159,171 +170,67 @@ export async function POST(req: NextRequest) {
   // (registro / completar-perfil), que es el único dato que ella no controla desde
   // este request. La opción NO se elimina: quien de verdad se registró con
   // pasaporte sigue pudiendo reservar sin dorso.
-  const tipoDocRegistrado = String(perfil?.tipo_documento || '').trim();
-  const esPasaporte = tipoDocRegistrado === 'pasaporte';
-  if (documento_es_pasaporte && !esPasaporte) {
-    return NextResponse.json({
-      error: 'Tu documento registrado no es un pasaporte, así que necesitamos también el dorso. ' +
-             'Si te registraste con pasaporte, escríbenos por el chat de soporte para corregir tu tipo de documento.',
-    }, { status: 400 });
-  }
-  if (!esPasaporte && !documento_id_url_dorso) {
-    return NextResponse.json({ error: 'Falta el dorso de tu documento de identidad.' }, { status: 400 });
-  }
+  //
+  // La regla vive en lib/reserva-core.ts para que la vía de mostrador
+  // (POST /api/admin/reservas) la aplique sobre SU titular con el mismo código, y
+  // `documentos` (con el flag ya derivado del tipo REGISTRADO, no del body) es lo
+  // único que aceptan `precargarDocumentosEnPerfil` e `insertarReserva`.
+  const identidad = resolverDocumentosIdentidad(documentosBody, perfil?.tipo_documento);
+  if ('error' in identidad) return NextResponse.json({ error: identidad.error.error }, { status: identidad.error.status });
+  const documentos = identidad.documentos;
 
-  let emergenciaGuardada: { nombre?: string; telefono?: string } = {};
-  try { emergenciaGuardada = JSON.parse(perfil?.contacto_emergencia || '{}') || {}; } catch { emergenciaGuardada = {}; }
+  // La mezcla perfil-guardado/body y la revalidación de datos legacy viven en
+  // `resolverDatosOperacion` (lib/reserva-core.ts).
+  const operacion = resolverDatosOperacion(perfil, {
+    direccion, ciudad, emergencia_nombre, emergencia_tel,
+  });
+  if ('error' in operacion) return NextResponse.json({ error: operacion.error.error }, { status: operacion.error.status });
 
-  const txt = (v: unknown) => String(v ?? '').trim();
+  // `validarLugaresReserva` devuelve los lugares YA normalizados (campos recortados
+  // y verificados como texto). De acá en adelante se usan esos y NO el objeto crudo
+  // del body, para que el recargo que se cobra y el lugar que se guarda sean el
+  // mismo dato que se validó.
+  const lugares = validarLugaresReserva(recogida, entrega);
+  if ('error' in lugares) return NextResponse.json({ error: lugares.error.error }, { status: lugares.error.status });
+  const { recogida: recogidaL, entrega: entregaL } = lugares.lugares;
 
-  // Usuarios legacy (registro viejo, casi sin validación) pueden tener guardado
-  // un valor que las reglas ACTUALES rechazarían (p. ej. ciudad "a", teléfono
-  // "300"). Priorizar "¿ya lo tiene guardado?" solo por truthiness los dejaría
-  // atascados para siempre: nunca se les volvería a pedir el dato y no tienen
-  // dónde corregirlo. Por eso se revalida el valor guardado con las MISMAS
-  // reglas que se le exigirían hoy a un dato nuevo; si no pasa, se trata como si
-  // no existiera (se pide al cliente y se puede sobrescribir con uno válido).
-  const direccionGuardada = txt(perfil?.direccion);
-  const direccionFinal = validarDireccion(direccionGuardada) === null ? direccionGuardada : txt(direccion);
-
-  const ciudadGuardada = txt(perfil?.ciudad);
-  const ciudadFinal = validarCiudad(ciudadGuardada) === null ? ciudadGuardada : txt(ciudad);
-
-  const emNombreGuardado = txt(emergenciaGuardada.nombre);
-  const emNombreFinal = validarNombreContacto(emNombreGuardado) === null ? emNombreGuardado : txt(emergencia_nombre);
-
-  const emTelGuardado = txt(emergenciaGuardada.telefono).replace(/\D/g, '');
-  const emTelEnviado = txt(emergencia_tel).replace(/\D/g, '');
-  const emTelFinal = validarTelefonoContacto(emTelGuardado) === null ? emTelGuardado : emTelEnviado;
-
-  const errDireccion = validarDireccion(direccionFinal);
-  if (errDireccion) return NextResponse.json({ error: errDireccion }, { status: 400 });
-  const errCiudad = validarCiudad(ciudadFinal);
-  if (errCiudad) return NextResponse.json({ error: errCiudad }, { status: 400 });
-  const errEmNombre = validarNombreContacto(emNombreFinal);
-  if (errEmNombre) return NextResponse.json({ error: errEmNombre }, { status: 400 });
-  const errEmTel = validarTelefonoContacto(emTelFinal);
-  if (errEmTel) return NextResponse.json({ error: errEmTel }, { status: 400 });
-
-  const recogidaL = recogida as Lugar | undefined;
-  const entregaL  = entrega  as Lugar | undefined;
-  if (!lugarValido(recogidaL)) return NextResponse.json({ error: 'Indica el lugar y la hora de recogida.' }, { status: 400 });
-  if (!lugarValido(entregaL))  return NextResponse.json({ error: 'Indica el lugar y la hora de entrega.' }, { status: 400 });
-
-  // `archivado = 0` explícito además de `disponible = 1`: un vehículo archivado ya
-  // queda con `disponible = 0` al archivarse (ver lib/eliminar.ts), pero se valida
-  // acá también en defensa en profundidad — nunca debe poder reservarse uno archivado.
-  const vehiculo = db.prepare('SELECT * FROM vehiculos WHERE id = ? AND disponible = 1 AND archivado = 0').get(Number(vehiculo_id)) as Record<string, unknown> | undefined;
+  const vehiculo = cargarVehiculoReservable(db, Number(vehiculo_id));
   if (!vehiculo) return NextResponse.json({ error: 'Vehículo no disponible' }, { status: 400 });
 
-  const conflicto = db.prepare(`
-    SELECT id FROM reservas
-    WHERE vehiculo_id = ? AND estado NOT IN ('cancelada')
-    AND NOT (fecha_fin < ? OR fecha_inicio > ?)
-  `).get(Number(vehiculo_id), fecha_inicio, fecha_fin);
-  if (conflicto) return NextResponse.json({ error: 'Vehículo no disponible en esas fechas' }, { status: 409 });
-
-  const dispStr = (vehiculo.dias_disponibles as string) || '[]';
-  let diasDisp: string[] = [];
-  try { diasDisp = JSON.parse(dispStr); } catch { diasDisp = []; }
-
-  if (diasDisp.length > 0) {
-    const dispSet = new Set(diasDisp);
-    const cur = new Date(fecha_inicio);
-    const fin = new Date(fecha_fin);
-    while (cur < fin) {
-      const str = cur.toISOString().split('T')[0];
-      if (!dispSet.has(str)) {
-        return NextResponse.json({ error: `El día ${str} no está disponible` }, { status: 409 });
-      }
-      cur.setDate(cur.getDate() + 1);
-    }
-  }
+  const errFechas = validarDisponibilidadFechas(db, vehiculo, fecha_inicio, fecha_fin);
+  if (errFechas) return NextResponse.json({ error: errFechas.error }, { status: errFechas.status });
 
   // Se guardan en el perfil para no volver a pedirlos en la próxima reserva.
-  db.prepare('UPDATE usuarios SET direccion = ?, ciudad = ?, contacto_emergencia = ? WHERE id = ?')
-    .run(direccionFinal, ciudadFinal, JSON.stringify({ nombre: emNombreFinal, telefono: emTelFinal }), user.id);
+  guardarDatosOperacionEnPerfil(db, user.id, operacion.datos);
 
   // Mismo espíritu: guarda también los documentos frescos de ESTA reserva en el
-  // perfil (incluido el dorso, que el atajo de foto del registro nunca captura),
-  // para que la PRÓXIMA reserva ya venga precargada (ver app/pago/page.tsx). Es
-  // best-effort a propósito — si falla, no debe tumbar la creación de la reserva,
-  // que es lo importante.
-  //
-  // Igual que en POST /api/auth/registro y /api/auth/completar-perfil: antes de
-  // escribir a `usuarios` se exige que cada URL sea de verdad una subida nuestra
-  // (Cloudinary bajo nuestro cloud_name) — sin esto, un cliente que arme el body a
-  // mano (no vino de DocUpload/DocUploadDoble) podría inyectar una URL arbitraria
-  // que quedara guardada como si fuera el documento del cliente. El `INSERT INTO
-  // reservas` de abajo es preexistente y queda fuera de este alcance: solo se
-  // filtra lo que entra al perfil del usuario.
-  //
-  // IMPORTANTE: el UPDATE se construye de forma DINÁMICA/CONDICIONAL (mismo
-  // patrón que POST /api/auth/completar-perfil) — solo se toca cada columna
-  // cuando el valor de ESTA reserva es válido Y aplica, para no pisar/perder un
-  // documento bueno que el usuario ya tenía guardado de una reserva anterior:
-  //   - Si el documento de identidad de esta persona es un pasaporte (`esPasaporte`,
-  //     derivado del tipo de documento REGISTRADO, no del flag que manda el cliente),
-  //     NO se tocan cedula_url/cedula_url_dorso: son de un tipo de documento distinto
-  //     (el pasaporte no tiene dorso — ver app/pago/page.tsx), así que pisarlos aquí
-  //     borraría o mezclaría la cédula que el usuario sí tenía guardada.
-  //   - Si NO es pasaporte, cedula_url/cedula_url_dorso se actualizan solo si la
-  //     URL de esta reserva pasa esUrlDeStorageValida (si no, se deja el valor
-  //     ya guardado tal cual, nunca se pisa con '').
-  //   - licencia_url/licencia_url_dorso se actualizan siempre que la URL de esta
-  //     reserva pase esUrlDeStorageValida (la licencia no depende del tipo de
-  //     documento de identidad usado en esta reserva).
-  const setsPerfil: string[] = [];
-  const valoresPerfil: unknown[] = [];
+  // perfil, para que la PRÓXIMA ya venga precargada (ver lib/reserva-core.ts).
+  // Decide con el `documento_es_pasaporte` YA contrastado: con el flag del body, un
+  // pasaporte de verdad terminaba pisando la cédula guardada del usuario.
+  precargarDocumentosEnPerfil(db, user.id, documentos);
 
-  if (!esPasaporte) {
-    if (typeof documento_id_url === 'string' && esUrlDeStorageValida(documento_id_url)) {
-      setsPerfil.push('cedula_url = ?'); valoresPerfil.push(documento_id_url);
-    }
-    if (typeof documento_id_url_dorso === 'string' && esUrlDeStorageValida(documento_id_url_dorso)) {
-      setsPerfil.push('cedula_url_dorso = ?'); valoresPerfil.push(documento_id_url_dorso);
-    }
-  }
-  if (typeof licencia_url === 'string' && esUrlDeStorageValida(licencia_url)) {
-    setsPerfil.push('licencia_url = ?'); valoresPerfil.push(licencia_url);
-  }
-  if (typeof licencia_url_dorso === 'string' && esUrlDeStorageValida(licencia_url_dorso)) {
-    setsPerfil.push('licencia_url_dorso = ?'); valoresPerfil.push(licencia_url_dorso);
-  }
-
-  if (setsPerfil.length > 0) {
-    try {
-      valoresPerfil.push(user.id);
-      db.prepare(`UPDATE usuarios SET ${setsPerfil.join(', ')} WHERE id = ?`).run(...valoresPerfil);
-    } catch (e) {
-      console.error('[reservas] No se pudo precargar los documentos en el perfil (best-effort, no bloquea la reserva):', e instanceof Error ? e.message : e);
-    }
-  }
-
-  const dias = calcularDiasAlquiler(fecha_inicio, fecha_fin);
-  const recargo = calcularRecargo(recogidaL, entregaL); // autoritativo: server-side
-  const totalBruto = calcularTotalAlquiler(dias, Number(vehiculo.precio_dia), recargo);
+  const { recargo, totalBruto } = calcularCobroReserva(vehiculo, fecha_inicio, fecha_fin, recogidaL, entregaL);
 
   // Créditos de referidos: se descuentan del servidor (nunca se confía en un monto
   // que mande el cliente), y solo hasta el saldo real disponible.
   const creditosUsados = usar_creditos ? consumirCreditos(db, user.id, totalBruto) : 0;
   const total = totalBruto - creditosUsados;
 
-  const result = db.prepare(`
-    INSERT INTO reservas (
-      usuario_id, vehiculo_id, fecha_inicio, fecha_fin, total, pago_estado, estado,
-      documento_id_url, documento_id_url_dorso, documento_es_pasaporte,
-      licencia_url, licencia_url_dorso,
-      firma_contrato, recogida, entrega, recargo, creditos_usados
-    )
-    VALUES (?, ?, ?, ?, ?, 'pendiente', 'pendiente', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    user.id, Number(vehiculo_id), fecha_inicio, fecha_fin, total,
-    documento_id_url || '', documento_id_url_dorso || '', esPasaporte ? 1 : 0,
-    licencia_url || '', licencia_url_dorso || '',
-    firma_contrato || '{}',
-    JSON.stringify(recogidaL), JSON.stringify(entregaL), recargo, creditosUsados,
-  );
+  const reservaId = insertarReserva(db, {
+    usuarioId: user.id,
+    vehiculoId: Number(vehiculo_id),
+    fechaInicio: fecha_inicio,
+    fechaFin: fecha_fin,
+    total,
+    estado: 'pendiente',
+    pagoEstado: 'pendiente',
+    documentos,
+    firmaContrato: firma_contrato || '{}',
+    recogida: recogidaL,
+    entrega: entregaL,
+    recargo,
+    creditosUsados,
+  });
 
   try {
     await enviarCorreo(user.correo, 'Tu solicitud de reserva en RentDrive',
@@ -335,10 +242,10 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    await generarCotizacion(db, Number(result.lastInsertRowid), true);
+    await generarCotizacion(db, reservaId, true);
   } catch (e) {
     console.error('[contabilidad] No se pudo generar la cotización:', e instanceof Error ? e.message : e);
   }
 
-  return NextResponse.json({ id: result.lastInsertRowid, total, recargo, creditos_usados: creditosUsados }, { status: 201 });
+  return NextResponse.json({ id: reservaId, total, recargo, creditos_usados: creditosUsados }, { status: 201 });
 }
