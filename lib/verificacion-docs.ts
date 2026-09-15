@@ -51,6 +51,19 @@ const FORMATO_A_MEDIA_TYPE: Partial<Record<string, ImgMediaType>> = {
   jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif',
 };
 
+/** Traduce un fallo de decodificación de sharp al mensaje que verá la persona.
+ * No todos esos fallos son un archivo dañado: si este build de sharp/libvips no
+ * trae el códec (típico con HEIC/HEVC en algunos entornos), el mensaje lo delata
+ * y no es culpa del archivo del usuario. Se comparte entre `stats()` y el
+ * `resize` porque las dos rutas decodifican la imagen completa y fallan igual. */
+function errorDeDecodificacion(e: unknown): Error {
+  const msg = e instanceof Error ? e.message : String(e);
+  if (/unsupported image format|error while loading plugin|no decoder for this format|heif.*not supported/i.test(msg)) {
+    return new Error(`Este formato de imagen no está soportado por el servidor, aunque el archivo no esté dañado (${msg})`);
+  }
+  return new Error(`La imagen está dañada o incompleta, no se puede decodificar por completo (${msg})`);
+}
+
 /**
  * Descarga un documento y lo deja listo para mandarlo a Claude, validando los
  * bytes REALES con `sharp` en vez de confiar ciegamente en el `content-type`
@@ -64,8 +77,21 @@ const FORMATO_A_MEDIA_TYPE: Partial<Record<string, ImgMediaType>> = {
  * De paso, aplica `normalizarOrientacion` (misma función que usa la subida de
  * fotos) como defensa adicional para documentos que se subieron ANTES del fix
  * de orientación EXIF y siguen rotados en Cloudinary.
+ *
+ * Se exporta porque la inspección de daños (lib/inspeccion-vehiculo.ts) descarga
+ * fotos de Cloudinary con exactamente los mismos riesgos (archivo truncado,
+ * content-type mentiroso, foto de celular rotada) y duplicar estas defensas
+ * garantizaría que una de las dos copias se quede atrás.
+ *
+ * `opts.ladoMaxPx` (opcional) reescala la imagen a ese lado largo ANTES de
+ * devolverla. No es cosmético: reescalar aparte obligaba a decodificar la foto
+ * dos veces (una acá para validarla, otra para reducirla) y con 16 fotos de
+ * celular de 12 MP en vuelo eso es un pico de memoria capaz de tumbar el
+ * contenedor entero. Haciéndolo acá, el propio `resize` hace de validación
+ * (decodifica la imagen completa igual que `stats()`) y se decodifica UNA vez.
+ * Sin la opción, el comportamiento es exactamente el de antes.
  */
-async function fetchAsBase64(url: string): Promise<{ data: string; mediaType: MediaType }> {
+export async function fetchAsBase64(url: string, opts?: { ladoMaxPx?: number }): Promise<{ data: string; mediaType: MediaType }> {
   const resp = await fetch(url, { signal: AbortSignal.timeout(20000) });
   if (!resp.ok) throw new Error(`No se pudo descargar ${url}: ${resp.status}`);
   const buf = Buffer.from(await resp.arrayBuffer());
@@ -90,23 +116,43 @@ async function fetchAsBase64(url: string): Promise<{ data: string; mediaType: Me
   // `metadata()` solo lee la cabecera (dimensiones/formato) y NO detecta un
   // archivo truncado a mitad de los datos de píxeles — justo el caso real
   // (subida interrumpida / bug de recorte viejo) que produce el 400 "Could
-  // not process image" de Anthropic. `stats()` fuerza una decodificación
-  // completa y es más barata que re-codificar todo a JPEG.
-  await img.stats().catch((e: unknown) => {
-    const msg = e instanceof Error ? e.message : String(e);
-    // No todos los fallos de `stats()` son un archivo dañado: si este build
-    // de sharp/libvips no trae el códec (típico con HEIC/HEVC en algunos
-    // entornos), el mensaje lo delata y no es culpa del archivo del usuario.
-    if (/unsupported image format|error while loading plugin|no decoder for this format|heif.*not supported/i.test(msg)) {
-      throw new Error(`Este formato de imagen no está soportado por el servidor, aunque el archivo no esté dañado (${msg})`);
-    }
-    throw new Error(`La imagen está dañada o incompleta, no se puede decodificar por completo (${msg})`);
-  });
+  // not process image" de Anthropic. Hace falta una decodificación COMPLETA:
+  // `stats()` es la forma más barata de forzarla... salvo que ya vayamos a
+  // reescalar, en cuyo caso el `resize` decodifica igual y hacer las dos cosas
+  // sería pagar el doble de CPU y de memoria por la misma foto.
+  const ladoMax = opts?.ladoMaxPx ?? 0;
+  const ladoLargo = Math.max(meta.width ?? 0, meta.height ?? 0);
+  // El GIF puede ser animado: reescalarlo se comería los cuadros, así que se
+  // deja intacto (igual que hace la normalización de orientación de abajo).
+  const reducir = ladoMax > 0 && ladoLargo > ladoMax && meta.format !== 'gif';
+
+  let reducida: Buffer | null = null;
+  if (reducir) {
+    reducida = await sharp(buf)
+      .rotate() // aplica la orientación EXIF, igual que normalizarOrientacion
+      .resize({ width: ladoMax, height: ladoMax, fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 88 })
+      .toBuffer()
+      .catch((e: unknown): never => { throw errorDeDecodificacion(e); });
+  } else {
+    await img.stats().catch((e: unknown): never => { throw errorDeDecodificacion(e); });
+  }
 
   const w = meta.width ?? 0;
   const h = meta.height ?? 0;
   if (w < 10 || h < 10) {
     throw new Error(`La imagen tiene dimensiones inválidas (${w}x${h}px) — probablemente esté corrupta o truncada`);
+  }
+
+  if (reducida) {
+    // Ya viene rotada y en JPEG (formato que la API de visión acepta siempre),
+    // así que no hay que pasar por normalizarOrientacion ni por el fallback de
+    // recodificación de más abajo.
+    const dataRed = reducida.toString('base64');
+    if (dataRed.length > MAX_BASE64_BYTES) {
+      throw new Error(`La imagen pesa demasiado para procesarla (${(reducida.length / 1024 / 1024).toFixed(1)} MB)`);
+    }
+    return { data: dataRed, mediaType: 'image/jpeg' };
   }
 
   const mediaTypeReal = meta.format ? FORMATO_A_MEDIA_TYPE[meta.format] : undefined;
