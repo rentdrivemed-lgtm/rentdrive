@@ -493,3 +493,51 @@ CREATE TABLE IF NOT EXISTS cotizaciones_bus (
   estado           TEXT DEFAULT 'nueva' CHECK (estado IN ('nueva','contactada','confirmada','descartada')),
   created_at       TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
 );
+
+-- ═══════════ Reserva creada en el punto de atención ("mostrador") ═══════════
+-- Paridad SQLite↔Supabase de las 5 columnas nuevas de `reservas` (ver lib/db.ts,
+-- bloque "Reserva creada en el punto de atención", y lib/reserva-core.ts →
+-- `insertarReserva`). Sirven para el flujo en que un admin/secretaria crea la
+-- reserva de un cliente que llega presencialmente y le registra el pago recibido
+-- (POST /api/admin/reservas): la reserva nace `estado='confirmada'` y
+-- `pago_estado='pagado'`.
+--
+-- ╔═══════════════════════════════════════════════════════════════════════════╗
+-- ║ ⚠️⚠️  BLOQUEANTE DE DESPLIEGUE: SIN ESTOS ALTER, NADIE PUEDE RESERVAR  ⚠️⚠️ ║
+-- ╠═══════════════════════════════════════════════════════════════════════════╣
+-- ║ `insertarReserva` (lib/reserva-core.ts) es el ÚNICO INSERT de reservas y  ║
+-- ║ nombra estas 5 columnas SIEMPRE — también en el checkout PÚBLICO          ║
+-- ║ (POST /api/reservas), no solo en el mostrador. Sobre una base Postgres    ║
+-- ║ que no las tenga, el INSERT falla y se cae TODO el flujo de reserva para  ║
+-- ║ todos los clientes, no solo el punto de atención.                         ║
+-- ║                                                                           ║
+-- ║ => Estos ALTER van ANTES de desplegar este código sobre Supabase.         ║
+-- ║ Hoy producción corre SQLite (lib/db.ts los aplica solo), así que hoy no   ║
+-- ║ rompe nada; el riesgo aparece el día de la migración a Postgres.          ║
+-- ╚═══════════════════════════════════════════════════════════════════════════╝
+--
+-- Igual que ya pasa con `vehiculos` y `config` (ver la nota de paridad del
+-- bloque del cotizador de buses, más arriba): este archivo NO tiene
+-- `CREATE TABLE reservas`, así que las columnas no se pueden declarar aquí dentro
+-- de un CREATE. Cuando se reconstruya `CREATE TABLE reservas` para Supabase, hay
+-- que incluirlas; mientras tanto, sobre una base Supabase que ya tenga la tabla se
+-- aplican con estos ALTER idempotentes:
+--
+--   ALTER TABLE reservas ADD COLUMN IF NOT EXISTS origen              TEXT DEFAULT '';
+--   ALTER TABLE reservas ADD COLUMN IF NOT EXISTS creada_por_admin_id INTEGER REFERENCES usuarios(id);
+--   ALTER TABLE reservas ADD COLUMN IF NOT EXISTS metodo_pago         TEXT DEFAULT '';
+--   ALTER TABLE reservas ADD COLUMN IF NOT EXISTS pago_referencia     TEXT DEFAULT '';
+--   ALTER TABLE reservas ADD COLUMN IF NOT EXISTS pago_registrado_por INTEGER REFERENCES usuarios(id);
+--
+-- Notas de diseño (idénticas en ambos motores):
+--   · `origen = ''` significa "la app" (el flujo público de siempre) — es el valor
+--     con el que quedan todas las filas históricas. El único otro valor hoy es
+--     'mostrador' (ORIGEN_MOSTRADOR en lib/reserva-core.ts).
+--   · `metodo_pago` es una columna aparte y NO un valor más de `pago_estado`: ese
+--     campo tiene un CHECK (pendiente|pagado|cancelado) y en SQLite un CHECK no se
+--     puede alterar con ALTER TABLE. La lista válida
+--     (efectivo|transferencia|datafono|otro) se valida en el servidor
+--     (METODOS_PAGO), no con un CHECK, justamente para mantener la paridad.
+--   · `pago_registrado_por` hoy siempre coincide con `creada_por_admin_id`; se
+--     guarda aparte para poder registrar mañana un pago sobre una reserva nacida
+--     en la app sin perder quién lo hizo.

@@ -759,6 +759,35 @@ function initDb(db: Database.Database) {
   try { db.exec("ALTER TABLE reservas ADD COLUMN cancelado_en TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE reservas ADD COLUMN no_show INTEGER DEFAULT 0"); } catch { /* ya existe */ }
 
+  // ── Reserva creada en el punto de atención ("mostrador") ───────────────────
+  // Trazabilidad del canal por el que nació la reserva y del pago recibido en
+  // persona (ver app/api/admin/reservas y lib/reserva-core.ts). Las filas ya
+  // existentes quedan con los valores por defecto: `origen = ''` significa "la
+  // app" (el flujo público de siempre), que es exactamente lo que eran.
+  //
+  // ⚠️ DESPLIEGUE: `insertarReserva` nombra estas 5 columnas en TODA reserva,
+  // también en el checkout público. Sobre una base SIN ellas (Postgres/Supabase)
+  // no se cae solo el mostrador: no puede reservar NADIE. En SQLite los ALTER de
+  // abajo las crean solas; para Postgres están en supabase/schema.sql y hay que
+  // aplicarlos ANTES de desplegar.
+  //
+  // `metodo_pago` va como columna NUEVA y NO como un valor más de `pago_estado`
+  // a propósito: `pago_estado` tiene un CHECK (pendiente|pagado|cancelado) y
+  // SQLite no permite alterar un CHECK con ALTER TABLE — habría que recrear la
+  // tabla entera (patrón `migrarCotizacionesReservaOpcional`), que es un riesgo
+  // innecesario para un dato que es ortogonal al estado del pago. La lista de
+  // valores válidos (efectivo|transferencia|datafono|otro) se valida en el
+  // servidor: ver METODOS_PAGO en lib/reserva-core.ts.
+  try { db.exec("ALTER TABLE reservas ADD COLUMN origen TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE reservas ADD COLUMN creada_por_admin_id INTEGER DEFAULT NULL REFERENCES usuarios(id)"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE reservas ADD COLUMN metodo_pago TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE reservas ADD COLUMN pago_referencia TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  // Hoy siempre coincide con `creada_por_admin_id` (el mismo empleado que crea la
+  // reserva en el mostrador registra el pago en el mismo acto). Se guarda aparte
+  // para que mañana se pueda registrar un pago sobre una reserva que nació en la
+  // app sin perder quién lo hizo.
+  try { db.exec("ALTER TABLE reservas ADD COLUMN pago_registrado_por INTEGER DEFAULT NULL REFERENCES usuarios(id)"); } catch { /* ya existe */ }
+
   try { db.exec("ALTER TABLE mensajeros ADD COLUMN token TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE operaciones ADD COLUMN fotos_salida TEXT DEFAULT '[]'"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE operaciones ADD COLUMN fotos_entrada TEXT DEFAULT '[]'"); } catch { /* ya existe */ }

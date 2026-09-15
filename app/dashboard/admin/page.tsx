@@ -11,6 +11,7 @@ import LeadsPropietariosPanel from '@/components/LeadsPropietariosPanel';
 import AuditoriaPanel from '@/components/AuditoriaPanel';
 import CalculadoraPanel from '@/components/CalculadoraPanel';
 import NfcCardsPanel from '@/components/NfcCardsPanel';
+import ReservaMostradorModal from '@/components/ReservaMostradorModal';
 import {
   puede, normalizarNivel, NIVEL_LABEL, NIVELES, GRUPOS_AREAS, areaLabel,
   parsePermisosExtra, type AdminNivel, type PermisosExtra, type PermisosExtraDelta,
@@ -349,6 +350,14 @@ function DashboardAdminInner() {
     licencia_url?: string; licencia_url_dorso?: string;
   } } | null>(null);
   const [rechazando, setRechazando] = useState<{ id: number; nota: string } | null>(null);
+  // Reserva creada en el punto de atención (cliente presencial) — ver
+  // components/ReservaMostradorModal.tsx y POST /api/admin/reservas.
+  const [nuevaReservaAbierta, setNuevaReservaAbierta] = useState(false);
+  const [reservaMostradorMsg, setReservaMostradorMsg] = useState('');
+  // La reserva se creó bien pero quedó algo que el empleado tiene que atender (hoy:
+  // el correo con el enlace de activación no salió) → el aviso se pinta en tono de
+  // advertencia, no de éxito.
+  const [reservaMostradorAviso, setReservaMostradorAviso] = useState(false);
   const [accionando, setAccionando] = useState<number | null>(null);
   const [docRevisiones, setDocRevisiones] = useState<Record<string, DocRevision>>({});
   const [iaVerif, setIaVerif] = useState<{ vid: number; res: VerificacionResultado; auto: string[] } | null>(null);
@@ -1595,6 +1604,28 @@ function DashboardAdminInner() {
       {/* ── RESERVAS ── */}
       {tab === 'reservas' && (
         <div className="space-y-6">
+          {/* Reserva en el punto de atención (cliente presencial) */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="font-bold text-ink text-lg">Reservas</h2>
+              <p className="text-sm text-ink/50">
+                Solicitudes que llegan por la app y reservas hechas en el punto de atención.
+              </p>
+            </div>
+            <button
+              onClick={() => { setReservaMostradorMsg(''); setReservaMostradorAviso(false); setNuevaReservaAbierta(true); }}
+              className="flex items-center gap-2 bg-accent hover:bg-accent-hover text-white font-bold px-4 py-2.5 rounded-xl transition text-sm">
+              ＋ Nueva reserva (cliente presencial)
+            </button>
+          </div>
+
+          {reservaMostradorMsg && (
+            <div className={`${reservaMostradorAviso ? 'bg-warning/10 border-warning/25' : 'bg-success/10 border-success/25'} border rounded-2xl px-4 py-3 flex items-start gap-3`}>
+              <span className="text-lg">{reservaMostradorAviso ? '⚠️' : '✅'}</span>
+              <p className={`text-sm font-medium ${reservaMostradorAviso ? 'text-warning' : 'text-success'}`}>{reservaMostradorMsg}</p>
+            </div>
+          )}
+
           {/* Alerta de pendientes */}
           {pendientesCount > 0 && (
             <div className="bg-warning/10 border border-warning/25 rounded-2xl px-4 py-3 flex items-center gap-3">
@@ -2012,6 +2043,31 @@ function DashboardAdminInner() {
       {tab === 'config' && <PicoPlacaConfig />}
 
       {tab === 'auditoria' && <AuditoriaPanel />}
+
+      {/* Modal: nueva reserva en el punto de atención (cliente presencial) */}
+      {nuevaReservaAbierta && (
+        <ReservaMostradorModal
+          vehiculos={vehiculos}
+          onClose={() => setNuevaReservaAbierta(false)}
+          onCreada={info => {
+            setNuevaReservaAbierta(false);
+            setReservaMostradorAviso(info.activacion_pendiente);
+            setReservaMostradorMsg(
+              `Reserva #${info.id} creada, confirmada y pagada.` +
+              (info.cuenta_creada ? ' Se creó la cuenta del cliente.' : '') +
+              (info.activacion_enviada ? ' Le enviamos a su correo el enlace para crear su contraseña.' : '') +
+              // El servidor solo marca `activacion_enviada` si el correo SALIÓ de verdad.
+              // Si falló, se le dice al empleado en vez de prometerle al cliente un
+              // correo que nunca llegó (el cliente puede pedirlo solo desde
+              // "¿Olvidaste tu contraseña?"; nadie del equipo ve ni toca el enlace).
+              (info.activacion_pendiente
+                ? ' OJO: no se pudo enviar el correo con el enlace para crear su contraseña. Dile que entre a "¿Olvidaste tu contraseña?" con su correo.'
+                : '')
+            );
+            cargarReservas();
+          }}
+        />
+      )}
 
       {/* Modal documentos del cliente (arrendatario) */}
       {clienteDocs && (() => {
