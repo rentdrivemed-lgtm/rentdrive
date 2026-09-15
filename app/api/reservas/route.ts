@@ -134,7 +134,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `El alquiler mínimo es de ${MIN_NOCHES_RESERVA} noches.` }, { status: 400 });
   }
   if (!documento_id_url) return NextResponse.json({ error: 'Debes subir tu documento de identidad.' }, { status: 400 });
-  if (!documento_es_pasaporte && !documento_id_url_dorso) return NextResponse.json({ error: 'Falta el dorso de tu documento de identidad.' }, { status: 400 });
+  // El dorso se valida más abajo: la exención por pasaporte NO se puede creer del
+  // body (ver `esPasaporte`), hay que contrastarla con el tipo de documento que la
+  // persona tiene registrado, y para eso hace falta la BD.
   if (!licencia_url || !licencia_url_dorso) return NextResponse.json({ error: 'Debes subir frente y dorso de tu licencia de conducción.' }, { status: 400 });
   if (!firma_contrato) return NextResponse.json({ error: 'Debes aceptar el contrato.' }, { status: 400 });
 
@@ -146,8 +148,28 @@ export async function POST(req: NextRequest) {
   // Solo se le piden a quien todavía no los tiene guardados (p. ej. de una reserva
   // anterior); si ya están en su perfil, se usan esos y no se vuelve a preguntar.
   const perfil = db.prepare(
-    'SELECT direccion, ciudad, contacto_emergencia FROM usuarios WHERE id = ?'
-  ).get(user.id) as { direccion: string | null; ciudad: string | null; contacto_emergencia: string | null } | undefined;
+    'SELECT tipo_documento, direccion, ciudad, contacto_emergencia FROM usuarios WHERE id = ?'
+  ).get(user.id) as { tipo_documento: string | null; direccion: string | null; ciudad: string | null; contacto_emergencia: string | null } | undefined;
+
+  // ── Dorso del documento de identidad (obligatorio) ────────────────────────
+  // La única excepción legítima es el pasaporte, que no tiene dorso (solo la
+  // página con la foto). Pero `documento_es_pasaporte` lo manda el CLIENTE: si se
+  // le cree sin más, cualquiera marca la casilla y se salta el dorso. Se contrasta
+  // contra el `tipo_documento` que la persona tiene registrado en su perfil
+  // (registro / completar-perfil), que es el único dato que ella no controla desde
+  // este request. La opción NO se elimina: quien de verdad se registró con
+  // pasaporte sigue pudiendo reservar sin dorso.
+  const tipoDocRegistrado = String(perfil?.tipo_documento || '').trim();
+  const esPasaporte = tipoDocRegistrado === 'pasaporte';
+  if (documento_es_pasaporte && !esPasaporte) {
+    return NextResponse.json({
+      error: 'Tu documento registrado no es un pasaporte, así que necesitamos también el dorso. ' +
+             'Si te registraste con pasaporte, escríbenos por el chat de soporte para corregir tu tipo de documento.',
+    }, { status: 400 });
+  }
+  if (!esPasaporte && !documento_id_url_dorso) {
+    return NextResponse.json({ error: 'Falta el dorso de tu documento de identidad.' }, { status: 400 });
+  }
 
   let emergenciaGuardada: { nombre?: string; telefono?: string } = {};
   try { emergenciaGuardada = JSON.parse(perfil?.contacto_emergencia || '{}') || {}; } catch { emergenciaGuardada = {}; }
@@ -240,11 +262,11 @@ export async function POST(req: NextRequest) {
   // patrón que POST /api/auth/completar-perfil) — solo se toca cada columna
   // cuando el valor de ESTA reserva es válido Y aplica, para no pisar/perder un
   // documento bueno que el usuario ya tenía guardado de una reserva anterior:
-  //   - Si en esta reserva el documento de identidad es un pasaporte
-  //     (documento_es_pasaporte), NO se tocan cedula_url/cedula_url_dorso: son de
-  //     un tipo de documento distinto (el pasaporte no tiene dorso — ver
-  //     app/pago/page.tsx), así que pisarlos aquí borraría o mezclaría la cédula
-  //     que el usuario sí tenía guardada.
+  //   - Si el documento de identidad de esta persona es un pasaporte (`esPasaporte`,
+  //     derivado del tipo de documento REGISTRADO, no del flag que manda el cliente),
+  //     NO se tocan cedula_url/cedula_url_dorso: son de un tipo de documento distinto
+  //     (el pasaporte no tiene dorso — ver app/pago/page.tsx), así que pisarlos aquí
+  //     borraría o mezclaría la cédula que el usuario sí tenía guardada.
   //   - Si NO es pasaporte, cedula_url/cedula_url_dorso se actualizan solo si la
   //     URL de esta reserva pasa esUrlDeStorageValida (si no, se deja el valor
   //     ya guardado tal cual, nunca se pisa con '').
@@ -254,7 +276,7 @@ export async function POST(req: NextRequest) {
   const setsPerfil: string[] = [];
   const valoresPerfil: unknown[] = [];
 
-  if (!documento_es_pasaporte) {
+  if (!esPasaporte) {
     if (typeof documento_id_url === 'string' && esUrlDeStorageValida(documento_id_url)) {
       setsPerfil.push('cedula_url = ?'); valoresPerfil.push(documento_id_url);
     }
@@ -297,7 +319,7 @@ export async function POST(req: NextRequest) {
     VALUES (?, ?, ?, ?, ?, 'pendiente', 'pendiente', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     user.id, Number(vehiculo_id), fecha_inicio, fecha_fin, total,
-    documento_id_url || '', documento_id_url_dorso || '', documento_es_pasaporte ? 1 : 0,
+    documento_id_url || '', documento_id_url_dorso || '', esPasaporte ? 1 : 0,
     licencia_url || '', licencia_url_dorso || '',
     firma_contrato || '{}',
     JSON.stringify(recogidaL), JSON.stringify(entregaL), recargo, creditosUsados,

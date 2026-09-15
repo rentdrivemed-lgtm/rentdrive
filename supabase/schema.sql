@@ -30,6 +30,10 @@ CREATE TABLE IF NOT EXISTS usuarios (
   numero_licencia       TEXT DEFAULT '',
   contacto_emergencia   TEXT DEFAULT '{}',
   cedula_url            TEXT DEFAULT '',
+  -- Obligatoria desde sep-2026 para propietarios (ver la nota de más abajo). Se agrega
+  -- al CREATE TABLE además del ALTER documentado: si un despliegue nuevo se arma desde
+  -- este archivo y la columna falta, NINGÚN propietario puede guardar su perfil.
+  cedula_url_dorso      TEXT DEFAULT '',
   google_id             TEXT DEFAULT '',
   -- Verificación de correo por OTP (ver lib/verificacion-correo.ts). DEFAULT 1 para que
   -- una instalación nueva (seed.sql) no arranque con cuentas demo bloqueadas; las cuentas
@@ -45,13 +49,26 @@ CREATE TABLE IF NOT EXISTS usuarios (
 -- (foto de cédula/licencia leída con IA en el atajo del registro, guardada para precargar
 -- en el checkout — ver lib/registro-ocr.ts y app/api/registro/extraer-documento/route.ts)
 -- son columnas nuevas que NO están en el CREATE TABLE de arriba. Igual que
--- `cedula_url_dorso`, `banco`, `numero_cuenta`, `certificado_bancario_url`,
+-- `banco`, `numero_cuenta`, `certificado_bancario_url`,
 -- `codigo_referido`, `referido_por`, `creditos_referido` y otras columnas de
 -- `usuarios` que YA usa el código real y tampoco están documentadas aquí (drift preexistente
 -- entre este archivo y lib/db.ts, no introducido por este cambio), si la tabla usuarios ya
 -- existía en Supabase, agregar:
 --   ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS licencia_url TEXT DEFAULT '';
 --   ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS licencia_url_dorso TEXT DEFAULT '';
+--
+-- ⚠️⚠️ `usuarios.cedula_url_dorso` pasó de "columna opcional que casi nadie llenaba" a ser
+-- OBLIGATORIA (sep-2026): PUT /api/auth/me la exige para guardar el perfil de un
+-- PROPIETARIO (salvo tipo_documento='pasaporte', que no tiene dorso) y el registro /
+-- completar-perfil ya la llenan desde el atajo de foto. Si el despliegue en Postgres se
+-- hace a partir de este archivo, esa columna NO PUEDE faltar o el perfil del propietario
+-- queda imposible de guardar. Con el mismo DEFAULT '' que en SQLite (lib/db.ts):
+--   ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS cedula_url_dorso TEXT DEFAULT '';
+-- El dorso del arrendatario en el checkout vive en `reservas.documento_id_url_dorso`
+-- (+ `reservas.documento_es_pasaporte`), columnas que existen en lib/db.ts pero NO acá:
+-- este archivo no tiene `CREATE TABLE reservas` en absoluto (mismo gap preexistente que
+-- `vehiculos`/`config`, documentado más abajo). No se inventa la tabla aquí; queda anotado
+-- para que quien la reconstruya incluya esas columnas.
 
 -- ─────────────── gastos (gastos de la empresa) ───────────────
 CREATE TABLE IF NOT EXISTS gastos (

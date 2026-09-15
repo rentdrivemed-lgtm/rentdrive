@@ -45,9 +45,9 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
 
   const body = await req.json().catch(() => ({}));
-  const { password, tipo_documento, documento_identidad, fecha_nacimiento, cedula_url, licencia_url } = body as {
+  const { password, tipo_documento, documento_identidad, fecha_nacimiento, cedula_url, cedula_url_dorso, licencia_url } = body as {
     password?: unknown; tipo_documento?: unknown; documento_identidad?: unknown; fecha_nacimiento?: unknown;
-    cedula_url?: unknown; licencia_url?: unknown;
+    cedula_url?: unknown; cedula_url_dorso?: unknown; licencia_url?: unknown;
   };
 
   const db = getDb();
@@ -91,13 +91,18 @@ export async function POST(req: NextRequest) {
   const sets = ['tipo_documento = ?', 'documento_identidad = ?', 'fecha_nacimiento = ?'];
   const valores: unknown[] = [tipoDoc || 'cedula', numeroDoc, nacimiento];
   if (hashNuevo) { sets.push('password = ?'); valores.push(hashNuevo); }
-  // cedula_url / licencia_url (opcionales): vienen del atajo de foto de esta misma
-  // pantalla (app/completar-perfil/page.tsx → POST /api/registro/extraer-documento,
-  // que ya subió la imagen y devolvió `urlGuardada`). Igual que en el registro
-  // manual, se valida que la URL venga realmente de nuestro storage antes de
-  // guardarla; si no, se ignora en silencio (no bloquea el resto del guardado).
+  // cedula_url / cedula_url_dorso / licencia_url (opcionales): vienen del atajo de
+  // foto de esta misma pantalla (app/completar-perfil/page.tsx → POST
+  // /api/registro/extraer-documento, que ya subió la imagen y devolvió `urlGuardada`).
+  // Igual que en el registro manual, se valida que la URL venga realmente de nuestro
+  // storage antes de guardarla; si no, se ignora en silencio (no bloquea el resto del
+  // guardado). Cada lado se escribe por separado y solo si vino: así una pantalla que
+  // mande solo el frente nunca borra un dorso ya guardado, ni al revés.
   if (typeof cedula_url === 'string' && cedula_url && esUrlDeStorageValida(cedula_url)) {
     sets.push('cedula_url = ?'); valores.push(cedula_url);
+  }
+  if (typeof cedula_url_dorso === 'string' && cedula_url_dorso && esUrlDeStorageValida(cedula_url_dorso)) {
+    sets.push('cedula_url_dorso = ?'); valores.push(cedula_url_dorso);
   }
   if (typeof licencia_url === 'string' && licencia_url && esUrlDeStorageValida(licencia_url)) {
     sets.push('licencia_url = ?'); valores.push(licencia_url);

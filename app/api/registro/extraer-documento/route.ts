@@ -55,7 +55,7 @@ export const runtime = 'nodejs';
 // cuenta todavía no existe en este punto, la URL NO se asocia a ningún usuario
 // aquí: el cliente (app/(auth)/registro/page.tsx o app/completar-perfil/page.tsx)
 // la retiene en memoria y la manda en el submit final, donde SÍ queda guardada en
-// `usuarios.cedula_url`/`licencia_url` (ver lib/db.ts). El motivo del cambio: antes
+// `usuarios.cedula_url`/`cedula_url_dorso`/`licencia_url` (ver lib/db.ts). El motivo del cambio: antes
 // se pedía la misma foto de nuevo más adelante (al reservar, en app/pago/page.tsx)
 // — Victor decidió explícitamente que se guardara para no repetirle el trámite a
 // la persona.
@@ -70,7 +70,8 @@ export const runtime = 'nodejs';
 // ya reclamado por una cuenta. `POST /api/admin/limpiar-documentos-huerfanos`
 // (admin-only, ver ese archivo) es el mecanismo que, corrido periódicamente,
 // revisa `registro-temp/` y borra lo que lleve más de 48h sin haber sido
-// reclamado (su URL no aparece en ningún `usuarios.cedula_url`/`licencia_url`).
+// reclamado (su URL no aparece en ningún `usuarios.cedula_url`/`cedula_url_dorso`/
+// `licencia_url`; ver lib/limpieza-documentos.ts, que ya consulta las 4 columnas).
 // El checkbox de consentimiento en el formulario refleja esto: la foto se guarda
 // asociada a la cuenta SOLO si el registro se completa; si no, se borra sola
 // pasado ese plazo corto.
@@ -83,14 +84,27 @@ export const runtime = 'nodejs';
 // estaba acotado por esos mismos límites.
 
 const MAX_BYTES = 8 * 1024 * 1024;          // 8 MB
-const IP_MAX_CORTO = 6;
+// Subido de 6 a 12 (sep-2026) al volverse obligatorio el dorso de la cédula: el camino
+// feliz de un registro pasó de 2 lecturas (cédula + licencia) a 3 (cédula frente, cédula
+// dorso, licencia). Con 6, un solo reintento por foto —normal: sale movida, con reflejo,
+// mal encuadrada— ya chocaba contra el 429, y peor en oficinas o casas con IP compartida,
+// donde varias personas registrándose suman contra el mismo contador. 12 deja margen para
+// un reintento por foto sin aflojar de forma relevante el tope diario (40) ni el global.
+const IP_MAX_CORTO = 12;
 const IP_VENTANA_CORTA_MS = 10 * 60 * 1000; // 10 minutos
 const IP_MAX_DIARIO = 40;
 const DIA_MS = 24 * 60 * 60 * 1000;
 const GLOBAL_MAX_HORA = 300;
 const HORA_MS = 60 * 60 * 1000;
 
-const TIPOS_VALIDOS: TipoDocumentoRegistro[] = ['cedula', 'licencia'];
+// 'cedula_dorso' (reverso del documento de identidad) pasa por el MISMO camino que el
+// frente —mismos límites de tasa, mismo chequeo de bytes mágicos, mismo consentimiento y
+// misma lectura con IA— a propósito: es la única forma de subir el reverso sin sesión
+// (la cuenta todavía no existe) sin abrir una vía de subida de archivos sin validar. Lo
+// que cambia es que de ahí no sale ningún dato para el formulario (ver lib/registro-ocr.ts):
+// la IA solo confirma que la foto SEA un reverso, y la URL guardada termina en
+// `usuarios.cedula_url_dorso` en el submit final.
+const TIPOS_VALIDOS: TipoDocumentoRegistro[] = ['cedula', 'cedula_dorso', 'licencia'];
 
 // tipoRealImagen y formDataConLimite viven en lib/subida-imagen.ts (compartidos con
 // app/api/vehiculos/extraer-matricula/route.ts, mismo patrón de validación).
@@ -195,7 +209,9 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const etiqueta = tipo === 'cedula' ? 'documento de identidad' : 'licencia de conducción';
+  const etiqueta = tipo === 'licencia'
+    ? 'licencia de conducción'
+    : tipo === 'cedula_dorso' ? 'documento de identidad por el reverso' : 'documento de identidad';
 
   try {
     const lectura = await leerDocumentoRegistro(buffer, mediaType, tipo);
@@ -214,7 +230,9 @@ export async function POST(req: NextRequest) {
       }, { status: 422 });
     }
 
-    const algunDato = Object.values(lectura.datos).some(v => v !== null);
+    // El reverso no transcribe ningún campo (ver lib/registro-ocr.ts): exigirle datos
+    // lo rechazaría siempre. Para ese tipo basta con es_legible + coincide_tipo de arriba.
+    const algunDato = tipo === 'cedula_dorso' || Object.values(lectura.datos).some(v => v !== null);
     if (!algunDato) {
       return NextResponse.json({
         error: `No pudimos sacar ningún dato de la foto de tu ${etiqueta}. ` +

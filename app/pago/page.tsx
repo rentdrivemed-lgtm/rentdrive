@@ -14,7 +14,8 @@ type Vehiculo = {
 type User = {
   id: number; nombre: string; rol: string; creditos_referido?: number;
   direccion?: string; ciudad?: string; contacto_emergencia?: string;
-  cedula_url?: string; licencia_url?: string;
+  tipo_documento?: string;
+  cedula_url?: string; cedula_url_dorso?: string; licencia_url?: string;
 };
 
 function detectarTarjeta(num: string) {
@@ -67,6 +68,11 @@ function PagoContent() {
 
   const [docIdUrl, setDocIdUrl] = useState('');
   const [docIdUrlDorso, setDocIdUrlDorso] = useState('');
+  // "Mi documento es un pasaporte (sin dorso)". Ya NO es una casilla libre: el
+  // servidor la contrasta con el `tipo_documento` registrado (POST /api/reservas),
+  // porque antes cualquiera la marcaba y se saltaba el dorso. Acá se refleja esa
+  // misma regla: solo se ofrece a quien de verdad se registró con pasaporte.
+  const [docRegistradoEsPasaporte, setDocRegistradoEsPasaporte] = useState(false);
   const [esPasaporte, setEsPasaporte] = useState(false);
   const [licenciaUrl, setLicenciaUrl] = useState('');
   const [licenciaUrlDorso, setLicenciaUrlDorso] = useState('');
@@ -98,12 +104,22 @@ function PagoContent() {
       // Precarga la cédula/licencia que ya se guardó antes (foto leída en el atajo
       // del registro, o de una reserva anterior) para no pedírsela de nuevo — el
       // recuadro de DocUpload ya sabe mostrar la miniatura cuando `value` no está
-      // vacío. El dorso NUNCA se capturó en el atajo del registro (solo se pide la
-      // foto de frente), así que ese sigue pidiéndose siempre desde cero. Se usa
-      // el setter funcional para no pisar algo que la persona ya haya subido en
-      // esta misma sesión si `cargarInicial` se vuelve a llamar (botón Reintentar).
+      // vacío. El dorso de la cédula también se precarga: el atajo del registro y
+      // /completar-perfil ahora lo capturan (tipo 'cedula_dorso'), así que a quien ya
+      // lo tenga guardado no se le vuelve a pedir; a quien no, el checkout se lo exige
+      // igual que siempre. El dorso de la LICENCIA sigue sin precargarse (esa foto
+      // nunca se guarda fuera de la reserva). Se usa el setter funcional para no pisar
+      // algo que la persona ya haya subido en esta misma sesión si `cargarInicial` se
+      // vuelve a llamar (botón Reintentar).
       if (d.user.cedula_url) setDocIdUrl(prev => prev || d.user.cedula_url);
+      if (d.user.cedula_url_dorso) setDocIdUrlDorso(prev => prev || d.user.cedula_url_dorso);
       if (d.user.licencia_url) setLicenciaUrl(prev => prev || d.user.licencia_url);
+      // Quien se registró con pasaporte no puede dar un dorso: se le deja marcada la
+      // exención (y la puede desmarcar si quiere subir un reverso igual). A todos los
+      // demás ni siquiera se les ofrece — el servidor se lo rechazaría.
+      const esPasaporteRegistrado = (d.user.tipo_documento || '') === 'pasaporte';
+      setDocRegistradoEsPasaporte(esPasaporteRegistrado);
+      setEsPasaporte(prev => prev || esPasaporteRegistrado);
       // "Faltan" incluye tanto "nunca los llenó" como "los tiene guardados pero ya
       // no cumplen las reglas actuales" (datos legacy) — en ambos casos el usuario
       // necesita ver los campos para poder corregirlos.
@@ -387,10 +403,18 @@ function PagoContent() {
             Necesitamos verificar tu identidad antes de confirmar la reserva. Los originales también deben presentarse físicamente al recoger el vehículo.
           </p>
 
-          <label className="flex items-center gap-2 text-xs text-ink/60 mb-3">
-            <input type="checkbox" checked={esPasaporte} onChange={e => setEsPasaporte(e.target.checked)} />
-            Mi documento de identidad es un pasaporte (sin dorso)
-          </label>
+          {docRegistradoEsPasaporte ? (
+            <label className="flex items-center gap-2 text-xs text-ink/60 mb-3">
+              <input type="checkbox" checked={esPasaporte} onChange={e => setEsPasaporte(e.target.checked)} />
+              Mi documento de identidad es un pasaporte (sin dorso)
+            </label>
+          ) : (
+            <p className="text-[11px] text-ink/45 mb-3">
+              Necesitamos tu documento de identidad por el <strong>frente y el dorso</strong>. Si tu documento
+              es un pasaporte (que no tiene dorso), escríbenos por el chat de soporte para corregir el tipo
+              de documento de tu cuenta.
+            </p>
+          )}
 
           <div className="space-y-4 mb-4">
             <DocUploadDoble

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { validarCelular, validarDireccion, validarDocumentoIdentidad, validarNombreContacto, validarTelefonoContacto } from '@/lib/validacion';
+import { esUrlDeStorageValida } from '@/lib/storage';
 import { referidoHabilitado } from '@/lib/referidos';
 import { correoNoVerificado } from '@/lib/verificacion-correo';
 
@@ -49,6 +50,15 @@ export async function GET() {
 // no un string plano como el resto: se serializa a JSON al guardar.
 const CAMPOS_EDITABLES = ['tipo_documento', 'documento_identidad', 'celular', 'celular_indicativo', 'direccion', 'ciudad', 'cedula_url', 'cedula_url_dorso', 'banco', 'numero_cuenta', 'certificado_bancario_url', 'contacto_emergencia'] as const;
 
+// Campos de CAMPOS_EDITABLES que son URLs de un archivo subido por nosotros. Sin esto,
+// `cedula_url`/`cedula_url_dorso` aceptaban CUALQUIER string (se guardaba tal cual y el
+// admin lo termina renderizando como <img src>): bastaba un PUT a mano para "tener
+// cédula" sin haber subido nada. Se valida SOLO lo que cambia respecto a lo guardado
+// —mismo criterio que `documentosConUrlsValidas` en lib/storage.ts— para no dejar
+// atascado a quien tenga una URL legada anterior a Cloudinary (`/uploads/...`), que
+// nunca podría volver a guardar su perfil.
+const CAMPOS_URL = ['cedula_url', 'cedula_url_dorso'] as const;
+
 export async function PUT(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
@@ -83,6 +93,55 @@ export async function PUT(req: NextRequest) {
     contactoEmergenciaJson = JSON.stringify({ nombre, telefono });
   }
 
+  const db = getDb();
+  const actual = db.prepare('SELECT rol, tipo_documento, cedula_url, cedula_url_dorso FROM usuarios WHERE id = ?')
+    .get(user.id) as { rol?: string; tipo_documento?: string; cedula_url?: string; cedula_url_dorso?: string } | undefined;
+  if (!actual) return NextResponse.json({ error: 'Usuario no encontrado' }, { status: 404 });
+
+  for (const campo of CAMPOS_URL) {
+    if (!(campo in body)) continue;
+    const valor = body[campo] == null ? '' : String(body[campo]);
+    if (valor === (actual[campo] || '')) continue; // no cambió: se respeta lo que ya había
+    if (valor && !esUrlDeStorageValida(valor)) {
+      return NextResponse.json({ error: 'La foto del documento no es válida. Vuelve a subirla.' }, { status: 400 });
+    }
+  }
+
+  // ── Cédula obligatoria para el PROPIETARIO ────────────────────────────────
+  // Su cédula (frente + dorso) es lo que permite verificar que la tarjeta de
+  // propiedad de sus vehículos esté a su nombre, así que no se le acepta guardar
+  // un perfil que quede sin ella. Se evalúa sobre el ESTADO RESULTANTE (lo
+  // guardado + lo que trae este request), no sobre el body: así un cliente no se
+  // salta la regla simplemente omitiendo los campos.
+  //
+  // El `rol` se lee de la BD, no del JWT (que puede estar viejo). Aplica solo a
+  // propietarios: arrendatarios y admins no pasan por acá con este requisito —
+  // al arrendatario el documento se le exige en el checkout (POST /api/reservas).
+  //
+  // Decisión de producto (propietarios que YA existen sin dorso): el corte es el
+  // GUARDADO DEL PERFIL, no publicar ni alquilar. Nada de lo que ya tienen en
+  // marcha se cae, y el arreglo está en el mismo formulario que están enviando.
+  // Si se quisiera apretar más, el punto natural sería POST /api/vehiculos.
+  if (actual.rol === 'propietario') {
+    const resultante = (campo: (typeof CAMPOS_URL)[number]) =>
+      (campo in body ? (body[campo] == null ? '' : String(body[campo])) : (actual[campo] || '')).trim();
+    const tipoDocResultante = 'tipo_documento' in body
+      ? String(body.tipo_documento ?? '').trim()
+      : (actual.tipo_documento || '');
+    // El pasaporte no tiene dorso (solo la página con la foto): mismo criterio que
+    // `soloUnLado` en components/DocUploadDoble.tsx.
+    const faltaFrente = !resultante('cedula_url');
+    const faltaDorso = tipoDocResultante !== 'pasaporte' && !resultante('cedula_url_dorso');
+    if (faltaFrente || faltaDorso) {
+      return NextResponse.json({
+        error: tipoDocResultante === 'pasaporte'
+          ? 'Sube la foto de tu pasaporte: es obligatoria para verificar que la tarjeta de propiedad esté a tu nombre.'
+          : 'Sube tu cédula por el frente Y por el dorso: es obligatoria para verificar que la tarjeta de propiedad esté a tu nombre.',
+        codigo: 'cedula_incompleta',
+      }, { status: 400 });
+    }
+  }
+
   const sets: string[] = [];
   const valores: unknown[] = [];
   for (const campo of CAMPOS_EDITABLES) {
@@ -95,7 +154,6 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ error: 'No hay campos para actualizar.' }, { status: 400 });
   }
 
-  const db = getDb();
   db.prepare(`UPDATE usuarios SET ${sets.join(', ')} WHERE id = ?`).run(...valores, user.id);
 
   const fila = db.prepare(`SELECT ${CAMPOS_SELECT} FROM usuarios WHERE id = ?`).get(user.id) as Record<string, unknown> | undefined;
