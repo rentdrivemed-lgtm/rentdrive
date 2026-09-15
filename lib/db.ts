@@ -140,6 +140,15 @@ function initDb(db: Database.Database) {
       -- DEFAULT se queda en 0 a propósito para que el corte sea la fecha de
       -- creación de la operación y no un descuido.
       fotos_guiadas INTEGER DEFAULT 0,
+      -- PASO 1 (al ENTREGAR): inventario del estado en que SALE el vehículo, hecho
+      -- solo con las fotos de salida. JSON de EstadoEntregaResultado
+      -- (lib/inspeccion-vehiculo.ts): {marcas, zonas_no_cubiertas, resumen}. NO es un
+      -- veredicto de daños; es la referencia de lo que el carro ya traía, y se le pasa
+      -- al paso 2 para que una marca previa no se cuente como daño nuevo.
+      entrega_ia TEXT DEFAULT '',
+      -- 'pendiente' | 'sin_marcas' | 'con_marcas'.
+      entrega_estado TEXT DEFAULT 'pendiente',
+      -- PASO 2 (al RECIBIR): el veredicto de la comparación salida vs. entrada.
       inspeccion_ia TEXT DEFAULT '',
       inspeccion_estado TEXT DEFAULT 'pendiente',
       created_at TEXT DEFAULT (datetime('now', 'localtime'))
@@ -855,6 +864,11 @@ function initDb(db: Database.Database) {
   try { db.exec("ALTER TABLE operaciones ADD COLUMN fotos_omitidas TEXT DEFAULT '[]'"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE operaciones ADD COLUMN fotos_guiadas INTEGER DEFAULT 0"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE operaciones ADD COLUMN inspeccion_estado TEXT DEFAULT 'pendiente'"); } catch { /* ya existe */ }
+  // Análisis del estado de ENTREGA (paso 1, ver el CREATE TABLE de arriba). Las
+  // operaciones que ya existían quedan con '' y 'pendiente': nunca se les corrió, y la
+  // comparación (paso 2) sigue funcionando igual sin inventario.
+  try { db.exec("ALTER TABLE operaciones ADD COLUMN entrega_ia TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE operaciones ADD COLUMN entrega_estado TEXT DEFAULT 'pendiente'"); } catch { /* ya existe */ }
 
   // Cotizaciones sueltas (cotizador de venta, sin reserva ni cuenta de usuario): columnas
   // nuevas para bases ya existentes (una base creada desde cero ya las trae en el CREATE TABLE).

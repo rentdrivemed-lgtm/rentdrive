@@ -1,7 +1,10 @@
 import type Database from 'better-sqlite3';
 import { lugarResumen, type Lugar } from './lugares';
 import { generarActaCierre } from './acta-servicio';
-import { compararFotosVehiculo, type InspeccionResultado } from './inspeccion-vehiculo';
+import {
+  analizarEstadoEntrega, compararFotosVehiculo, parseEstadoEntrega,
+  type EstadoEntregaResultado, type InspeccionResultado,
+} from './inspeccion-vehiculo';
 import {
   casillasPendientes, faseDeTarea, fotoDeCasilla, normalizarFotos, parseFotosServicio, parseOmisiones,
   FASES, FASE_NOMBRE,
@@ -323,9 +326,54 @@ export function limpiarInspeccion(db: DB, opId: number): boolean {
 }
 
 /**
- * Invalida el veredicto si alguna de las dos fases se quedó SIN NINGUNA foto. Devuelve
- * la fase que quedó vacía si de verdad hubo que limpiar, o `null` si no había nada que
- * hacer. Se llama después de cualquier acción que pueda quitar fotos.
+ * Lo mismo, pero para el INVENTARIO DE ENTREGA (paso 1: `entrega_ia` /
+ * `entrega_estado`). Devuelve `true` solo si de verdad había algo que borrar.
+ *
+ * Existe aparte de `limpiarInspeccion` porque los dos datos dependen de fotos
+ * distintas: el inventario sale ÚNICAMENTE de las fotos de salida, así que quedarse sin
+ * fotos de entrada no lo invalida. Igual que allá, las actas ya congeladas no se tocan.
+ */
+export function limpiarEntregaIA(db: DB, opId: number): boolean {
+  const fila = db.prepare(`
+    SELECT COALESCE(entrega_ia,'') AS ia, COALESCE(entrega_estado,'') AS estado
+    FROM operaciones WHERE id = ?
+  `).get(opId) as { ia: string; estado: string } | undefined;
+  if (!fila) return false;
+  if (!fila.ia && (fila.estado === '' || fila.estado === 'pendiente')) return false;
+  db.prepare("UPDATE operaciones SET entrega_ia = '', entrega_estado = 'pendiente' WHERE id = ?").run(opId);
+  return true;
+}
+
+/**
+ * Borra los DOS resultados vivos de IA del servicio (el inventario de entrega y el
+ * veredicto de la comparación). Es lo que hace REABRIR un servicio: si se reabre es
+ * para rehacerlo, y los dos datos describen unas fotos que están a punto de cambiar.
+ */
+export function limpiarIAServicio(db: DB, opId: number): { inspeccion: boolean; entrega: boolean } {
+  return {
+    inspeccion: limpiarInspeccion(db, opId),
+    entrega: limpiarEntregaIA(db, opId),
+  };
+}
+
+/**
+ * Qué se limpió por haberse quedado vacía una fase. `fase` es la primera fase vacía
+ * encontrada (la que se nombra en la bitácora); los dos booleanos dicen qué resultado
+ * de IA se borró de verdad.
+ */
+export type InvalidacionIA = { fase: FaseFoto; inspeccion: boolean; entrega: boolean };
+
+/**
+ * Invalida los resultados de IA si alguna de las dos fases se quedó SIN NINGUNA foto.
+ * Devuelve qué se limpió (y por qué fase) si de verdad hubo que limpiar algo, o `null`
+ * si no había nada que hacer. Se llama después de cualquier acción que pueda quitar
+ * fotos.
+ *
+ * Los dos resultados NO se invalidan por lo mismo, porque no dependen de las mismas
+ * fotos: el veredicto de la comparación necesita los dos juegos (cualquiera de las dos
+ * fases vacía lo deja huérfano), mientras que el inventario de entrega sale solo de las
+ * de SALIDA — borrar las de entrada no lo invalida, y borrarlo ahí sería tirar a la
+ * basura un análisis que sigue describiendo exactamente lo que describía.
  *
  * ── Por qué "fase vacía" y no "cualquier cambio de foto" ──
  * Repetir UNA foto es el pan de cada día mientras se trabaja: sale movida, sale a
@@ -343,12 +391,15 @@ export function limpiarInspeccion(db: DB, opId: number): boolean {
  * constancia en la bitácora y las actas ya congeladas siguen intactas: nada se pierde
  * de verdad, porque la inspección se puede volver a correr cuando haya fotos nuevas.
  */
-export function invalidarInspeccionSiFaseVacia(db: DB, opId: number): FaseFoto | null {
+export function invalidarInspeccionSiFaseVacia(db: DB, opId: number): InvalidacionIA | null {
   const fila = filaFotos(db, opId);
   if (!fila) return null;
-  const vacia = FASES.find(f => parseFotosServicio(fila[COL_FOTOS[f]]).length === 0);
-  if (!vacia) return null;
-  return limpiarInspeccion(db, opId) ? vacia : null;
+  const vacias = FASES.filter(f => parseFotosServicio(fila[COL_FOTOS[f]]).length === 0);
+  if (vacias.length === 0) return null;
+  const inspeccion = limpiarInspeccion(db, opId);
+  const entrega = vacias.includes('salida') ? limpiarEntregaIA(db, opId) : false;
+  if (!inspeccion && !entrega) return null;
+  return { fase: vacias[0], inspeccion, entrega };
 }
 
 /** Texto para la bitácora: "se quedó sin fotos la entrega al cliente". */
@@ -481,6 +532,44 @@ export function appBaseUrl(): string {
   return '';
 }
 
+/** Los datos del vehículo de la reserva, para el encabezado de los prompts de IA. */
+function vehiculoDeOperacion(db: DB, reservaId: number): { vehiculo: string; placa: string } {
+  const v = db.prepare(`
+    SELECT v.marca, v.modelo, COALESCE(v.placa,'') AS placa
+    FROM reservas r JOIN vehiculos v ON r.vehiculo_id = v.id WHERE r.id = ?
+  `).get(reservaId) as { marca: string; modelo: string; placa: string } | undefined;
+  return { vehiculo: v ? `${v.marca} ${v.modelo}` : '', placa: v?.placa ?? '' };
+}
+
+/** El inventario de entrega guardado de este servicio, o `null` si no se ha hecho. */
+export function leerInventarioEntrega(db: DB, opId: number): EstadoEntregaResultado | null {
+  const row = db.prepare("SELECT COALESCE(entrega_ia,'') AS ia FROM operaciones WHERE id = ?").get(opId) as { ia: string } | undefined;
+  return parseEstadoEntrega(row?.ia);
+}
+
+/**
+ * PASO 1 — al ENTREGAR el carro: levanta el inventario del estado en que sale el
+ * vehículo con las fotos de SALIDA y lo guarda. No necesita las de entrada (el carro
+ * todavía no ha vuelto) y no emite ningún veredicto de daños.
+ */
+export async function ejecutarAnalisisEntrega(db: DB, opId: number): Promise<EstadoEntregaResultado> {
+  const op = db.prepare('SELECT fotos_salida, reserva_id FROM operaciones WHERE id = ?').get(opId) as { fotos_salida: string; reserva_id: number } | undefined;
+  if (!op) throw new Error('Operación no encontrada');
+
+  const fotosSalida = parseFotosServicio(op.fotos_salida);
+  if (fotosSalida.length === 0) throw new Error('No hay fotos de salida para analizar');
+
+  const resultado = await analizarEstadoEntrega(vehiculoDeOperacion(db, op.reserva_id), fotosSalida);
+
+  db.prepare('UPDATE operaciones SET entrega_ia = ?, entrega_estado = ? WHERE id = ?')
+    .run(JSON.stringify(resultado), resultado.marcas.length > 0 ? 'con_marcas' : 'sin_marcas', opId);
+
+  return resultado;
+}
+
+/** PASO 2 — al RECIBIR el carro: la comparación de siempre, alimentada con el
+ * inventario del paso 1 cuando ese servicio lo tiene (y exactamente igual que antes
+ * cuando no, que es el caso de todas las operaciones anteriores a esta función). */
 export async function ejecutarInspeccion(db: DB, opId: number): Promise<InspeccionResultado> {
   const op = db.prepare('SELECT fotos_salida, fotos_entrada, reserva_id FROM operaciones WHERE id = ?').get(opId) as { fotos_salida: string; fotos_entrada: string; reserva_id: number } | undefined;
   if (!op) throw new Error('Operación no encontrada');
@@ -493,15 +582,11 @@ export async function ejecutarInspeccion(db: DB, opId: number): Promise<Inspecci
   if (fotosSalida.length === 0) throw new Error('No hay fotos de salida para comparar');
   if (fotosEntrada.length === 0) throw new Error('No hay fotos de entrada para comparar');
 
-  const vehiculo = db.prepare(`
-    SELECT v.marca, v.modelo, COALESCE(v.placa,'') AS placa
-    FROM reservas r JOIN vehiculos v ON r.vehiculo_id = v.id WHERE r.id = ?
-  `).get(op.reserva_id) as { marca: string; modelo: string; placa: string } | undefined;
-
   const resultado = await compararFotosVehiculo(
-    { vehiculo: vehiculo ? `${vehiculo.marca} ${vehiculo.modelo}` : '', placa: vehiculo?.placa },
+    vehiculoDeOperacion(db, op.reserva_id),
     fotosSalida,
     fotosEntrada,
+    leerInventarioEntrega(db, opId),
   );
 
   db.prepare('UPDATE operaciones SET inspeccion_ia = ?, inspeccion_estado = ? WHERE id = ?')

@@ -19,7 +19,10 @@ const SEV_BADGE: Record<string, string> = {
 const SEV_LABEL: Record<string, string> = {
   ninguna: 'Sin daños nuevos', leve: 'Daños leves', moderada: 'Daños moderados', grave: 'Daños graves',
 };
-const TIPO_ICON: Record<string, string> = {
+// Exportado: components/EstadoEntregaResultado.tsx dibuja los mismos `tipo` (la lista
+// blanca de lib/inspeccion-vehiculo.ts es la misma para las dos listas), y tener dos
+// copias del mapa significaba que un ícono nuevo saldría en una tarjeta y en la otra no.
+export const TIPO_ICON: Record<string, string> = {
   rayon: '✏️', abolladura: '🔨', hundido: '🔨', vidrio_roto: '🧊', espejo: '🪞', faro: '💡', llanta: '🛞', otro: '⚠️',
 };
 

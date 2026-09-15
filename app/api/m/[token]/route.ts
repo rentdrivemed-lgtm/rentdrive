@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import {
-  cargarDetalleServicio, recomputarEstadoOperacion, ejecutarInspeccion,
+  cargarDetalleServicio, recomputarEstadoOperacion, ejecutarInspeccion, ejecutarAnalisisEntrega,
   bloqueoFotosTarea, guardarFotosFase, guardarFotoCasilla, quitarFotoSuelta,
   omitirCasilla, quitarOmision, congelarActaDeFase,
   invalidarInspeccionSiFaseVacia, motivoFaseVacia, MAX_FOTOS_FASE,
@@ -12,7 +12,7 @@ import {
   MOTIVO_MIN, URL_MAX,
 } from '@/lib/fotos-servicio';
 import { tieneClaveAnthropic } from '@/lib/anthropic';
-import { limiteInspeccion, faltanFotosParaInspeccion } from '@/lib/inspeccion-vehiculo';
+import { limiteInspeccion, faltanFotosParaInspeccion, faltanFotosParaEntrega } from '@/lib/inspeccion-vehiculo';
 
 export const dynamic = 'force-dynamic';
 // Inerte en Railway (Docker): solo lo respetan plataformas tipo Vercel. El tope
@@ -148,6 +148,30 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ toke
       quitarOmision(db, opId, body.fase, body.casilla);
       break;
     }
+    // PASO 1: el inventario del estado en que SALE el carro (solo fotos de salida).
+    // Mismas defensas que la inspección de abajo, por las mismas razones: esta pantalla
+    // no tiene login (basta el enlace del mensajero), así que el tope por actor es la
+    // única barrera contra quemar consultas de IA con el enlace filtrado, y el chequeo
+    // barato va primero para no cobrarle un intento a quien todavía no ha subido fotos.
+    // Comparte el MISMO cubo del límite que la inspección: el techo es del gasto de IA,
+    // no de cada botón por separado.
+    case 'analisis_entrega': {
+      if (!tieneClaveAnthropic()) {
+        return NextResponse.json({ error: 'El análisis con IA no está configurado (falta ANTHROPIC_API_KEY).' }, { status: 503 });
+      }
+      const fotosSal = db.prepare('SELECT fotos_salida FROM operaciones WHERE id = ?').get(opId) as { fotos_salida: string | null } | undefined;
+      const sinFotos = faltanFotosParaEntrega(fotosSal?.fotos_salida);
+      if (sinFotos) return NextResponse.json({ error: sinFotos }, { status: 400 });
+      const tope = limiteInspeccion(`mensajero:${m.id}`);
+      if (tope) return NextResponse.json({ error: tope }, { status: 429 });
+      try {
+        await ejecutarAnalisisEntrega(db, opId);
+      } catch (e) {
+        return NextResponse.json({ error: e instanceof Error ? e.message : 'Error en el análisis de entrega' }, { status: 400 });
+      }
+      break;
+    }
+    // PASO 2: la comparación salida vs. entrada.
     case 'inspeccion': {
       if (!tieneClaveAnthropic()) {
         return NextResponse.json({ error: 'La inspección con IA no está configurada (falta ANTHROPIC_API_KEY).' }, { status: 503 });
@@ -176,8 +200,8 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ toke
       return NextResponse.json({ error: 'Acción no reconocida' }, { status: 400 });
   }
 
-  // Si la acción dejó una fase SIN NINGUNA foto, el veredicto de la inspección con IA
-  // quedó huérfano y se limpia (mismo criterio que en el panel del admin, ver
+  // Si la acción dejó una fase SIN NINGUNA foto, el resultado de IA que dependía de esas
+  // fotos quedó huérfano y se limpia (mismo criterio que en el panel del admin, ver
   // `invalidarInspeccionSiFaseVacia`). Acá es donde más falta hace: el mensajero es
   // quien toma y quita las fotos en la calle, y quien puede haber fotografiado el carro
   // equivocado. No hay a quién avisar en pantalla ni quién decida, así que se limpia
@@ -187,14 +211,20 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ toke
   // un enlace con token y no tiene fila en `usuarios`. Queda su nombre y el enlace como
   // identidad, que es exactamente lo que se sabe de él.
   if (ACCIONES_QUE_QUITAN_FOTOS.has(body.accion)) {
-    const faseVacia = invalidarInspeccionSiFaseVacia(db, opId);
-    if (faseVacia) {
+    const limpieza = invalidarInspeccionSiFaseVacia(db, opId);
+    if (limpieza) {
       registrarAuditoria(db, { id: null, nombre: `${m.nombre} (mensajero)`, nivel: 'mensajero' }, {
         area: 'operaciones',
         accion: 'limpiar_inspeccion_ia',
         entidad: 'operaciones',
         entidad_id: opId,
-        detalle: JSON.stringify({ motivo: motivoFaseVacia(faseVacia), accion: body.accion, mensajero_id: m.id }),
+        detalle: JSON.stringify({
+          motivo: motivoFaseVacia(limpieza.fase),
+          accion: body.accion,
+          mensajero_id: m.id,
+          inspeccion_ia_limpiada: limpieza.inspeccion,
+          entrega_ia_limpiada: limpieza.entrega,
+        }),
       });
     }
   }

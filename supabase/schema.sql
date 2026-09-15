@@ -330,6 +330,18 @@ CREATE TABLE IF NOT EXISTS actas_servicio (
 --   fotos_omitidas TEXT DEFAULT '[]',   -- [{fase, casilla, motivo, autor, autor_tipo, fecha}]
 --   fotos_guiadas  INTEGER DEFAULT 0,   -- 1 = se le exigen las 8 casillas por fase
 --
+-- Y por el mismo motivo quedan ANOTADAS acá las dos columnas del análisis del estado de
+-- ENTREGA (paso 1 de la IA de fotos: el inventario de lo que el carro YA traía cuando
+-- salió, hecho solo con las fotos de salida; el paso 2 es la comparación de siempre, que
+-- vive en `inspeccion_ia` / `inspeccion_estado`):
+--
+--   entrega_ia     TEXT DEFAULT '',          -- JSON {marcas, zonas_no_cubiertas, resumen}
+--   entrega_estado TEXT DEFAULT 'pendiente', -- 'pendiente' | 'sin_marcas' | 'con_marcas'
+--
+-- Los DEFAULT dejan a TODAS las operaciones existentes sin inventario, que es lo
+-- correcto: a esas nunca se les corrió el paso 1 y la comparación funciona igual sin él
+-- (el inventario es un parámetro OPCIONAL de compararFotosVehiculo).
+--
 -- `fotos_salida` / `fotos_entrada` NO cambian de tipo: siguen siendo TEXT con un JSON
 -- array, solo que ahora ese array puede traer objetos {casilla, url} además de los
 -- strings sueltos del formato legado. `lib/fotos-servicio.ts` (módulo puro) lee los dos.
