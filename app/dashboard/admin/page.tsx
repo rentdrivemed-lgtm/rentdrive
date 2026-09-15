@@ -12,6 +12,9 @@ import AuditoriaPanel from '@/components/AuditoriaPanel';
 import CalculadoraPanel from '@/components/CalculadoraPanel';
 import NfcCardsPanel from '@/components/NfcCardsPanel';
 import ReservaMostradorModal from '@/components/ReservaMostradorModal';
+import DocumentoVista from '@/components/DocumentoVista';
+import BotonPaqueteDocumentos from '@/components/BotonPaqueteDocumentos';
+import PolizaVehiculoAdmin from '@/components/PolizaVehiculoAdmin';
 import {
   puede, normalizarNivel, NIVEL_LABEL, NIVELES, GRUPOS_AREAS, areaLabel,
   parsePermisosExtra, type AdminNivel, type PermisosExtra, type PermisosExtraDelta,
@@ -32,6 +35,12 @@ type Usuario = {
   direccion?: string; ciudad?: string;
   numero_licencia?: string; contacto_emergencia?: string;
   cedula_url?: string; cedula_url_dorso?: string;
+  // Documentos del perfil que antes no se mostraban en ninguna pantalla — en
+  // particular el certificado bancario del propietario, que se pedía como
+  // obligatorio y después no había forma de verlo (ver GET /api/admin/usuarios).
+  licencia_url?: string; licencia_url_dorso?: string;
+  certificado_bancario_url?: string;
+  banco?: string; numero_cuenta?: string;
 };
 type DocItem = { url: string; vence?: string };
 // `todo_riesgo` ya no aparece acá (sep-2026): DrivePass expide la póliza directamente, así
@@ -348,6 +357,10 @@ function DashboardAdminInner() {
   const [clienteDocs, setClienteDocs] = useState<{ r: ReservaCalendario & {
     documento_id_url?: string; documento_id_url_dorso?: string; documento_es_pasaporte?: number;
     licencia_url?: string; licencia_url_dorso?: string;
+    // Llega en el `SELECT r.*` de GET /api/reservas; el tipo compartido
+    // `ReservaCalendario` no lo declara porque el calendario no lo usa. Acá hace
+    // falta para armar el enlace al paquete de documentos de ESE cliente.
+    usuario_id?: number;
   } } | null>(null);
   const [rechazando, setRechazando] = useState<{ id: number; nota: string } | null>(null);
   // Reserva creada en el punto de atención (cliente presencial) — ver
@@ -2110,6 +2123,17 @@ function DashboardAdminInner() {
                   </div>
                 ))}
               </div>
+              {/* Paquete completo del CLIENTE: además de los documentos de esta reserva,
+                  trae los de su perfil y los de sus otras reservas en un solo .zip. */}
+              {r.usuario_id ? (
+                <div className="mt-4 pt-4 border-t border-border">
+                  <BotonPaqueteDocumentos
+                    endpoint={`/api/admin/usuarios/${r.usuario_id}/paquete`}
+                    autoInfo
+                    nota="Todos los documentos de este cliente (perfil y reservas). Queda registrado en la Bitácora."
+                  />
+                </div>
+              ) : null}
               <div className="mt-4 flex justify-end">
                 <button
                   onClick={() => { setClienteDocs(null); verificarArrendatario(r.id, r.usuario_nombre); }}
@@ -2539,6 +2563,24 @@ function DashboardAdminInner() {
                   })}
                 </div>
               )}
+
+              {/* Carátula de la póliza todo riesgo — la carga DrivePass, no el propietario.
+                  Va FUERA de la lista de arriba (y fuera del `tieneDocs`) a propósito: no
+                  pertenece al flujo de revisión del propietario, no cuenta para el estado
+                  agregado y tiene que poder cargarse aunque el carro todavía no tenga ningún
+                  otro documento. Ver lib/poliza-vehiculo.ts. */}
+              <div className="mt-4">
+                <PolizaVehiculoAdmin
+                  key={v.id}
+                  vehiculoId={v.id}
+                  documentos={v.documentos}
+                  titulo={`${v.marca} ${v.modelo} ${v.anio}${v.placa ? ` · ${v.placa}` : ''}`}
+                  onGuardado={docsJson => {
+                    setVehiculos(vs => vs.map(x => x.id === v.id ? { ...x, documentos: docsJson } : x));
+                    setDocModal(d => d ? { v: { ...d.v, documentos: docsJson } } : null);
+                  }}
+                />
+              </div>
             </div>
           </div>
         );
@@ -2590,25 +2632,7 @@ function DashboardAdminInner() {
                 {/* Foto de la cédula (frente y dorso) */}
                 <div className="grid grid-cols-2 gap-3">
                   {[{ label: 'Cédula (frente)', url: u.cedula_url }, { label: 'Cédula (dorso)', url: u.cedula_url_dorso }].map(d => (
-                    <div key={d.label} className="bg-surface rounded-xl p-3 border border-border">
-                      <p className="text-[10px] text-ink/50 uppercase tracking-wide mb-1.5">{d.label}</p>
-                      {d.url ? (
-                        d.url.toLowerCase().endsWith('.pdf') ? (
-                          <a href={d.url} target="_blank" rel="noopener noreferrer"
-                            className="inline-flex items-center gap-2 text-sm text-accent hover:underline">
-                            📄 Ver PDF
-                          </a>
-                        ) : (
-                          <a href={d.url} target="_blank" rel="noopener noreferrer" className="block">
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={d.url} alt={d.label} className="max-h-44 w-auto rounded-lg border border-border hover:opacity-90 transition" />
-                            <span className="text-[11px] text-ink/50 mt-1 inline-block">Clic para ampliar</span>
-                          </a>
-                        )
-                      ) : (
-                        <p className="text-sm text-ink/50">No subido.</p>
-                      )}
-                    </div>
+                    <DocumentoVista key={d.label} label={d.label} url={d.url} titulo={u.nombre} />
                   ))}
                 </div>
 
@@ -2632,15 +2656,63 @@ function DashboardAdminInner() {
                     existe (cuentas viejas de propietario que alcanzaron a llenarlo). La
                     columna NO se tocó: la usa la verificación con IA de los documentos del
                     arrendatario (ver app/api/verificar-documentos/route.ts). */}
-                {(u.rol !== 'propietario' || !!u.numero_licencia) && (
+                {(u.rol !== 'propietario' || !!u.numero_licencia || !!u.licencia_url) && (
                   <>
                     <p className="text-[10px] font-bold text-ink/50 uppercase tracking-widest pt-1">Licencia de conducción</p>
                     <div className="bg-surface rounded-xl p-3 border border-border">
                       <p className="text-[10px] text-ink/50 uppercase tracking-wide mb-0.5">Número de licencia</p>
                       <p className="text-sm font-semibold text-ink font-mono">{u.numero_licencia || '—'}</p>
                     </div>
+                    {/* Las fotos de la licencia del PERFIL (`usuarios.licencia_url`) tampoco se
+                        mostraban acá: solo se veían las de cada reserva. */}
+                    {(u.licencia_url || u.licencia_url_dorso) && (
+                      <div className="grid grid-cols-2 gap-3">
+                        <DocumentoVista label="Licencia (frente)" url={u.licencia_url} titulo={u.nombre} />
+                        <DocumentoVista label="Licencia (dorso)" url={u.licencia_url_dorso} titulo={u.nombre} />
+                      </div>
+                    )}
                   </>
                 )}
+
+                {/* Sección: Datos bancarios (propietarios).
+                    El certificado bancario se le pide al propietario como OBLIGATORIO al
+                    completar su perfil y se guarda en `usuarios.certificado_bancario_url`,
+                    pero hasta ahora no se mostraba en ninguna pantalla del equipo: no había
+                    forma de verificarlo ni de descargarlo para hacer la transferencia. */}
+                {(u.rol === 'propietario' || !!u.certificado_bancario_url || !!u.banco) && (
+                  <>
+                    <p className="text-[10px] font-bold text-ink/50 uppercase tracking-widest pt-1">Datos bancarios</p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="bg-surface rounded-xl p-3 border border-border">
+                        <p className="text-[10px] text-ink/50 uppercase tracking-wide mb-0.5">Banco</p>
+                        <p className="text-sm font-semibold text-ink">{u.banco || '—'}</p>
+                      </div>
+                      <div className="bg-surface rounded-xl p-3 border border-border">
+                        <p className="text-[10px] text-ink/50 uppercase tracking-wide mb-0.5">Número de cuenta</p>
+                        <p className="text-sm font-semibold text-ink font-mono break-all">{u.numero_cuenta || '—'}</p>
+                      </div>
+                    </div>
+                    <DocumentoVista
+                      label="Certificado bancario"
+                      url={u.certificado_bancario_url}
+                      titulo={`${u.nombre} — certificado bancario`}
+                      vacio="No lo ha subido todavía."
+                      nota="Emitido por el banco, máximo 3 meses de antigüedad."
+                    />
+                  </>
+                )}
+
+                {/* Paquete completo: un solo .zip con la cédula, la licencia, el certificado
+                    bancario y los documentos de todos sus vehículos y reservas. Se arma en el
+                    servidor y cada descarga queda en la Bitácora. */}
+                <div className="pt-1">
+                  <p className="text-[10px] font-bold text-ink/50 uppercase tracking-widest mb-2">Todos sus documentos</p>
+                  <BotonPaqueteDocumentos
+                    endpoint={`/api/admin/usuarios/${u.id}/paquete`}
+                    autoInfo
+                    nota="Contiene datos personales. La descarga queda registrada en la Bitácora."
+                  />
+                </div>
 
                 {/* Sección: Dirección */}
                 <p className="text-[10px] font-bold text-ink/50 uppercase tracking-widest pt-1">Dirección</p>

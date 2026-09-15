@@ -41,15 +41,19 @@ export function esUrlDeStorageValida(url: unknown): boolean {
  */
 function urlsDeDocumentos(documentosJson: string | undefined | null): unknown[] | null {
   if (!documentosJson) return [];
-  let docs: Record<string, unknown>;
+  let docs: unknown;
   try {
     docs = JSON.parse(documentosJson);
   } catch {
     return null;
   }
-  if (!docs || typeof docs !== 'object') return null;
+  // `typeof [] === 'object'`, así que sin `Array.isArray` un `documentos: "[]"` pasaba por
+  // objeto válido y `[].every(...)` daba `true`: el JSON que BORRA todos los documentos se
+  // consideraba válido. Un array (o un número, o `null`) no es un JSON de documentos: se
+  // rechaza igual que un JSON roto, fallando cerrado.
+  if (!docs || typeof docs !== 'object' || Array.isArray(docs)) return null;
   const urls: unknown[] = [];
-  for (const valor of Object.values(docs)) {
+  for (const valor of Object.values(docs as Record<string, unknown>)) {
     if (!valor || typeof valor !== 'object') continue;
     const doc = valor as Record<string, unknown>;
     if (doc.url !== undefined) urls.push(doc.url);

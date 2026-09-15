@@ -6,8 +6,9 @@ import { precioMercadoSugerido, segmentoValido } from '@/lib/precioMercado';
 import { eliminarVehiculoInteligente } from '@/lib/eliminar';
 import { registrarAuditoria } from '@/lib/permisos';
 import { contieneLenguajeInapropiado, extraerUrlsFotos, fotosRegistradasEntre, normalizarUrlFoto } from '@/lib/moderacion';
-import { documentosConUrlsValidas } from '@/lib/storage';
+import { documentosConUrlsValidas, esUrlDeStorageValida } from '@/lib/storage';
 import { tecnoRequerida } from '@/lib/tecnomecanica';
+import { CLAVE_POLIZA, POLIZA_LABEL, leerPoliza, normalizarPolizaEntrada, parsearDocumentos, quitarPolizaDeEntrada } from '@/lib/poliza-vehiculo';
 import { esCombustibleValido, inscripcionExencionConfirmada, requiereInscripcionExencion, sanitizarClaseVehiculo } from '@/lib/vehiculo-campos';
 import { filtrarVehiculo } from '@/lib/vehiculo-publico';
 import {
@@ -145,7 +146,18 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
   }
 
-  const body = await req.json();
+  // `await req.json()` lanza con un cuerpo vacío o con JSON roto, y sin esta guarda eso
+  // sale como un 500 sin mensaje, y este es el endpoint que además escribe documentos y
+  // póliza: no puede responder ruido a una entrada malformada.
+  let body; // evolving-any, igual que el `await req.json()` de antes
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'No pudimos leer los datos enviados.' }, { status: 400 });
+  }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return NextResponse.json({ error: 'No pudimos leer los datos enviados.' }, { status: 400 });
+  }
 
   // Filtro de lenguaje inapropiado en la descripción (texto libre público). Igual criterio
   // que POST /api/vehiculos: se rechaza el request completo con un mensaje claro en vez de
@@ -362,6 +374,78 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     return NextResponse.json({ ok: true, documentos_estado: newEstado, documentos_nota: newNota, documentos_revisiones: JSON.stringify(revs) });
   }
 
+  // ── Carátula de la póliza todo riesgo: SOLO el admin (ver lib/poliza-vehiculo.ts) ──
+  //
+  // Desde sep-2026 la póliza la expide DrivePass, así que la carátula la tiene la
+  // empresa y no el propietario: es el único documento del vehículo que carga el
+  // equipo. Va por una acción propia (`body.poliza`) y no por el JSON de
+  // `documentos` —que está en `ownFields` y por lo tanto lo escribe el propietario—
+  // para que el control de escritura sea explícito y quede auditado.
+  //
+  //  · `body.poliza = { url, vence }` → carga o reemplaza.
+  //  · `body.poliza = null`           → la quita.
+  //
+  // NO toca `documentos_revisiones` ni `documentos_estado`: esta clave queda fuera
+  // del flujo de revisión y del estado agregado a propósito (`DOC_KEYS` /
+  // `clavesRelevantes` no la incluyen). Bloquear la publicación de un carro por un
+  // documento que el propietario no puede subir sería castigarlo por una tarea de
+  // la empresa.
+  if (body.poliza !== undefined) {
+    if (!isAdmin) {
+      return NextResponse.json(
+        { error: 'La carátula de la póliza la gestiona DrivePass. No puedes modificarla desde tu panel.' },
+        { status: 403 },
+      );
+    }
+
+    const fila = db.prepare('SELECT documentos, marca, modelo, anio FROM vehiculos WHERE id = ?')
+      .get(Number(id)) as { documentos: string; marca: string; modelo: string; anio: number } | undefined;
+    if (!fila) return NextResponse.json({ error: 'No encontrado' }, { status: 404 });
+
+    let docs: Record<string, unknown> = {};
+    try {
+      const parsed = JSON.parse(fila.documentos || '{}');
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) docs = parsed as Record<string, unknown>;
+    } catch { /* JSON corrupto: se reconstruye con la póliza y nada más */ }
+
+    const anterior = leerPoliza(docs);
+    let accion: string;
+    let detalle: string;
+    const vLabel = `${fila.marca} ${fila.modelo} ${fila.anio}`;
+
+    if (body.poliza === null) {
+      if (!anterior) return NextResponse.json({ error: 'Este vehículo no tiene póliza cargada.' }, { status: 400 });
+      delete docs[CLAVE_POLIZA];
+      accion = 'quitar_poliza_vehiculo';
+      detalle = `Quitó la ${POLIZA_LABEL.toLowerCase()} de ${vLabel}`;
+    } else {
+      const normalizada = normalizarPolizaEntrada(body.poliza);
+      if (!normalizada.ok) return NextResponse.json({ error: normalizada.error }, { status: 400 });
+      // La URL tiene que venir de una subida real a NUESTRO storage. Se exime la que
+      // ya estaba guardada (mismo criterio que `documentosConUrlsValidas`): reemplazar
+      // solo la fecha de vencimiento no debe fallar por una URL legada.
+      if (normalizada.poliza.url !== anterior?.url && !esUrlDeStorageValida(normalizada.poliza.url)) {
+        return NextResponse.json({ error: 'Documento inválido, vuelve a subirlo' }, { status: 400 });
+      }
+      // `defineProperty` y no `docs[CLAVE_POLIZA] = …` por el mismo motivo que en la
+      // preservación de claves legadas más abajo: un `__proto__` guardado en el JSON
+      // de la BD no debe disparar un setter del prototipo.
+      Object.defineProperty(docs, CLAVE_POLIZA, {
+        value: normalizada.poliza, writable: true, enumerable: true, configurable: true,
+      });
+      accion = anterior ? 'reemplazar_poliza_vehiculo' : 'cargar_poliza_vehiculo';
+      detalle = `${anterior ? 'Reemplazó' : 'Cargó'} la ${POLIZA_LABEL.toLowerCase()} de ${vLabel} (vence ${normalizada.poliza.vence})`;
+    }
+
+    db.prepare('UPDATE vehiculos SET documentos = ? WHERE id = ?').run(JSON.stringify(docs), Number(id));
+
+    registrarAuditoria(db, user, {
+      area: 'vehiculos', accion, entidad: 'vehiculo', entidad_id: Number(id), detalle,
+    });
+
+    return NextResponse.json({ ok: true, documentos: JSON.stringify(docs) });
+  }
+
   // Reglas de disponibilidad (ver lib/disponibilidad-reglas.ts): el propietario
   // las ve siempre en el panel de su calendario, pero NO se bloquean acá.
   // El calendario se guarda clic por clic — un propietario que recién empieza a
@@ -495,24 +579,61 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   // el body se re-inyecta antes de escribir. Ningún flujo de la app borra claves de
   // `documentos` (el formulario siempre reenvía las que conoce, y el admin solo escribe
   // `documentos_revisiones`), así que esto no bloquea nada real.
+  //
+  // ⚠️ FALLA CERRADO (sep-2026). Antes, si el body no parseaba como objeto, este bloque se
+  // SALTABA en silencio y el valor crudo llegaba igual al UPDATE. Como `typeof [] === 'object'`,
+  // un `documentos: "[]"` entraba acá, se le re-inyectaban las claves con `defineProperty`
+  // sobre un array (que `JSON.stringify` descarta) y terminaba escribiendo `'[]'`: SOAT, tecno,
+  // tarjeta, la legada `todo_riesgo` y la póliza de la empresa borrados de un plumazo, con 200 y
+  // sin auditoría. Ahora todo lo que no sea un objeto JSON plano se rechaza con 400.
   if (traeDocumentosNuevos) {
-    let docsBody: unknown = null;
-    let docsBD: Record<string, unknown> = {};
-    try { docsBody = JSON.parse(String(body.documentos ?? '{}')); } catch { docsBody = null; }
-    try { docsBD = JSON.parse(String(vehiculo.documentos ?? '{}')) as Record<string, unknown>; } catch { /* JSON corrupto en BD: no hay nada que preservar */ }
-    if (docsBody && typeof docsBody === 'object' && docsBD && typeof docsBD === 'object') {
-      const destino = docsBody as Record<string, unknown>;
-      let agregadas = false;
-      for (const [clave, valor] of Object.entries(docsBD)) {
+    const entrada = parsearDocumentos(body.documentos);
+    if (!entrada.ok) return NextResponse.json({ error: entrada.error }, { status: 400 });
+    const destino = entrada.docs;
+
+    // El JSON guardado sí se lee de forma tolerante: si está corrupto no hay nada que
+    // preservar, pero eso no es culpa de quien está editando.
+    const guardado = parsearDocumentos(vehiculo.documentos);
+    if (guardado.ok) {
+      for (const [clave, valor] of Object.entries(guardado.docs)) {
         if (Object.hasOwn(destino, clave)) continue;
         // `defineProperty` y no `destino[clave] = valor`: una clave `__proto__` guardada en el
         // JSON dispararía el setter de Object.prototype (cambiaría el prototipo del objeto en
         // vez de agregar la clave). Definirla como propiedad propia hace lo que se espera.
         Object.defineProperty(destino, clave, { value: valor, writable: true, enumerable: true, configurable: true });
-        agregadas = true;
       }
-      if (agregadas) body.documentos = JSON.stringify(destino);
     }
+    body.documentos = JSON.stringify(destino);
+  }
+
+  // ── `documentos.poliza`: la carga DrivePass, no el propietario ──
+  //
+  // ESTE ES EL PUNTO DELICADO. `documentos` está en `ownFields` (más abajo), o sea
+  // que el propietario manda el JSON COMPLETO de sus documentos. Sin este bloque,
+  // bastaría con que agregara `{"poliza":{"url":"…","vence":"…"}}` a ese JSON para
+  // escribir —o borrar— un documento que solo le corresponde a la empresa (subir un
+  // archivo propio a Cloudinary es trivial para cualquier usuario con sesión, ver
+  // POST /api/upload/documento, así que `documentosConUrlsValidas` no lo frena).
+  //
+  // La regla es simple y no depende de qué mande el cliente: si quien edita NO es
+  // admin, el valor de `poliza` que se escribe es SIEMPRE el que ya está en la BD —
+  // y si en la BD no hay ninguno, la clave se elimina del body. El propietario puede
+  // mandar lo que quiera en esa clave: nunca llega al UPDATE.
+  //
+  // (El admin no pasa por acá: carga y quita la póliza por la acción `body.poliza`
+  // de más arriba, que además la audita.)
+  //
+  // La barrera es UNA sola función (`quitarPolizaDeEntrada`, lib/poliza-vehiculo.ts) y la
+  // comparte con POST /api/vehiculos, que es el OTRO camino por el que el propietario
+  // escribe `documentos` (al crear el carro). Dos bloques copiados se desincronizan: eso
+  // fue exactamente lo que pasó — el POST nunca tuvo barrera.
+  //
+  // También falla cerrado: un `documentos` que no sea objeto JSON plano da 400 en vez de
+  // saltarse el bloque (que es como un array conseguía esquivar la barrera entera).
+  if (traeDocumentosNuevos && !isAdmin) {
+    const barrera = quitarPolizaDeEntrada(body.documentos, vehiculo.documentos);
+    if (!barrera.ok) return NextResponse.json({ error: barrera.error }, { status: 400 });
+    body.documentos = barrera.json;
   }
 
   // ── Validación de URLs de documentos (Punto 3) ──

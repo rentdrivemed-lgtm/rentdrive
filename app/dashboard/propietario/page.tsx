@@ -20,6 +20,9 @@ import FirmaCanvas from '@/components/FirmaCanvas';
 import { descargarCuentaCobroPDF } from '@/lib/contabilidad-pdf';
 import { tecnoRequerida } from '@/lib/tecnomecanica';
 import { urlDescarga } from '@/lib/cloudinary-descarga';
+import DocumentoVista from '@/components/DocumentoVista';
+import BotonPaqueteDocumentos from '@/components/BotonPaqueteDocumentos';
+import { POLIZA_LABEL, estadoPoliza, hoyColombia, leerPoliza } from '@/lib/poliza-vehiculo';
 import MisBusesPanel from '@/components/buses/MisBusesPanel';
 
 // Opciones de categoría (mismas 6 que la calculadora de mercado) para el selector.
@@ -2023,10 +2026,50 @@ function DashboardPropietarioInner() {
                   })()}
                 </div>
 
-                {/* Seguro todo riesgo: bloque retirado en sep-2026 — DrivePass expide la póliza
-                    directamente, así que ya no se le pide al propietario. Los vehículos que ya
-                    la habían subido conservan `documentos.todo_riesgo` en la base y su archivo;
-                    `editDocs` lo arrastra intacto al guardar (ver el tipo `Documentos` arriba). */}
+                {/* Seguro todo riesgo: el recuadro de SUBIDA se retiró en sep-2026 — DrivePass
+                    expide la póliza directamente, así que ya no se le pide al propietario. Los
+                    vehículos que ya la habían subido conservan `documentos.todo_riesgo` en la
+                    base y su archivo; `editDocs` lo arrastra intacto al guardar (ver el tipo
+                    `Documentos` arriba).
+
+                    Lo que sí se muestra ahora es la CARÁTULA DE LA PÓLIZA que expide DrivePass
+                    (`documentos.poliza`, ver lib/poliza-vehiculo.ts): es la póliza de SU carro,
+                    así que la ve, la amplía y la descarga — pero en modo lectura, porque la
+                    carga el equipo. Que acá no haya formulario es cosmético: quien impide que
+                    la escriba es PUT /api/vehiculos/[id], que le arranca la clave `poliza` del
+                    JSON de `documentos` aunque la mande a mano. */}
+                {(() => {
+                  const poliza = leerPoliza(fDet);
+                  const estado = poliza ? estadoPoliza(poliza.vence, hoyColombia()) : null;
+                  return (
+                    <div className="bg-surface rounded-xl p-3 border border-border space-y-2 sm:col-span-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs font-semibold text-ink">{POLIZA_LABEL}</p>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-accent/15 text-accent border border-accent/25 whitespace-nowrap">
+                          La gestiona DrivePass
+                        </span>
+                      </div>
+                      {poliza ? (
+                        <>
+                          <DocumentoVista
+                            label="Carátula de la póliza"
+                            url={poliza.url}
+                            titulo={`${vehiculoEditando.marca} ${vehiculoEditando.modelo} ${vehiculoEditando.anio}`}
+                            className="bg-surface-2 rounded-xl p-3 border border-border"
+                            nota={poliza.vence ? `Vence: ${poliza.vence}` : 'Sin fecha de vencimiento registrada.'}
+                          />
+                          {estado === 'vencida' && <p className="text-[11px] font-semibold text-danger">⚠ Esta póliza está vencida. Escríbenos para que la actualicemos.</p>}
+                          {estado === 'por_vencer' && <p className="text-[11px] font-semibold text-warning">⚠ La póliza vence pronto. Nosotros nos encargamos de renovarla.</p>}
+                        </>
+                      ) : (
+                        <p className="text-[11px] text-ink/50">
+                          Todavía no hemos cargado la carátula de la póliza de este vehículo. La expedimos nosotros:
+                          no tienes que subir nada.
+                        </p>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
 
               <div className="flex items-center gap-3 mt-4">
@@ -2147,6 +2190,43 @@ function DashboardPropietarioInner() {
                 Documento emitido por el banco. Máximo 3 meses de antigüedad.
               </p>
             </div>
+
+            {/* Ver y descargar el certificado que YA está guardado.
+                El recuadro de arriba es de SUBIDA: muestra una miniatura recortada de 80 px
+                y, si es un PDF, solo el nombre del archivo — con eso nadie puede releer su
+                propio certificado ni volver a mandárselo al banco. Acá se puede abrir a
+                pantalla completa (con zoom, que es lo que hace falta para leer un número de
+                cuenta) y descargar el archivo real.
+                Se muestra el valor GUARDADO (`user`), no el del formulario (`perfil`): si
+                acaba de subir uno nuevo y todavía no le ha dado "Guardar perfil", lo que hay
+                en el sistema sigue siendo el anterior y es el que se descarga. */}
+            {user?.certificado_bancario_url && (
+              <DocumentoVista
+                label="Certificado bancario guardado"
+                url={user.certificado_bancario_url}
+                titulo={`${user.nombre} — certificado bancario`}
+                className="bg-surface rounded-xl p-3 border border-border mt-3"
+                nota={
+                  perfil.certificado_bancario_url && perfil.certificado_bancario_url !== user.certificado_bancario_url
+                    ? 'Acabas de subir uno nuevo: se reemplazará cuando guardes el perfil.'
+                    : undefined
+                }
+              />
+            )}
+          </div>
+
+          {/* Paquete completo del propietario: su cédula, su certificado bancario y, por cada
+              carro suyo, la tarjeta de propiedad, el SOAT, la tecno-mecánica y la carátula de
+              la póliza que expide DrivePass. Lo arma el servidor (GET /api/perfil/paquete),
+              que solo devuelve los documentos de QUIEN PIDE — no hay ningún id en la petición. */}
+          <div className="bg-surface-2 rounded-2xl border border-border p-5">
+            <h2 className="font-bold text-ink mb-1">Tus documentos</h2>
+            <p className="text-xs text-ink/50 mb-4">
+              Descarga en un solo archivo .zip todo lo que tenemos tuyo y de tus vehículos:
+              cédula, certificado bancario, tarjeta de propiedad, SOAT, tecno-mecánica y la
+              carátula de la póliza. Trae un índice (LEEME.txt) con el detalle.
+            </p>
+            <BotonPaqueteDocumentos endpoint="/api/perfil/paquete" etiqueta="Descargar mis documentos" autoInfo />
           </div>
 
           {/* Save button */}
