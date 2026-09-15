@@ -9,7 +9,7 @@
 | 1 | Precio total transparente "Sin sorpresas" | Alto | Bajo–Medio | `vehiculos/[id]`, `pago`, `VehiculoCard`, `lib/lugares.ts` |
 | 2 | Calculadora de ingresos para propietarios | Alto | Medio | `propietarios-info`, `dashboard/propietario` |
 | 3 | Confianza progresiva: badges + "Trust meter" | Alto | Medio | `vehiculos/[id]`, perfil, dashboard, schema |
-| 4 | "Tu viaje en Medellín": pico y placa + peajes + clima | Alto | Medio | `vehiculos/[id]` (reusa `picoYPlaca.ts` + `lugares.ts`) |
+| 4 | "Tu viaje en Medellín": pico y placa + peajes + clima | Alto | Medio | `vehiculos/[id]` (reusa `pico-placa.ts` + `lugares.ts`) |
 | 5 | Reseñas con fotos del viaje | Alto | Medio–Alto | `vehiculos/[id]`, tabla `resenas`, `FotoUpload` |
 | 6 | Handoff guiado: checklist + fotos antes/después | Alto | Medio | flujo reserva, `FotoUpload`, `reservas/[id]` |
 | 7 | Reserva exprés (1 toque, glass sticky bar) | Medio–Alto | Bajo–Medio | `vehiculos/[id]`, `CalendarioReserva` |
@@ -21,7 +21,7 @@
 
 ## Fichas (resumen)
 
-**1. Precio total transparente "Sin sorpresas".** Desglose completo (días × tarifa + recargo aeropuerto + depósito + seguro) antes de avanzar, estilo upfront pricing de Uber. Reusa `calcularRecargo`/`RECARGO_AEROPUERTO`. Mantener paridad client/server. Bajo–medio.
+**1. Precio total transparente "Sin sorpresas".** Desglose completo (días × tarifa + recargo aeropuerto + depósito + seguro) antes de avanzar, estilo upfront pricing de Uber. Reusa `calcularRecargo`/`LUGARES` (`lib/lugares.ts`). Mantener paridad client/server. Bajo–medio.
 
 **2. Calculadora de ingresos ("Monetiza tu carro").** Widget con slider de días → estimado mensual animado (Airbnb "What's my place worth"). Ataca el cuello de botella del marketplace (oferta). Fórmula = `precio_dia_promedio_por_tipo × días − comisión`. Medio. Riesgo: no sobre-prometer ("aprox." + supuestos).
 
@@ -50,7 +50,7 @@
 
 **Secuencia:** #1 (semana 1) → #2 (semana 2) → #3 (semanas 3–4, requiere migración de schema + auditoría). Luego #7 y #9 (baratos y visibles); reservar #4/#5/#6/#10 para diferenciación profunda.
 
-> Las ideas #1, #4, #6 y #7 reusan helpers/componentes existentes (`lib/lugares.ts`, `lib/picoYPlaca.ts`, `FotoUpload`, `.glass/.shimmer/.fade-up`) → esfuerzo real menor. Todo lo que toque schema debe replicarse en `supabase/schema.sql`; lo que toque identidad/uploads/roles pasa por `auditor-seguridad`.
+> Las ideas #1, #4, #6 y #7 reusan helpers/componentes existentes (`lib/lugares.ts`, `lib/pico-placa.ts`, `FotoUpload`, `.glass/.shimmer/.fade-up`) → esfuerzo real menor. Todo lo que toque schema debe replicarse en `supabase/schema.sql`; lo que toque identidad/uploads/roles pasa por `auditor-seguridad`.
 
 ### Fuentes
 Uber upfront pricing · unicornplatform (car rental booking 2026) · Airbnb earnings tool · craftinnovations (Revolut/Nubank/Monzo onboarding) · raw.studio (Airbnb +25% trust UX) · First Round (marketplace trust & liquidity) · miracuves (cómo funciona Turo) · Quora-Turo (convencer dueños) · Mantlr (Stripe/Linear/Vercel premium UI) · Medium/yousufraza (car rental mobile UI) · SafetyCulture / MobileCarCare (inspección/handoff) · Axios (Turo seguridad).

@@ -53,7 +53,7 @@ Ejecuta con el respaldo (Prioridad 0) ya resuelto.
 ---
 
 ## Cross-cutting (siempre)
-- **Contenido SEO local:** volver `lib/picoYPlaca.ts` página pública + guías ("requisitos para alquilar en Medellín", "pico y placa 2026", "¿Rionegro tiene pico y placa?"). Bajo costo, alto retorno. *(auditoría-seo, go-to-market)*
+- **Contenido SEO local:** volver `lib/pico-placa.ts` página pública + guías ("requisitos para alquilar en Medellín", "pico y placa 2026", "¿Rionegro tiene pico y placa?"). Bajo costo, alto retorno. *(auditoría-seo, go-to-market)*
 - **Google Business Profile** + Search Console.
 - **Alianzas:** aeropuerto JMC, hoteles El Poblado, nómadas digitales (~8.000/mes), parqueaderos residenciales.
 
