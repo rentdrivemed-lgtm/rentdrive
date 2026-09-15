@@ -164,7 +164,9 @@ export default function DocUpload({ label, value, onChange, required, soloImagen
         />
       )}
       {recorteUrl && (
-        <RecortarImagen imagenUrl={recorteUrl} onConfirmar={confirmarRecorte} onCancelar={cancelarRecorte} />
+        // `key` para que cada foto entre al editor con el estado limpio (zoom,
+        // giro y proporción) aunque se reemplace la imagen sin desmontar.
+        <RecortarImagen key={recorteUrl} imagenUrl={recorteUrl} onConfirmar={confirmarRecorte} onCancelar={cancelarRecorte} />
       )}
     </div>
   );
