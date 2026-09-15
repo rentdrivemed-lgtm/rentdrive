@@ -73,7 +73,58 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     return NextResponse.json({ ok: true, cancelacion_pct: 100, no_show: true });
   }
 
-  const allowed = ['estado', 'pago_estado', 'fotos_antes', 'fotos_despues'];
+  // ── Qué puede escribir cada rol ───────────────────────────────────────────
+  //
+  // ⚠️ CRÍTICO: en esta app NO hay pasarela de pago. Que un administrador apruebe la
+  // reserva (`estado: 'confirmada'` + `pago_estado: 'pagado'`) ES el registro de que
+  // el pago entró: dispara la factura, la liquidación al propietario, la recompensa
+  // del referido y la creación de la operación logística (el carro sale a la calle).
+  // Antes, `estado` y `pago_estado` estaban en una sola lista `allowed` común a todos
+  // los roles, así que el propio arrendatario —o el propietario del vehículo— podía
+  // hacer PUT {estado:'confirmada', pago_estado:'pagado'} sobre su propia reserva y
+  // darse por aprobado sin que nadie cobrara nada. El chequeo de rol que hay más
+  // abajo (`user.rol === 'admin' && body.estado === 'confirmada'`) solo condiciona el
+  // aviso y la operación; el UPDATE ya había ocurrido.
+  //
+  // Ahora los estados se validan por ROL, no solo el campo:
+  //   · admin  → cualquier estado válido de la reserva y del pago;
+  //   · usuario (el arrendatario) y propietario → SOLO 'cancelada' sobre su propia
+  //     reserva. Cancelar es lo único que la interfaz les ofrece (el modal de
+  //     cancelación del dashboard), y la política 72h/50% la sigue calculando el
+  //     servidor.
+  // `pago_estado` y las columnas de fotos quedan reservadas al administrador.
+  const ESTADOS_RESERVA = ['pendiente', 'confirmada', 'en_curso', 'completada', 'cancelada'];
+  const ESTADOS_PAGO = ['pendiente', 'pagado', 'cancelado'];
+  const ESTADOS_POR_ROL: Record<string, readonly string[]> = {
+    admin: ESTADOS_RESERVA,
+    propietario: ['cancelada'],
+    usuario: ['cancelada'],
+  };
+
+  if (body.estado !== undefined) {
+    const permitidos = ESTADOS_POR_ROL[user.rol] ?? [];
+    if (!ESTADOS_RESERVA.includes(body.estado)) {
+      return NextResponse.json({ error: 'Estado de reserva inválido' }, { status: 400 });
+    }
+    if (!permitidos.includes(body.estado)) {
+      return NextResponse.json(
+        { error: 'Solo un administrador puede cambiar la reserva a ese estado. Desde tu cuenta solo puedes cancelarla.' },
+        { status: 403 },
+      );
+    }
+  }
+  if (body.pago_estado !== undefined) {
+    if (user.rol !== 'admin') {
+      return NextResponse.json({ error: 'Solo un administrador puede registrar el estado del pago' }, { status: 403 });
+    }
+    if (!ESTADOS_PAGO.includes(body.pago_estado)) {
+      return NextResponse.json({ error: 'Estado de pago inválido' }, { status: 400 });
+    }
+  }
+
+  const allowed = user.rol === 'admin'
+    ? ['estado', 'pago_estado', 'fotos_antes', 'fotos_despues']
+    : ['estado'];
   const updates = allowed.filter(f => body[f] !== undefined).map(f => `${f} = ?`).join(', ');
   const values = allowed.filter(f => body[f] !== undefined).map(f => body[f]);
 
