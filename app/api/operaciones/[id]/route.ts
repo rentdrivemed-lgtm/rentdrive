@@ -3,8 +3,16 @@ import { guardArea } from '@/lib/guard';
 import { cargarDetalleServicio, mensajeMensajero, mensajeAdmin, getConfig, recomputarEstadoOperacion, ejecutarInspeccion, appBaseUrl } from '@/lib/operaciones';
 import { enviarWhatsapp } from '@/lib/whatsapp';
 import { tieneClaveAnthropic } from '@/lib/anthropic';
+import { limiteInspeccion, faltanFotosParaInspeccion } from '@/lib/inspeccion-vehiculo';
 
 export const dynamic = 'force-dynamic';
+// La inspección con IA manda hasta 16 fotos en una sola llamada a Claude: puede
+// tardar bastante más que el resto de acciones de esta ruta (mismo valor que ya
+// usa /api/m/[token], que ejecuta exactamente la misma inspección).
+// OJO: en el despliegue actual (Railway con Docker) este valor no corta nada —
+// solo lo respetan plataformas tipo Vercel. El tope real de la inspección vive
+// en lib/inspeccion-vehiculo.ts (TIMEOUT_LLAMADA_MS / PRESUPUESTO_TOTAL_MS).
+export const maxDuration = 60;
 
 type Op = { id: number; reserva_id: number; mensajero_id: number | null; estado: string; notas: string };
 
@@ -83,6 +91,14 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       if (!tieneClaveAnthropic()) {
         return NextResponse.json({ error: 'La inspección con IA no está configurada: falta ANTHROPIC_API_KEY.' }, { status: 503 });
       }
+      // Los chequeos BARATOS van antes de gastar un intento del límite: el fallo
+      // más común (todavía no hay fotos de un juego) no llega a descargar nada
+      // ni a llamar a la IA, así que no tiene por qué consumir cuota.
+      const fotosOp = db.prepare('SELECT fotos_salida, fotos_entrada FROM operaciones WHERE id = ?').get(opId) as { fotos_salida: string | null; fotos_entrada: string | null } | undefined;
+      const faltan = faltanFotosParaInspeccion(fotosOp?.fotos_salida, fotosOp?.fotos_entrada);
+      if (faltan) return NextResponse.json({ error: faltan }, { status: 400 });
+      const excedido = limiteInspeccion(`admin:${g.user.id}`);
+      if (excedido) return NextResponse.json({ error: excedido }, { status: 429 });
       try {
         await ejecutarInspeccion(db, opId);
       } catch (e) {

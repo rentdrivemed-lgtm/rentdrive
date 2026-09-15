@@ -2,8 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { cargarDetalleServicio, recomputarEstadoOperacion, ejecutarInspeccion } from '@/lib/operaciones';
 import { tieneClaveAnthropic } from '@/lib/anthropic';
+import { limiteInspeccion, faltanFotosParaInspeccion } from '@/lib/inspeccion-vehiculo';
 
 export const dynamic = 'force-dynamic';
+// Inerte en Railway (Docker): solo lo respetan plataformas tipo Vercel. El tope
+// real de la inspección vive en lib/inspeccion-vehiculo.ts.
 export const maxDuration = 60;
 
 type Mensajero = { id: number; nombre: string };
@@ -67,6 +70,19 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ toke
       if (!tieneClaveAnthropic()) {
         return NextResponse.json({ error: 'La inspección con IA no está configurada (falta ANTHROPIC_API_KEY).' }, { status: 503 });
       }
+      // Esta pantalla no tiene login (basta el enlace del mensajero), así que el
+      // tope por actor es la única barrera contra quemar consultas de IA con el
+      // enlace filtrado. Se limita por mensajero, no por IP: los mensajeros
+      // trabajan desde datos móviles y comparten NAT.
+      // Primero lo barato: si el juego de fotos todavía no está completo, la
+      // inspección ni siquiera sale de la app. Cobrarle un intento del límite
+      // por eso dejaba al mensajero bloqueado 10 minutos con el cliente delante
+      // por darle seis veces a un botón que nunca llamó a la IA.
+      const fotosOp = db.prepare('SELECT fotos_salida, fotos_entrada FROM operaciones WHERE id = ?').get(opId) as { fotos_salida: string | null; fotos_entrada: string | null } | undefined;
+      const faltan = faltanFotosParaInspeccion(fotosOp?.fotos_salida, fotosOp?.fotos_entrada);
+      if (faltan) return NextResponse.json({ error: faltan }, { status: 400 });
+      const excedido = limiteInspeccion(`mensajero:${m.id}`);
+      if (excedido) return NextResponse.json({ error: excedido }, { status: 429 });
       try {
         await ejecutarInspeccion(db, opId);
       } catch (e) {

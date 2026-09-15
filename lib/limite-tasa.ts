@@ -47,6 +47,25 @@ export function consumirIntento(clave: string, max: number, ventanaMs: number): 
 }
 
 /**
+ * Mira el estado de `clave` SIN consumir nada.
+ * Devuelve los segundos que faltan para poder reintentar si el cubo ya está
+ * lleno, o null si un intento estaría permitido.
+ *
+ * Existe para las acciones que se limitan con VARIOS cubos a la vez (ej. la
+ * inspección con IA: cubo corto + diario + global). Consumiéndolos en cascada,
+ * un rechazo del último gasta intentos de los anteriores, así que un actor
+ * podría quemar su cuota diaria contra rechazos causados por el tráfico de
+ * otros. Con esto se evalúan los tres primero y solo se consume si TODOS pasan.
+ */
+export function verificarIntento(clave: string, max: number): number | null {
+  const ahora = Date.now();
+  const actual = cubos.get(clave);
+  if (!actual || actual.expira <= ahora) return null;
+  if (actual.conteo >= max) return Math.max(1, Math.ceil((actual.expira - ahora) / 1000));
+  return null;
+}
+
+/**
  * IP del cliente detrás del proxy de Railway. `x-forwarded-for` puede traer una
  * cadena de varios saltos ("cliente, proxy1, proxy2, ..."): cada proxy AGREGA su
  * valor al final de lo que recibió, no lo reemplaza. Con exactamente UN proxy
