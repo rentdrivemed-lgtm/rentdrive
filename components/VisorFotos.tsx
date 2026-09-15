@@ -1,10 +1,18 @@
 'use client';
 // ── Visor de fotos a pantalla completa ──────────────────────────────────────
 //
-// COMPARTIDO por las dos pantallas que muestran fotos de salida/entrada de un
-// servicio: el panel de Operaciones del admin (`components/OperacionesPanel.tsx`)
-// y la pantalla del mensajero sin login (`app/m/[token]/page.tsx`). Si hay que
-// cambiar el comportamiento del visor, se cambia acá y sirve para las dos.
+// COMPARTIDO por todas las pantallas que necesitan ver una foto en grande:
+//   · el panel de Operaciones del admin (`components/OperacionesPanel.tsx`),
+//   · la pantalla del mensajero sin login (`app/m/[token]/page.tsx`),
+//   · los documentos del panel (`components/DocumentoVista.tsx`),
+//   · y la galería PÚBLICA del vehículo (`components/GaleriaVehiculo.tsx`), que es
+//     la que ve un cliente cuando mira un carro para alquilarlo.
+// Si hay que cambiar el comportamiento del visor, se cambia acá y sirve para todas.
+//
+// ⚠️ Desde que lo usa la galería pública, este visor lo abre gente SIN LOGIN. Nada
+// de lo que se agregue acá puede asumir que quien mira es del equipo: lo que sea
+// interno va detrás de una opción apagada por defecto para el público (hoy,
+// `descargable`).
 //
 // Por qué existe: las miniaturas usan `object-cover`, o sea que RECORTAN la foto.
 // Un empleado que necesita ver un rayón no puede decidir sobre un cuadrito
@@ -21,8 +29,16 @@ import { IconX, IconArrowL, IconArrowR, IconExport } from '@/components/Icons';
 import { urlDescarga } from '@/lib/cloudinary-descarga';
 import { esUrlFotoSegura } from '@/lib/fotos-servicio';
 
-/** Una foto del visor. `grupo` es la etiqueta visible ("SALIDA" / "ENTRADA"). */
-export type FotoVisor = { url: string; grupo: string };
+/**
+ * Una foto del visor.
+ *  · `grupo`: etiqueta visible del conjunto al que pertenece ("SALIDA" / "ENTRADA").
+ *    Puede ir VACÍA cuando las fotos no se agrupan —la galería pública de un
+ *    vehículo son "las fotos del carro", sin más— y entonces el encabezado muestra
+ *    solo la posición ("3 de 7") en vez de " 3 de 7" con un hueco delante.
+ *  · `alt`: texto alternativo propio. Sobrescribe el que se arma con el grupo, que
+ *    fuera del panel de operaciones no describe nada ("foto de foto 3 de 7").
+ */
+export type FotoVisor = { url: string; grupo: string; alt?: string };
 
 const ZOOM_MIN = 1;
 const ZOOM_MAX = 4;
@@ -39,6 +55,16 @@ type Props = {
   onCerrar: () => void;
   /** Encabezado opcional: vehículo/placa del servicio, para saber qué se está mirando. */
   titulo?: string;
+  /**
+   * ¿Se ofrece el botón de descargar la foto? Por defecto SÍ, que es lo que
+   * necesitan los paneles internos (el admin se lleva la foto de un rayón como
+   * respaldo).
+   *
+   * La galería pública del vehículo lo apaga: ahí el visor lo abre un visitante
+   * ANÓNIMO, y ese botón es un enlace directo a la URL cruda del CDN — nada que
+   * ofrecerle a quien solo está mirando un carro para alquilarlo.
+   */
+  descargable?: boolean;
 };
 
 // Gesto táctil en curso. Se guarda en un ref (no en estado) porque cambia en cada
@@ -61,7 +87,7 @@ function acotar(n: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, n));
 }
 
-export default function VisorFotos({ fotos, indice, onIndice, onCerrar, titulo }: Props) {
+export default function VisorFotos({ fotos, indice, onIndice, onCerrar, titulo, descargable = true }: Props) {
   const total = fotos.length;
   const actual: FotoVisor | undefined = fotos[indice];
   const [zoom, setZoom] = useState(1);
@@ -221,7 +247,14 @@ export default function VisorFotos({ fotos, indice, onIndice, onCerrar, titulo }
 
   if (!actual) return null;
 
-  const etiqueta = `${actual.grupo} ${posicion.pos} de ${posicion.total}`;
+  const grupo = actual.grupo.trim();
+  const etiqueta = grupo
+    ? `${grupo} ${posicion.pos} de ${posicion.total}`
+    : `${posicion.pos} de ${posicion.total}`;
+  const alt = actual.alt
+    ?? (grupo
+      ? `Foto de ${grupo.toLowerCase()} ${posicion.pos} de ${posicion.total}`
+      : `Foto ${posicion.pos} de ${posicion.total}`);
 
   // La URL de la foto se valida al GUARDARLA (`esUrlFotoSegura`, lib/fotos-servicio),
   // pero las que ya están en la base se escribieron antes de esa validación — y una de
@@ -231,7 +264,7 @@ export default function VisorFotos({ fotos, indice, onIndice, onCerrar, titulo }
   // Por eso el botón se deshabilita cuando la dirección no es de fiar. La FOTO se
   // sigue mostrando: esconderla sería ocultarle al equipo el respaldo de un servicio
   // real.
-  const descarga = esUrlFotoSegura(actual.url) ? urlDescarga(actual.url) : undefined;
+  const descarga = descargable && esUrlFotoSegura(actual.url) ? urlDescarga(actual.url) : undefined;
 
   return (
     <div
@@ -272,7 +305,7 @@ export default function VisorFotos({ fotos, indice, onIndice, onCerrar, titulo }
             disabled={zoom >= ZOOM_MAX}
             aria-label="Acercar la foto"
             className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 grid place-items-center text-lg leading-none disabled:opacity-30 transition">+</button>
-          {descarga ? (
+          {descargable && (descarga ? (
             <a
               href={descarga}
               download
@@ -292,7 +325,7 @@ export default function VisorFotos({ fotos, indice, onIndice, onCerrar, titulo }
               className="w-9 h-9 rounded-full bg-white/10 grid place-items-center opacity-30 cursor-not-allowed">
               <IconExport size={17} />
             </button>
-          )}
+          ))}
           <button
             type="button"
             onClick={onCerrar}
@@ -328,7 +361,7 @@ export default function VisorFotos({ fotos, indice, onIndice, onCerrar, titulo }
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={actual.url}
-            alt={`Foto de ${actual.grupo.toLowerCase()} ${posicion.pos} de ${posicion.total}`}
+            alt={alt}
             draggable={false}
             onClick={() => (zoom > 1 ? reiniciarZoom() : setZoom(ZOOM_CLIC))}
             style={{
@@ -357,7 +390,11 @@ export default function VisorFotos({ fotos, indice, onIndice, onCerrar, titulo }
               key={`${f.url}-${i}`}
               type="button"
               onClick={() => irA(i)}
-              aria-label={`Ver foto de ${f.grupo.toLowerCase()} número ${i + 1}`}
+              aria-label={f.alt
+                ? `Ver ${f.alt}`
+                : f.grupo.trim()
+                  ? `Ver foto de ${f.grupo.trim().toLowerCase()} número ${i + 1}`
+                  : `Ver foto número ${i + 1}`}
               aria-current={i === indice ? 'true' : undefined}
               className={`shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition ${i === indice ? 'border-accent' : 'border-white/20 opacity-60 hover:opacity-100'}`}>
               {/* eslint-disable-next-line @next/next/no-img-element */}

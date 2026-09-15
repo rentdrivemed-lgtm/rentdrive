@@ -181,7 +181,7 @@ export default function VehiculoDetalle() {
           <div>
             {/* Galería con transición de las fotos del propietario */}
             <div className="relative mb-5">
-              <GaleriaVehiculo fotos={galeria} />
+              <GaleriaVehiculo fotos={galeria} titulo={`${vehiculo.marca} ${vehiculo.modelo} · ${vehiculo.anio}`} />
               <span className="absolute top-3 right-3 z-20 bg-brand/80 backdrop-blur-sm text-white text-xs font-semibold px-3 py-1 rounded-full capitalize">
                 {vehiculo.tipo}
               </span>
