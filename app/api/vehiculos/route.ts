@@ -9,6 +9,7 @@ import { perfilIncompleto, CODIGO_PERFIL_INCOMPLETO } from '@/lib/perfil';
 import { correoNoVerificado, CODIGO_CORREO_NO_VERIFICADO } from '@/lib/verificacion-correo';
 import { contieneLenguajeInapropiado, extraerUrlsFotos, fotosRegistradasEntre, normalizarUrlFoto } from '@/lib/moderacion';
 import { documentosConUrlsValidas } from '@/lib/storage';
+import { quitarPolizaDeEntrada } from '@/lib/poliza-vehiculo';
 import { esCombustibleValido, inscripcionExencionConfirmada, requiereInscripcionExencion, sanitizarClaseVehiculo } from '@/lib/vehiculo-campos';
 import { filtrarVehiculos } from '@/lib/vehiculo-publico';
 import { validarDiasDisponibles } from '@/lib/dias-disponibles';
@@ -245,10 +246,31 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: diasValidacion.error }, { status: 400 });
   }
 
+  // ── `documentos.poliza`: la carga DrivePass, no el propietario ──
+  // Este endpoint es EXCLUSIVO del rol `propietario` (ver el guard de arriba), justo el
+  // actor que la barrera excluye, y `documentos` entra crudo desde el body. Sin esto
+  // bastaba con crear el vehículo mandando `{"poliza":{...}}` para escribir un documento
+  // que solo le corresponde a la empresa: `documentosConUrlsValidas` no lo frena (subir un
+  // PDF propio por POST /api/upload/documento es trivial para cualquier autenticado), el
+  // panel lo pintaba como póliza vigente, entraba al paquete descargable rotulado como
+  // carátula de la póliza, y la preservación de claves del PUT lo re-inyectaba para
+  // siempre. La clave se ARRANCA incondicionalmente, con la misma función que usa el PUT
+  // (lib/poliza-vehiculo.ts) para que la barrera sea una sola y no dos copias.
+  //
+  // `quitarPolizaDeEntrada` además FALLA CERRADO: un `documentos` que no sea un objeto
+  // JSON plano (un array, `null`, un número, un JSON roto) se rechaza con 400 en vez de
+  // colarse hasta el INSERT.
+  const documentosBarrera = quitarPolizaDeEntrada(documentos);
+  if (!documentosBarrera.ok) {
+    return NextResponse.json({ error: documentosBarrera.error }, { status: 400 });
+  }
+  const documentosFinal = documentosBarrera.json;
+
   // Igual que en PUT /api/vehiculos/[id]: `documentos` debe contener SOLO URLs que
   // realmente vengan de nuestro storage (Cloudinary vía uploadFile(), ver lib/storage.ts) —
-  // nunca un string arbitrario inventado por el cliente.
-  if (!documentosConUrlsValidas(documentos)) {
+  // nunca un string arbitrario inventado por el cliente. Se valida lo que se va a ESCRIBIR
+  // (ya sin la póliza), no lo que mandó el cliente.
+  if (!documentosConUrlsValidas(documentosFinal)) {
     return NextResponse.json({ error: 'Documento inválido, vuelve a subirlo' }, { status: 400 });
   }
 
@@ -269,7 +291,7 @@ export async function POST(req: NextRequest) {
   // las fotos de frente/reverso YA se guardaron y sus URLs llegan acá en `documentos`, así
   // que no hay que pedirlas de nuevo en la sección de documentos del vehículo.
   let docsIniciales: Record<string, { url?: string; url_dorso?: string } | undefined> = {};
-  try { docsIniciales = JSON.parse(documentos || '{}'); } catch { docsIniciales = {}; }
+  try { docsIniciales = JSON.parse(documentosFinal); } catch { docsIniciales = {}; }
   const tieneDocumentoInicial = Object.values(docsIniciales).some(d => d?.url);
   // Igual que en el PUT: si llega al menos un documento ya en la creación, arranca "en
   // revisión" (no "sin_documentos") y se avisa al equipo, en vez de esperar a que el
@@ -316,7 +338,7 @@ export async function POST(req: NextRequest) {
     diasValidacion.json,
     (placa || '').toString().toUpperCase().trim(),
     valorComercial, ajuste,
-    documentos || '{}', documentosEstadoInicial,
+    documentosFinal, documentosEstadoInicial,
     contenidoRevision, contenidoRevisionMotivo,
     combustibleFinal, claseVehiculoFinal, exencionInscritaFinal,
   );

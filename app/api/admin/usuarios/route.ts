@@ -17,7 +17,14 @@ export async function GET() {
     SELECT id, nombre, correo, rol, admin_nivel, permisos_extra, estado_cuenta, created_at,
            tipo_documento, documento_identidad, fecha_nacimiento,
            celular, celular_indicativo, direccion, ciudad, numero_licencia, contacto_emergencia,
-           cedula_url, cedula_url_dorso
+           cedula_url, cedula_url_dorso,
+           -- Documentos que hasta ahora NO llegaban al panel y por eso no se veían en
+           -- ninguna pantalla: la licencia del perfil y, sobre todo, el CERTIFICADO
+           -- BANCARIO del propietario, que se venía pidiendo como obligatorio y guardando
+           -- sin que nadie pudiera abrirlo después. Van al mismo sitio que cedula_url, que
+           -- ya viajaba por acá, y esta ruta ya exige el área usuarios.
+           licencia_url, licencia_url_dorso, certificado_bancario_url,
+           banco, numero_cuenta
     FROM usuarios
     ORDER BY created_at DESC
   `).all();
