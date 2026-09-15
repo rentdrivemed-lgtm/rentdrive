@@ -88,7 +88,7 @@ DrivePass no es "Turo de Medellín" ni "Eva más barato". Es **la red de carros 
 **Funcional**
 - Carro listo en minutos desde la app, sin fila ni mostrador.
 - Variedad real: del económico al premium, con dueño que lo cuida.
-- **Pico y placa resuelto**: la app te dice qué día rueda cada placa (`lib/picoYPlaca.ts`).
+- **Pico y placa resuelto**: la app te dice qué día rueda cada placa (`lib/pico-placa.ts`).
 - **Recogida/entrega donde estés**, incluido el **aeropuerto JMC de Rionegro** (sin pico y placa por estar fuera del área metropolitana), con recargo claro y calculado server-side.
 - Precio competitivo P2P, sin sobrecostos de flota corporativa.
 - Evidencia que te protege: fotos antes/después, contrato firmado, depósito explicado.
@@ -212,7 +212,7 @@ Cuatro pilares. Cada uno con su "reason to believe" (RTB) anclado en funcionalid
 
 | Diferenciador | Por qué es defendible | Cómo comunicarlo |
 |---|---|---|
-| **Pico y placa resuelto en la app** | Conocimiento local codificado (`lib/picoYPlaca.ts`); Turo/Getaround no lo tienen, los tradicionales no lo automatizan | Badge en cada carro: "Hoy rueda / hoy descansa". Headline: "El pico y placa ya está resuelto." |
+| **Pico y placa resuelto en la app** | Conocimiento local codificado (`lib/pico-placa.ts`); Turo/Getaround no lo tienen, los tradicionales no lo automatizan | Badge en cada carro: "Hoy rueda / hoy descansa". Headline: "El pico y placa ya está resuelto." |
 | **Recogida en JMC sin pico y placa** | El aeropuerto está fuera del área metropolitana → ventaja real para turistas; catálogo de lugares con recargo claro | "Recoge en el aeropuerto y arranca sin restricción." Captura turista en awareness. |
 | **Evidencia de viaje (fotos antes/después + contrato firmado)** | Construido en el flujo de reserva; convierte "P2P = riesgo" en "P2P = protegido" | Mostrar el flujo de 3 pasos en onboarding. Microcopy: "Todo queda documentado." |
 | **Doble verificación (persona + vehículo)** | Documentos, licencia, placa, estados de revisión ya en el modelo de datos | Insignias "Propietario verificado" / "Carro verificado" visibles antes de reservar. |

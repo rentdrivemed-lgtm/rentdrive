@@ -16,7 +16,7 @@
   - **Meta (IG/FB)** CPM Colombia ≈ **USD 2,0–2,7** (≈ $7.000–$9.600 COP). CPC Latam ≈ USD 0,20–0,40.
   - **TikTok** CPM Colombia ≈ **$4.000–$10.000 COP** in-feed; CPC ≈ **$200–$1.200 COP**. Mínimo útil ≈ $800k–$1,5M COP/mes.
   - **Google Search** CPC automotriz/servicio local ≈ **$200–$1.500 COP**; presupuesto mínimo local ≈ $600k COP/mes.
-- **Producto:** plataforma P2P (Next.js). Flujos clave que la pauta debe explotar: reserva con fechas/lugar (recargo $100k JMC aeropuerto), perfiles verificados, fotos antes/después, contrato firmado, chat, WhatsApp para confirmación. **WhatsApp es el canal de cierre dominante** en alquiler de carros en Medellín (toda la competencia confirma por WhatsApp).
+- **Producto:** plataforma P2P (Next.js). Flujos clave que la pauta debe explotar: reserva con fechas/lugar (recargo $150k por trayecto al aeropuerto JMC), perfiles verificados, fotos antes/después, contrato firmado, chat, WhatsApp para confirmación. **WhatsApp es el canal de cierre dominante** en alquiler de carros en Medellín (toda la competencia confirma por WhatsApp).
 - **Eventos a trackear** (definidos una vez, válidos para todas las campañas): ver §7.
 
 ---

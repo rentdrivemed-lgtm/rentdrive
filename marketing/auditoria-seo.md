@@ -37,7 +37,7 @@
 
 ### Keywords e intención (Colombia)
 **Transaccional:** "alquiler de carros Medellín", "renta de autos Medellín", "rent a car Medellín", "alquiler de carros en Medellín sin tarjeta de crédito" (nicho fuerte, encaja con modelo P2P/depósito), "alquiler aeropuerto José María Córdova/Rionegro", "por días", "económicos", "entre particulares", "alquilar mi carro Medellín" (lado oferta).
-**Informacional (bajo costo):** "requisitos para alquilar carro en Medellín", "pico y placa Medellín 2026" (DrivePass ya tiene `lib/picoYPlaca.ts` → ventaja para una landing real), "alquiler para extranjeros", "licencia extranjera en Colombia", "¿Rionegro tiene pico y placa?".
+**Informacional (bajo costo):** "requisitos para alquilar carro en Medellín", "pico y placa Medellín 2026" (DrivePass ya tiene `lib/pico-placa.ts` → ventaja para una landing real), "alquiler para extranjeros", "licencia extranjera en Colombia", "¿Rionegro tiene pico y placa?".
 
 **Competidores:** tradicionales (Localiza, Hertz, Budget, Europcar, Sixt) y **P2P directos (Turo, Eva [app CO en Medellín, asegura con Sura], Rennty, Alquilo Mi Carro)** + nicho "sin tarjeta de crédito". Los locales rankean con blogs de pico y placa y páginas de requisitos.
 
@@ -63,7 +63,7 @@
 - C1 NAP consistente (Footer + JSON-LD). C2 **Google Business Profile** (no-código, muy alto). C3 Landings por intención: "Alquiler en aeropuerto JMC/Rionegro" y por municipio. C4 `areaServed` con municipios reales.
 
 ### D. Contenido (bajo costo)
-- Guías que la competencia ya rankea: "Requisitos para alquilar carro en Medellín 2026", "Pico y placa Medellín 2026" (con `lib/picoYPlaca.ts` → contenido veraz y único), "¿Rionegro tiene pico y placa?", "Alquiler para extranjeros". Copy con "Medellín y Área Metropolitana", "por días", "sin tarjeta de crédito internacional", "entre particulares". Optimizar `propietarios-info` para "alquilar mi carro Medellín".
+- Guías que la competencia ya rankea: "Requisitos para alquilar carro en Medellín 2026", "Pico y placa Medellín 2026" (con `lib/pico-placa.ts` → contenido veraz y único), "¿Rionegro tiene pico y placa?", "Alquiler para extranjeros". Copy con "Medellín y Área Metropolitana", "por días", "sin tarjeta de crédito internacional", "entre particulares". Optimizar `propietarios-info` para "alquilar mi carro Medellín".
 
 ### E. Rendimiento / CWV
 - E1 `<img>` → `next/image` (8 usos; foto principal con `priority`/`sizes`). E2 el refactor a Server Components mejora LCP/CLS. E3 fuentes ya self-hosted (Geist) ✔. E4 revisar peso del bundle.
@@ -76,7 +76,7 @@
 ## Plan de implementación (para tu visto bueno antes de editar)
 **Fase 1 — Quick wins técnicos (1 sesión, bajo riesgo):** A1 robots, A2 sitemap, A3 metadataBase + title/desc/OG + `NEXT_PUBLIC_SITE_URL`, B1 Organization + B2 LocalBusiness (areaServed desde `lib/lugares.ts`), C1 NAP en Footer, corregir doble `<h1>` en `registro`. Verificar: `tsc`, `lint`, `build`, Rich Results.
 **Fase 2 — Metadata por página:** A4 refactor + A5 generateMetadata por vehículo + B3 Car/Offer + B4 Breadcrumb + A6 canonical + E1 next/image.
-**Fase 3 — Contenido y local:** D guías (pico y placa con `lib/picoYPlaca.ts`), C3 landings, C2/F1 GBP + Search Console.
+**Fase 3 — Contenido y local:** D guías (pico y placa con `lib/pico-placa.ts`), C3 landings, C2/F1 GBP + Search Console.
 
 > Todo vía `getDb()` parametrizado, sin reseñas falsas en JSON-LD, sin tocar auth ni el tema oscuro. El refactor de Fase 2 es el único de esfuerzo alto por la arquitectura `'use client'` actual.
 

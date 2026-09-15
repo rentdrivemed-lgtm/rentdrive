@@ -18,7 +18,7 @@ const T = {
     precioEnRevision: 'Precio en revisión por el equipo DrivePass', dia: '/día',
     reservarVehiculo: 'Reservar vehículo', fechasAlquiler: 'Fechas de alquiler',
     recogidaLabel: 'Recogida', devolucionLabel: 'Devolución',
-    recargoAeropuerto: 'Recargo aeropuerto', totalEstimado: 'Total estimado',
+    recargoLugar: 'Recargo por lugar', totalEstimado: 'Total estimado',
     noDisponibleAhora: 'No disponible', precioNoDisponible: 'Precio no disponible aún',
     irAlPago: 'Ir al pago', iniciarSesion: 'Iniciar sesión para reservar',
     msgInactivo: 'Este vehículo no está disponible actualmente.', msgFechas: 'Selecciona las fechas en el calendario',
@@ -35,7 +35,7 @@ const T = {
     precioEnRevision: 'Price under review by the DrivePass team', dia: '/day',
     reservarVehiculo: 'Book vehicle', fechasAlquiler: 'Rental dates',
     recogidaLabel: 'Pickup', devolucionLabel: 'Return',
-    recargoAeropuerto: 'Airport surcharge', totalEstimado: 'Estimated total',
+    recargoLugar: 'Location surcharge', totalEstimado: 'Estimated total',
     noDisponibleAhora: 'Not available', precioNoDisponible: 'Price not available yet',
     irAlPago: 'Go to payment', iniciarSesion: 'Sign in to book',
     msgInactivo: 'This vehicle is not currently available.', msgFechas: 'Select the dates on the calendar',
@@ -236,7 +236,7 @@ export default function VehiculoDetalle() {
                   <div className="flex justify-between text-ink/70"><span>{c.dia1(dias)} × ${vehiculo.precio_dia.toLocaleString('es-CO')}:</span><span>${subtotal.toLocaleString('es-CO')}</span></div>
                   {recargo > 0 && (
                     <div className="flex justify-between text-ink/70 mt-1">
-                      <span>{c.recargoAeropuerto}:</span><span>+${recargo.toLocaleString('es-CO')}</span>
+                      <span>{c.recargoLugar}:</span><span>+${recargo.toLocaleString('es-CO')}</span>
                     </div>
                   )}
                   <div className="flex justify-between font-bold text-accent mt-1 pt-1 border-t border-accent/15">

@@ -1,5 +1,6 @@
 'use client';
-import { MUNICIPIOS, getMunicipio, esAeropuerto, RECARGO_AEROPUERTO, type Lugar } from '@/lib/lugares';
+import { useId } from 'react';
+import { LUGARES, getLugar, esAeropuerto, type Lugar } from '@/lib/lugares';
 import { IconPin, IconClock, IconPlane } from '@/components/Icons';
 import { useLang } from '@/contexts/LanguageContext';
 
@@ -14,17 +15,19 @@ type Props = {
 const T = {
   es: {
     municipioLabel: 'Municipio / lugar', selecLugar: 'Selecciona un lugar…',
-    recargoAviso: (n: string) => `Punto especial — aplica un recargo de $${n} por este trayecto.`,
+    recargoAviso: (n: string) => `Aplica un recargo de $${n} por este trayecto.`,
+    sinRecargo: 'Sin recargo por este trayecto.',
     terminalLabel: 'Terminal / N.º de vuelo (opcional)', terminalPlaceholder: 'Ej: Terminal 1, vuelo AV8420',
-    barrioLabel: 'Barrio', selecBarrio: 'Selecciona el barrio…',
+    barrioLabel: 'Barrio', barrioPlaceholder: 'Ej: El Poblado',
     direccionLabel: 'Dirección exacta', direccionPlaceholder: 'Ej: Carrera 43A # 5-15, apto 302 / Torre 2',
     hora: 'Hora',
   },
   en: {
     municipioLabel: 'City / place', selecLugar: 'Select a place…',
-    recargoAviso: (n: string) => `Special location — a $${n} surcharge applies for this trip.`,
+    recargoAviso: (n: string) => `A $${n} surcharge applies for this trip.`,
+    sinRecargo: 'No surcharge for this trip.',
     terminalLabel: 'Terminal / flight number (optional)', terminalPlaceholder: 'E.g.: Terminal 1, flight AV8420',
-    barrioLabel: 'Neighborhood', selecBarrio: 'Select the neighborhood…',
+    barrioLabel: 'Neighborhood', barrioPlaceholder: 'E.g.: El Poblado',
     direccionLabel: 'Exact address', direccionPlaceholder: 'E.g.: Carrera 43A # 5-15, apt 302 / Tower 2',
     hora: 'Time',
   },
@@ -33,10 +36,13 @@ const T = {
 export default function LugarSelector({ label, value, onChange, tone = 'accent' }: Props) {
   const { lang } = useLang();
   const c = T[lang];
-  const muni = getMunicipio(value.municipio);
+  // Todo sale del catálogo (lib/lugares.ts): el precio que se le muestra al
+  // cliente es el mismo que cobra el servidor, no una copia que se desactualiza.
+  const muni = getLugar(value.municipio);
   const aeropuerto = esAeropuerto(value.municipio);
   const set = (patch: Partial<Lugar>) => onChange({ ...value, ...patch });
   const toneText = tone === 'brand' ? 'text-ink' : 'text-accent';
+  const barriosId = useId();
 
   const inputCls =
     'w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface-2 focus:outline-none focus:ring-2 focus:ring-accent/40';
@@ -54,52 +60,71 @@ export default function LugarSelector({ label, value, onChange, tone = 'accent' 
         <select
           className={inputCls}
           value={value.municipio}
-          onChange={e => set({ municipio: e.target.value, barrio: '' })}
+          onChange={e => set({ municipio: e.target.value, barrio: '', direccion: '' })}
         >
           <option value="">{c.selecLugar}</option>
-          {MUNICIPIOS.map(m => (
+          {LUGARES.map(m => (
             <option key={m.id} value={m.id}>{m.nombre}</option>
           ))}
         </select>
       </div>
 
-      {/* Aeropuerto: aviso de recargo + campo opcional terminal/vuelo */}
-      {aeropuerto && (
-        <>
+      {/* Aviso del lugar elegido: recargo (o "sin recargo") y dirección fija si la tiene */}
+      {muni && (
+        muni.recargo > 0 ? (
           <div className="flex items-start gap-2 bg-accent-light border border-accent/20 rounded-xl px-3 py-2">
-            <IconPlane size={14} className="text-accent flex-shrink-0 mt-0.5" />
+            {aeropuerto
+              ? <IconPlane size={14} className="text-accent flex-shrink-0 mt-0.5" />
+              : <IconPin size={14} className="text-accent flex-shrink-0 mt-0.5" />}
             <p className="text-[11px] text-accent font-medium">
-              {c.recargoAviso(RECARGO_AEROPUERTO.toLocaleString('es-CO'))}
+              {c.recargoAviso(muni.recargo.toLocaleString('es-CO'))}
             </p>
           </div>
-          <div>
-            <label className="text-[11px] font-medium text-ink/50 block mb-1">{c.terminalLabel}</label>
-            <input
-              type="text"
-              placeholder={c.terminalPlaceholder}
-              className={inputCls}
-              value={value.direccion}
-              onChange={e => set({ direccion: e.target.value })}
-            />
+        ) : (
+          <div className="flex items-start gap-2 bg-surface-2 border border-border rounded-xl px-3 py-2">
+            <IconPin size={14} className="text-success flex-shrink-0 mt-0.5" />
+            <p className="text-[11px] text-ink/60 font-medium">
+              <span className="text-success font-bold">{c.sinRecargo}</span>
+              {muni.direccionFija && <span className="block text-ink/70">{muni.nombre} — {muni.direccionFija}</span>}
+            </p>
           </div>
-        </>
+        )
       )}
 
-      {/* Municipio normal: barrio + dirección exacta */}
-      {value.municipio && !aeropuerto && (
+      {/* Aeropuerto: campo opcional terminal / vuelo */}
+      {aeropuerto && (
+        <div>
+          <label className="text-[11px] font-medium text-ink/50 block mb-1">{c.terminalLabel}</label>
+          <input
+            type="text"
+            placeholder={c.terminalPlaceholder}
+            className={inputCls}
+            value={value.direccion}
+            onChange={e => set({ direccion: e.target.value })}
+          />
+        </div>
+      )}
+
+      {/* Lugar con dirección del cliente: barrio + dirección exacta.
+          El barrio es texto libre (las listas de barrios nunca están completas);
+          donde haya sugerencias, salen como datalist. */}
+      {muni?.pideDireccion && (
         <>
           <div>
             <label className="text-[11px] font-medium text-ink/50 block mb-1">{c.barrioLabel}</label>
-            <select
+            <input
+              type="text"
+              list={muni.barrios?.length ? barriosId : undefined}
+              placeholder={c.barrioPlaceholder}
               className={inputCls}
               value={value.barrio}
               onChange={e => set({ barrio: e.target.value })}
-            >
-              <option value="">{c.selecBarrio}</option>
-              {(muni?.barrios ?? []).map(b => (
-                <option key={b} value={b}>{b}</option>
-              ))}
-            </select>
+            />
+            {!!muni.barrios?.length && (
+              <datalist id={barriosId}>
+                {muni.barrios.map(b => <option key={b} value={b} />)}
+              </datalist>
+            )}
           </div>
           <div>
             <label className="text-[11px] font-medium text-ink/50 block mb-1">{c.direccionLabel}</label>

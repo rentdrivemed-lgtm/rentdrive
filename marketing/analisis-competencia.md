@@ -28,7 +28,7 @@ Leyenda: ✔ sólido · ◐ parcial · ✖ ausente.
 - **SIXT/Localiza/Hertz ✔**: marca consolidada, RNT, seguros, depósito en tarjeta.
 
 ### C — Presentación de precios
-- **DrivePass ◐**: `precio_dia` + recargo aeropuerto ($100.000/trayecto JMC) server-side. **Falta** desglose visible y total "todo incluido".
+- **DrivePass ◐**: `precio_dia` + recargo por lugar ($150.000/trayecto JMC; $35.000 Medellín y Olaya Herrera) server-side. **Falta** desglose visible y total "todo incluido".
 - **Turo ✔**: precio + protección desde $10/día; descuentos semanal/mensual [H].
 - **Getaround ✔**: precios upfront, predictive pricing [H].
 - **Kayak ✔**: comparación por categoría + "free cancellation".
@@ -55,7 +55,7 @@ Leyenda: ✔ sólido · ◐ parcial · ✖ ausente.
 - **Localiza/SIXT/Hertz ◐**: web corporativa.
 
 ### G — Localización Colombia
-- **DrivePass ✔**: `lib/picoYPlaca.ts`, municipios AMVA + Rionegro/JMC con recargo, español nativo. **Mejor localización que cualquier referente.**
+- **DrivePass ✔**: `lib/pico-placa.ts`, municipios AMVA + Rionegro/JMC con recargo, español nativo. **Mejor localización que cualquier referente.**
 - **Localiza ✔**: 12 ciudades, pico y placa, central 24h, RNT, WhatsApp [H].
 - **TodosEn4/Alquilo Mi Carro ✔**: P2P CO, SURA, Registraduría, domicilio [H].
 - **Turo/Getaround ✖**: no operan en Colombia [INF]; sin pico y placa ni peajes.

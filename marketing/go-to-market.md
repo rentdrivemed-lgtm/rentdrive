@@ -114,7 +114,7 @@ Tres loops, cada uno con **mecanismo + incentivo + por qué se auto-refuerza**.
 
 ### Loop 3 — Contenido / SEO local (loop de marca y demanda orgánica)
 - **Mecanismo:** producir contenido útil-evergreen que captura intención de búsqueda y posiciona la marca:
-  - **Calculadora/guía de Pico y Placa Medellín** (ya tenemos `lib/picoYPlaca.ts` — convertirlo en página pública indexable; los visitantes que no saben de pico y placa son justo turistas que necesitan carro).
+  - **Calculadora/guía de Pico y Placa Medellín** (ya tenemos `lib/pico-placa.ts` — convertirlo en página pública indexable; los visitantes que no saben de pico y placa son justo turistas que necesitan carro).
   - Guías: "Top 10 rutas en carro desde Medellín" (Guatapé, Oriente, Santa Fe de Antioquia), "Cómo moverte en Medellín siendo nómada digital", "¿Conviene alquilar carro o usar apps en Medellín?".
   - Reels/TikTok del proceso de reserva en 30 s y tours en carro (alineado al manual de marca: persona en movimiento, no carro estacionado).
 - **Incentivo:** valor gratis → tráfico SEO → reserva. (Coordinar con el agente `estratega-seo`: JSON-LD, sitemap, SEO local Medellín.)
@@ -158,7 +158,7 @@ Formato: **Aliado → qué ofrecemos / qué pedimos / prioridad.**
 
 | # | Aliado | Qué ofrecemos | Qué pedimos | Prioridad |
 |---|--------|---------------|-------------|-----------|
-| 1 | **Aeropuerto JMC (Rionegro) — operadores de transfer / counters** | Entrega/recogida de carro en el aeropuerto (ya soportado: recargo de $100k por trayecto al JMC en el producto), comisión por reserva referida | Espacio/visibilidad para recogida, referidos de pasajeros que aterrizan sin transporte | **Máxima** — el JMC mueve 2M+ internacionales/año¹; es el punto exacto donde nace la necesidad de carro |
+| 1 | **Aeropuerto JMC (Rionegro) — operadores de transfer / counters** | Entrega/recogida de carro en el aeropuerto (ya soportado: recargo de $150k por trayecto al JMC en el producto), comisión por reserva referida | Espacio/visibilidad para recogida, referidos de pasajeros que aterrizan sin transporte | **Máxima** — el JMC mueve 2M+ internacionales/año¹; es el punto exacto donde nace la necesidad de carro |
 | 2 | **Hoteles y hostales de El Poblado/Laureles** | Comisión por huésped referido + "carro a la puerta del hotel", co-branding "tu hotel + tu carro" | QR/flyer en recepción, mención del concierge | **Máxima** — densidad geográfica = donde ya está la demanda; ocupación hotelera 77–81% en temporada⁶ |
 | 3 | **Comunidades de nómadas digitales** (coworkings, colivings, grupos de WhatsApp/FB de expats en El Poblado/Provenza) | Tarifa de estancia larga (semanal/mensual), crédito de referido | Posteo en su comunidad, partnership con coliving | **Alta** — ~8.000–8.300 nómadas/mes en Medellín, estancia 1–3 meses, gastan US$1.500–3.500/mes⁷⁸; ticket alto y recurrente |
 | 4 | **Agencias de turismo / DMC / operadores de tours a Guatapé–Oriente** | Carro como complemento del paquete, comisión | Inclusión en itinerarios self-drive | **Alta** |

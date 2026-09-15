@@ -184,7 +184,7 @@ DrivePass **ya tiene** en producto: verificación de documentos/licencia, contra
 | **Protección que se siente** | Comunicar cada reserva protegida: "viaje verificado, contrato firmado, fotos OK". Resolver bien el primer incidente. | Un incidente mal manejado = dueño perdido para siempre |
 | **Niveles / Power Host** | Bronce→Plata→Oro por reservas completadas y calificación: comisión decreciente, prioridad de demanda, mapas de demanda, soporte prioritario, parqueadero aliado. (modelo Getaround Power Host) | El que tiene 2+ carros es el de mayor valor; hay que premiarlo |
 | **Comunidad** | Grupo de anfitriones DrivePass (WhatsApp/eventos), casos de éxito, tips de precio y temporada. | Pertenencia emocional (arquetipo Explorador/Héroe de marca) |
-| **Optimización proactiva** | Avisar al dueño: "baja $5.000 tu tarifa este finde y te reservan", alertas de pico y placa (`lib/picoYPlaca.ts`), temporadas altas. | El dueño siente que la plataforma trabaja PARA él |
+| **Optimización proactiva** | Avisar al dueño: "baja $5.000 tu tarifa este finde y te reservan", alertas de pico y placa (`lib/pico-placa.ts`), temporadas altas. | El dueño siente que la plataforma trabaja PARA él |
 
 **Ventaja defendible vs. Turo/Eva:** **operación y soporte local en Medellín + acompañamiento humano + comunidad.** Turo no tiene presencia local real en Colombia; Eva es nacional y más impersonal. DrivePass puede ganar en cercanía y confianza barrial.
 

@@ -34,8 +34,12 @@ export function plantillaTareas(reserva: { recogida?: unknown; entrega?: unknown
   return [
     { tipo: 'preparacion', titulo: 'Lavar el vehículo', detalle: '', orden: 1 },
     { tipo: 'preparacion', titulo: 'Tanquear el vehículo', detalle: '', orden: 2 },
-    { tipo: 'entrega', titulo: 'Entregar vehículo al cliente', detalle: `Lugar: ${recogidaStr} — Fecha: ${reserva.fecha_inicio}`, orden: 3 },
-    { tipo: 'recepcion', titulo: 'Recibir vehículo del cliente', detalle: `Lugar: ${entregaStr} — Fecha: ${reserva.fecha_fin}`, orden: 4 },
+    // La fecha va PRIMERO: `lugarResumen` de un lugar con dirección conocida ya trae su
+    // propia raya ("Punto de atención San Joaquín — Calle 42A #68A-10"), y con el orden
+    // anterior la tarea salía con dos rayas seguidas ("… #68A-10 — Fecha: …"), ilegible.
+    // Así la única raya del renglón es la que separa el lugar de su dirección.
+    { tipo: 'entrega', titulo: 'Entregar vehículo al cliente', detalle: `Fecha: ${reserva.fecha_inicio} · Lugar: ${recogidaStr}`, orden: 3 },
+    { tipo: 'recepcion', titulo: 'Recibir vehículo del cliente', detalle: `Fecha: ${reserva.fecha_fin} · Lugar: ${entregaStr}`, orden: 4 },
     { tipo: 'inspeccion', titulo: 'Inspección de daños (IA)', detalle: 'Subir fotos de salida y entrada para comparar con IA', orden: 5 },
   ];
 }

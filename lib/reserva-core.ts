@@ -21,7 +21,7 @@
 // Módulo de SERVIDOR (toca better-sqlite3 vía el tipo y hace queries): no
 // importar desde un componente 'use client'.
 import type Database from 'better-sqlite3';
-import { calcularDiasAlquiler, calcularTotalAlquiler, calcularRecargo, lugarValido, normalizarLugar, type Lugar } from './lugares';
+import { calcularDiasAlquiler, calcularTotalAlquiler, calcularRecargo, getLugar, lugarValido, normalizarLugar, type Lugar } from './lugares';
 import { MIN_NOCHES_RESERVA } from './disponibilidad-reglas';
 import { esUrlDeStorageValida } from './storage';
 import { validarDireccion, validarCiudad, validarNombreContacto, validarTelefonoContacto } from './validacion';
@@ -224,10 +224,24 @@ export function validarLugaresReserva(
   recogida?: unknown, entrega?: unknown,
 ): { lugares: { recogida: Lugar; entrega: Lugar } } | { error: ErrorReserva } {
   const r = normalizarLugar(recogida);
-  if (!r || !lugarValido(r)) return { error: { error: 'Indica el lugar y la hora de recogida.', status: 400 } };
+  if (!r || !lugarValido(r)) return { error: { error: mensajeLugarInvalido(r, 'recogida'), status: 400 } };
   const e = normalizarLugar(entrega);
-  if (!e || !lugarValido(e)) return { error: { error: 'Indica el lugar y la hora de entrega.', status: 400 } };
+  if (!e || !lugarValido(e)) return { error: { error: mensajeLugarInvalido(e, 'entrega'), status: 400 } };
   return { lugares: { recogida: r, entrega: e } };
+}
+
+/**
+ * Mensaje del 400 de un lugar rechazado. El rechazo NO cambia (fail-closed igual que
+ * siempre); solo se distingue el caso "eligió un lugar que no está en el catálogo"
+ * —enlace viejo, lugar retirado de la tabla de tarifas, body armado a mano— del caso
+ * "no eligió nada". A quien sí eligió, el genérico "Indica el lugar y la hora" le pide
+ * llenar algo que cree tener lleno y no dice qué corregir.
+ */
+function mensajeLugarInvalido(l: Lugar | null, tramo: 'recogida' | 'entrega'): string {
+  if (l?.municipio && !getLugar(l.municipio)) {
+    return `El lugar de ${tramo} que elegiste ya no está disponible. Vuelve a elegirlo en la ficha del vehículo.`;
+  }
+  return `Indica el lugar y la hora de ${tramo}.`;
 }
 
 // ── Vehículo y disponibilidad ────────────────────────────────────────────────

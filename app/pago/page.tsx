@@ -351,7 +351,7 @@ function PagoContent() {
             <div className="mt-2 pt-2 border-t border-border text-xs space-y-0.5">
               <div className="flex justify-between text-ink/50"><span>Subtotal ({dias} día{dias !== 1 ? 's' : ''})</span><span>${subtotal.toLocaleString('es-CO')}</span></div>
               {recargo > 0 && (
-                <div className="flex justify-between text-ink/50"><span>Recargo aeropuerto</span><span>+${recargo.toLocaleString('es-CO')}</span></div>
+                <div className="flex justify-between text-ink/50"><span>Recargo por lugar</span><span>+${recargo.toLocaleString('es-CO')}</span></div>
               )}
               {creditosDisponibles > 0 && (
                 <label className="flex items-center justify-between gap-2 text-success cursor-pointer">
