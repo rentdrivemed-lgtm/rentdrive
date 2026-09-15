@@ -409,6 +409,10 @@ export default function ReservaMostradorModal({
                   inicio={fechaInicio}
                   fin={fechaFin}
                   onChange={(i, f) => { setFechaInicio(i); setFechaFin(f); setError(''); }}
+                  /* En el punto de atención se puede alquilar por un solo día: el mínimo
+                     de 2 noches es de la vía pública (ver MIN_NOCHES_POR_VIA en
+                     lib/reserva-core.ts), así que acá el aviso no debe aparecer. */
+                  sinMinimoNoches
                 />
                 <div className="mt-4 space-y-4 pt-3 border-t border-border">
                   <LugarSelector label="Recogida" value={recogida} onChange={setRecogida} />

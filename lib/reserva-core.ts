@@ -13,6 +13,11 @@
 // donde viven, justamente para que no se dupliquen "a ojo" y una de las dos se
 // quede sin validar algo dentro de tres meses.
 //
+// Cuando una regla NO es idéntica en las dos vías, la diferencia se parametriza acá
+// (`ViaReserva`) en vez de resolverse omitiendo la llamada en una de las rutas. Hoy
+// la única así es el mínimo de noches: 2 por la web, 1 en mostrador (ver
+// `MIN_NOCHES_POR_VIA`).
+//
 // Lo que NO vive aquí, a propósito, es lo que SÍ difiere entre las dos vías:
 // quién puede llamar (rol/permiso), los gates de cuenta del cliente
 // (correo verificado / perfil completo), el estado inicial de la reserva y sus
@@ -35,15 +40,52 @@ const txt = (v: unknown) => String(v ?? '').trim();
 
 // ── Fechas ───────────────────────────────────────────────────────────────────
 
+/** Por cuál de las dos vías nace la reserva. Ver la cabecera de este módulo. */
+export type ViaReserva = 'publica' | 'mostrador';
+
 /**
- * Mínimo de noches (lib/disponibilidad-reglas.ts). Se conserva EXACTAMENTE el
- * cálculo que tenía POST /api/reservas (Math.ceil sin el Math.max(1) de
- * `calcularDiasAlquiler`, que es otra cosa: los días que se COBRAN).
+ * Mínimo de noches EXIGIBLE, por vía.
+ *
+ * La regla del negocio sigue siendo `MIN_NOCHES_RESERVA` (hoy 2) y no se toca: es
+ * la que aplica a quien reserva solo por la web, donde no hay nadie del equipo
+ * evaluando si ese alquiler de un día conviene.
+ *
+ * ── Excepción deliberada del MOSTRADOR (1 noche) ────────────────────────────
+ * Decisión del dueño: en el punto de atención SÍ se puede alquilar por un solo día.
+ * Ahí el empleado (admin, socio o secretaría) tiene al cliente enfrente, ve el
+ * documento, recibe el pago y puede decidir caso por caso; el mínimo existe para
+ * evitar reservas de un día pedidas a ciegas por internet, no para impedir que el
+ * equipo las haga.
+ *
+ * Se modela como tabla vía → mínimo, y no omitiendo la llamada en la ruta de
+ * mostrador, por dos motivos: (a) la exención queda escrita en un sitio, con su
+ * porqué, en vez de ser la AUSENCIA de una línea que alguien puede leer como un
+ * olvido; (b) el mostrador sigue teniendo un piso real (1 noche), así que la
+ * validación de allí no se vuelve decorativa.
+ *
+ * El 1 no es redundante con `validarFormatoFechas` (que exige fin > inicio): es la
+ * misma garantía por otra vía, y si mañana el mínimo de mostrador sube a 2 basta
+ * cambiar este número.
  */
-export function validarNochesMinimas(fechaInicio: string, fechaFin: string): ErrorReserva | null {
+export const MIN_NOCHES_POR_VIA: Record<ViaReserva, number> = {
+  publica: MIN_NOCHES_RESERVA,
+  mostrador: 1,
+};
+
+/**
+ * Mínimo de noches. Se conserva EXACTAMENTE el cálculo que tenía POST /api/reservas
+ * (Math.ceil sin el Math.max(1) de `calcularDiasAlquiler`, que es otra cosa: los
+ * días que se COBRAN) y, para la vía pública, el mismo mensaje palabra por palabra.
+ *
+ * `via` es obligatorio a propósito: si mañana aparece una tercera forma de crear
+ * reservas, el compilador obliga a decidir qué mínimo le toca en vez de heredar en
+ * silencio la excepción del mostrador.
+ */
+export function validarNochesMinimas(fechaInicio: string, fechaFin: string, via: ViaReserva): ErrorReserva | null {
+  const minimo = MIN_NOCHES_POR_VIA[via];
   const noches = Math.ceil((new Date(fechaFin).getTime() - new Date(fechaInicio).getTime()) / 86400000);
-  if (noches < MIN_NOCHES_RESERVA) {
-    return { error: `El alquiler mínimo es de ${MIN_NOCHES_RESERVA} noches.`, status: 400 };
+  if (noches < minimo) {
+    return { error: `El alquiler mínimo es de ${minimo} ${minimo === 1 ? 'noche' : 'noches'}.`, status: 400 };
   }
   return null;
 }

@@ -53,8 +53,10 @@ export const dynamic = 'force-dynamic';
 // más consecuencias contables, así que es donde menos se justifica ahorrárselo.
 //
 // Toda la regla de negocio (mínimo de noches, documentos, lugares, vehículo
-// reservable, solapamiento, calendario del propietario, cobro, INSERT) es la
-// MISMA de la vía pública porque sale del mismo módulo: lib/reserva-core.ts.
+// reservable, solapamiento, calendario del propietario, cobro, INSERT) sale del
+// mismo módulo que la vía pública: lib/reserva-core.ts. Donde el mostrador se
+// aparta, lo hace pasando la vía a ese módulo (ver la diferencia 8), no con lógica
+// propia.
 //
 // ── Diferencias deliberadas respecto a POST /api/reservas ───────────────────
 //  1. `correoNoVerificado`: NO se exige. Ese gate existe para que una cuenta
@@ -92,6 +94,12 @@ export const dynamic = 'force-dynamic';
 //     documento que el cliente ya tenía (ver `rellenarDatosOperacionFaltantes` y
 //     `precargarDocumentosEnPerfil(..., { soloSiVacio })`), y si algo se completa
 //     queda su propia entrada de auditoría.
+//  8. Mínimo de noches: acá el mínimo es de 1 noche (alquiler de un solo día), no
+//     las 2 de la web. Es una decisión del dueño y una excepción del punto de
+//     atención: el empleado tiene al cliente enfrente, ve sus papeles y recibe el
+//     pago, así que puede decidir caso por caso. `MIN_NOCHES_RESERVA` sigue intacto
+//     y rigiendo la vía pública; la excepción está escrita en `MIN_NOCHES_POR_VIA`
+//     (lib/reserva-core.ts), que es lo que decide el mínimo de cada vía.
 
 type CuerpoClienteNuevo = {
   nombre?: unknown; correo?: unknown;
@@ -159,7 +167,11 @@ export async function POST(req: NextRequest) {
   const errPasado = validarFechaInicioNoPasada(fechaInicio);
   if (errPasado) return mal(errPasado.error, errPasado.status);
 
-  const errNoches = validarNochesMinimas(fechaInicio, fechaFin);
+  // Vía 'mostrador': el mínimo de 2 noches NO aplica acá (excepción deliberada, ver
+  // `MIN_NOCHES_POR_VIA` en lib/reserva-core.ts y el punto 8 de las diferencias de
+  // arriba). Queda un piso de 1 noche: el empleado puede hacer alquileres de un día,
+  // no reservas de cero días.
+  const errNoches = validarNochesMinimas(fechaInicio, fechaFin, 'mostrador');
   if (errNoches) return mal(errNoches.error, errNoches.status);
 
   // Documento de identidad (frente) y los dos lados de la licencia. El DORSO del

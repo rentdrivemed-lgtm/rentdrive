@@ -34,6 +34,13 @@ type Props = {
   onChange: (inicio: string, fin: string) => void;
   /** Vehículo inactivo: bloquea toda selección. */
   disabled?: boolean;
+  /**
+   * Oculta el aviso de "el alquiler mínimo es de N noches" (nunca fue bloqueante:
+   * solo informa). Lo usa el punto de atención (components/ReservaMostradorModal.tsx),
+   * donde el mínimo NO aplica y el aviso sería falso — ahí se puede alquilar por un
+   * solo día. Por defecto `false`: la ficha pública lo sigue mostrando igual que hoy.
+   */
+  sinMinimoNoches?: boolean;
 };
 
 const T = {
@@ -95,6 +102,7 @@ function fromISO(str: string): Date {
 
 export default function CalendarioReserva({
   availableDates, reservedDates, placa, combustible, exencionInscrita, inicio, fin, onChange, disabled,
+  sinMinimoNoches = false,
 }: Props) {
   const { lang } = useLang();
   const c = T[lang];
@@ -193,6 +201,11 @@ export default function CalendarioReserva({
   // MISMO número que se le cobra al cliente (app/api/reservas/route.ts y el resumen de precio
   // de la ficha usan calcularDiasAlquiler): días de alquiler = noches entre recogida y devolución.
   const diasRango = paso === 'listo' ? calcularDiasAlquiler(inicio, fin) : 0;
+
+  // Aviso informativo de mínimo de noches (no bloquea la selección, nunca lo hizo).
+  // Con `sinMinimoNoches` no se muestra nunca: en el punto de atención el mínimo no
+  // aplica, así que decir "el alquiler mínimo es de 2 noches" sería mentira.
+  const rangoCorto = !sinMinimoNoches && paso === 'listo' && diasRango < MIN_NOCHES_RESERVA;
 
   const irAPaso = (destino: 'inicio' | 'fin') => {
     setAviso('');
@@ -320,11 +333,11 @@ export default function CalendarioReserva({
       {/* Mismo espacio para la instrucción del paso activo y, al completarse, el resumen
           del rango. Va ARRIBA del calendario para que se lea antes de tocar un día. */}
       {paso === 'listo' ? (
-        <div className={`mt-2 rounded-xl px-3 py-2 border ${diasRango < MIN_NOCHES_RESERVA
+        <div className={`mt-2 rounded-xl px-3 py-2 border ${rangoCorto
           ? 'bg-warning/10 border-warning/30' : 'bg-success/10 border-success/25'}`}>
           <p className="text-sm font-bold text-ink">{c.diasRes(diasRango)}</p>
           <p className="text-[11px] text-ink-soft">{rangoNatural(inicio, fin)} · {c.noches(diasRango)}</p>
-          {diasRango < MIN_NOCHES_RESERVA && <p className="text-[11px] text-warning font-medium mt-0.5">{c.minNoches}</p>}
+          {rangoCorto && <p className="text-[11px] text-warning font-medium mt-0.5">{c.minNoches}</p>}
         </div>
       ) : (
         <div className="mt-2 flex items-center gap-2 rounded-xl bg-accent-light border border-accent/25 px-3 py-2">

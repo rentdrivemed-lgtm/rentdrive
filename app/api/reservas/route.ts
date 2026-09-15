@@ -138,7 +138,10 @@ export async function POST(req: NextRequest) {
   if (!vehiculo_id || !fecha_inicio || !fecha_fin) {
     return NextResponse.json({ error: 'Faltan datos' }, { status: 400 });
   }
-  const errNoches = validarNochesMinimas(fecha_inicio, fecha_fin);
+  // Vía 'publica' = el mínimo real del negocio (MIN_NOCHES_RESERVA, hoy 2 noches).
+  // Quien reserva por la web no tiene a nadie del equipo evaluando el caso; la
+  // excepción de 1 día es solo del punto de atención (ver MIN_NOCHES_POR_VIA).
+  const errNoches = validarNochesMinimas(fecha_inicio, fecha_fin, 'publica');
   if (errNoches) return NextResponse.json({ error: errNoches.error }, { status: errNoches.status });
 
   const documentosBody = {
