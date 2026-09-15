@@ -1,11 +1,43 @@
 // Generación de PDF en el navegador (cotizaciones y facturas) — jsPDF + autotable.
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import type { TipoConcepto } from './liquidacion-calculo';
 
 type Empresa = { nombre: string; nit: string };
 type Item = { descripcion: string; cantidad: number; valorUnitario: number };
 
 function cop(n: number) { return `$${Math.round(n).toLocaleString('es-CO')}`; }
+
+// Línea de ajuste del desglose de una liquidación (descuento o adicional), tal como se
+// congeló en `remisiones.conceptos_json` al emitir la cuenta de cobro.
+export type ConceptoPdf = { tipo: TipoConcepto; concepto: string; monto: number; motivo?: string };
+
+// Cuerpo de la tabla de una remisión/cuenta de cobro: alquiler, comisión y LUEGO cada
+// descuento y cada adicional con su concepto. El propietario está firmando: tiene que ver
+// línea por línea de dónde sale el neto, no solo un número más bajo que el del mes pasado.
+function cuerpoDesglose(
+  empresaNombre: string,
+  rem: { vehiculo_descripcion: string; dias: number; bruto: number; comision_pct: number; comision_valor: number },
+  conceptos: ConceptoPdf[] = [],
+): string[][] {
+  const filas: string[][] = [
+    [`Alquiler ${rem.vehiculo_descripcion} (${rem.dias} día${rem.dias !== 1 ? 's' : ''})`, cop(rem.bruto)],
+    [`Comisión ${empresaNombre || 'DrivePass'} (${(rem.comision_pct * 100).toFixed(0)}%)`, `- ${cop(rem.comision_valor)}`],
+  ];
+  for (const c of conceptos) {
+    const signo = c.tipo === 'descuento' ? '- ' : '+ ';
+    const etiqueta = c.tipo === 'descuento' ? 'Descuento' : 'Adicional';
+    filas.push([`${etiqueta}: ${c.concepto}${c.motivo ? ` — ${c.motivo}` : ''}`, `${signo}${cop(Math.abs(c.monto))}`]);
+  }
+  return filas;
+}
+
+// Un neto negativo no es "a pagar": es un saldo que el propietario le queda debiendo a
+// DrivePass (los descuentos superaron el bruto menos la comisión). El PDF lo dice con
+// todas las letras en vez de imprimir un total en negativo sin explicación.
+function etiquetaNeto(neto: number): string {
+  return neto < 0 ? 'Saldo a favor de DrivePass (el propietario queda debiendo)' : 'Neto a pagar al propietario';
+}
 
 function documentoBase(tipo: string, numero: string, fecha: string, empresa: Empresa, cliente: { nombre: string; documento?: string; correo?: string }, items: Item[], total: number, notaFinal?: string) {
   const doc = new jsPDF();
@@ -183,6 +215,7 @@ export function descargarRemisionPDF(empresa: Empresa, rem: {
   numero: string; created_at?: string; propietario_nombre: string; propietario_documento?: string;
   vehiculo_descripcion: string; placa?: string; fecha_inicio: string; fecha_fin: string; dias: number;
   bruto: number; comision_pct: number; comision_valor: number; neto: number;
+  conceptos?: ConceptoPdf[];
 }) {
   const doc = new jsPDF();
 
@@ -215,11 +248,8 @@ export function descargarRemisionPDF(empresa: Empresa, rem: {
   autoTable(doc, {
     startY: 70,
     head: [['Concepto', 'Valor']],
-    body: [
-      [`Alquiler ${rem.vehiculo_descripcion} (${rem.dias} día${rem.dias !== 1 ? 's' : ''})`, cop(rem.bruto)],
-      [`Comisión ${empresa.nombre || 'DrivePass'} (${(rem.comision_pct * 100).toFixed(0)}%)`, `- ${cop(rem.comision_valor)}`],
-    ],
-    foot: [['Neto a pagar al propietario', cop(rem.neto)]],
+    body: cuerpoDesglose(empresa.nombre, rem, rem.conceptos),
+    foot: [[etiquetaNeto(rem.neto), cop(rem.neto)]],
     theme: 'grid',
     headStyles: { fillColor: [199, 74, 33] },
     footStyles: { fillColor: [27, 51, 86], textColor: 255, fontStyle: 'bold' },
@@ -241,6 +271,10 @@ export function descargarCuentaCobroPDF(empresa: Empresa, rem: {
   vehiculo_descripcion: string; placa?: string; fecha_inicio: string; fecha_fin: string; dias: number;
   bruto: number; comision_pct: number; comision_valor: number; neto: number;
   firmada_en?: string; firma_imagen?: string; firma_nombre_confirmado?: string; firma_ip?: string;
+  conceptos?: ConceptoPdf[];
+  // Documento anulado (la liquidación se editó después de firmarlo): se marca como tal
+  // para que nadie lo confunda con la cuenta de cobro vigente.
+  anulada_en?: string; motivo_anulacion?: string;
 }) {
   const doc = new jsPDF();
 
@@ -273,17 +307,29 @@ export function descargarCuentaCobroPDF(empresa: Empresa, rem: {
   autoTable(doc, {
     startY: 70,
     head: [['Concepto', 'Valor']],
-    body: [
-      [`Alquiler ${rem.vehiculo_descripcion} (${rem.dias} día${rem.dias !== 1 ? 's' : ''})`, cop(rem.bruto)],
-      [`Comisión ${empresa.nombre || 'DrivePass'} (${(rem.comision_pct * 100).toFixed(0)}%)`, `- ${cop(rem.comision_valor)}`],
-    ],
-    foot: [['Neto a pagar al propietario', cop(rem.neto)]],
+    body: cuerpoDesglose(empresa.nombre, rem, rem.conceptos),
+    foot: [[etiquetaNeto(rem.neto), cop(rem.neto)]],
     theme: 'grid',
     headStyles: { fillColor: [199, 74, 33] },
     footStyles: { fillColor: [27, 51, 86], textColor: 255, fontStyle: 'bold' },
   });
 
   let y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY || 100;
+
+  // Sello de anulación ANTES del bloque de firma: una cuenta anulada sigue mostrando la
+  // firma (es la constancia de lo que se autorizó), pero no puede parecer vigente.
+  if (rem.anulada_en) {
+    y += 12;
+    doc.setFontSize(13); doc.setFont('helvetica', 'bold'); doc.setTextColor(199, 74, 33);
+    doc.text('ANULADA', 14, y);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(120);
+    doc.text(
+      `Esta cuenta de cobro fue anulada el ${rem.anulada_en.slice(0, 16).replace('T', ' ')} porque la liquidación se corrigió después de firmarla. ` +
+      `Se emitió una cuenta nueva por el monto correcto.${rem.motivo_anulacion ? ` Motivo: ${rem.motivo_anulacion}` : ''}`,
+      14, y + 6, { maxWidth: 182 },
+    );
+    y += 16;
+  }
 
   if (rem.firmada_en) {
     y += 14;

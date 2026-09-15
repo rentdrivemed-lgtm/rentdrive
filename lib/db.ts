@@ -416,8 +416,100 @@ function initDb(db: Database.Database) {
       firma_imagen TEXT DEFAULT '',
       firma_nombre_confirmado TEXT DEFAULT '',
       firma_hash TEXT DEFAULT '',
+      -- Desglose congelado (JSON) de los conceptos que componen el neto EN EL MOMENTO de
+      -- emitir/reemitir esta cuenta de cobro: [{tipo,concepto,monto}]. Lo que el propietario
+      -- ve y firma tiene que quedar guardado con el documento, no recalcularse después.
+      conceptos_json TEXT DEFAULT '[]',
+      -- 1 = documento original; 2, 3… = reemisión tras editar la liquidación (la versión
+      -- anterior queda copiada íntegra en remisiones_anuladas). El número cambia con la
+      -- versión: REM-000012 → REM-000012-R2.
+      version INTEGER DEFAULT 1,
       created_at TEXT DEFAULT (datetime('now', 'localtime'))
     );
+
+    -- Copia íntegra de una cuenta de cobro (remisión) YA FIRMADA que quedó anulada porque
+    -- la liquidación se editó después de firmarla. NO se borra nunca: es la constancia de
+    -- qué monto autorizó el propietario y cuándo. La tabla remisiones conserva una sola fila por
+    -- reserva (la vigente, que es la que se puede firmar y pagar); el histórico vive aquí.
+    CREATE TABLE IF NOT EXISTS remisiones_anuladas (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      remision_id INTEGER NOT NULL REFERENCES remisiones(id),
+      reserva_id INTEGER NOT NULL REFERENCES reservas(id),
+      propietario_id INTEGER NOT NULL REFERENCES usuarios(id),
+      numero TEXT NOT NULL DEFAULT '',
+      version INTEGER DEFAULT 1,
+      propietario_nombre TEXT DEFAULT '',
+      propietario_documento TEXT DEFAULT '',
+      vehiculo_descripcion TEXT DEFAULT '',
+      placa TEXT DEFAULT '',
+      fecha_inicio TEXT DEFAULT '',
+      fecha_fin TEXT DEFAULT '',
+      dias INTEGER DEFAULT 0,
+      bruto REAL DEFAULT 0,
+      comision_pct REAL DEFAULT 0,
+      comision_valor REAL DEFAULT 0,
+      neto REAL DEFAULT 0,
+      conceptos_json TEXT DEFAULT '[]',
+      firmada_en TEXT DEFAULT '',
+      firma_ip TEXT DEFAULT '',
+      firma_user_agent TEXT DEFAULT '',
+      firma_imagen TEXT DEFAULT '',
+      firma_nombre_confirmado TEXT DEFAULT '',
+      firma_hash TEXT DEFAULT '',
+      emitida_en TEXT DEFAULT '',
+      anulada_en TEXT DEFAULT (datetime('now', 'localtime')),
+      anulada_por INTEGER REFERENCES usuarios(id),
+      anulada_por_nombre TEXT DEFAULT '',
+      motivo_anulacion TEXT DEFAULT ''
+    );
+
+    -- Ajuste (descuento/adicional) que quedó PENDIENTE de aplicar a un propietario porque
+    -- la liquidación del servicio al que corresponde YA SE PAGÓ (lo pagado no se toca: es
+    -- constancia histórica). generarLiquidacion los consume al crear la siguiente
+    -- liquidación de ese propietario. Ver lib/contabilidad.ts → consumirAjustesPendientes.
+    CREATE TABLE IF NOT EXISTS ajustes_propietario (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      propietario_id INTEGER NOT NULL REFERENCES usuarios(id),
+      tipo TEXT NOT NULL CHECK(tipo IN ('descuento','adicional')),
+      concepto TEXT NOT NULL,
+      monto REAL NOT NULL,
+      motivo TEXT NOT NULL DEFAULT '',
+      -- A qué reserva/servicio corresponde el ajuste (queda impreso en la cuenta de cobro
+      -- donde finalmente se aplique, para que el propietario sepa de dónde sale).
+      reserva_origen_id INTEGER REFERENCES reservas(id),
+      estado TEXT NOT NULL DEFAULT 'pendiente' CHECK(estado IN ('pendiente','aplicado','anulado')),
+      aplicado_en_liquidacion_id INTEGER REFERENCES liquidaciones(id),
+      aplicado_en TEXT DEFAULT '',
+      anulado_en TEXT DEFAULT '',
+      motivo_anulacion TEXT DEFAULT '',
+      created_by INTEGER REFERENCES usuarios(id),
+      created_by_nombre TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now', 'localtime'))
+    );
+
+    -- Líneas que ajustan el neto de UNA liquidación concreta. El neto nunca se escribe a
+    -- mano: siempre es bruto − comisión − descuentos + adicionales (lib/liquidacion-calculo.ts).
+    CREATE TABLE IF NOT EXISTS liquidacion_conceptos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      liquidacion_id INTEGER NOT NULL REFERENCES liquidaciones(id),
+      tipo TEXT NOT NULL CHECK(tipo IN ('descuento','adicional')),
+      concepto TEXT NOT NULL,
+      monto REAL NOT NULL,
+      motivo TEXT NOT NULL DEFAULT '',
+      -- Si la línea nació de un ajuste pendiente (caso C: costo detectado después de pagar),
+      -- aquí queda el vínculo. El índice único parcial de más abajo es la garantía a nivel
+      -- de BD de que un mismo ajuste NO se pueda aplicar dos veces.
+      origen_ajuste_id INTEGER REFERENCES ajustes_propietario(id),
+      created_by INTEGER REFERENCES usuarios(id),
+      created_by_nombre TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now', 'localtime'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_liq_conceptos_liq ON liquidacion_conceptos(liquidacion_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_liq_conceptos_ajuste_unico
+      ON liquidacion_conceptos(origen_ajuste_id) WHERE origen_ajuste_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_ajustes_prop_pendientes ON ajustes_propietario(propietario_id, estado);
+    CREATE INDEX IF NOT EXISTS idx_remisiones_anuladas_reserva ON remisiones_anuladas(reserva_id);
 
     CREATE TABLE IF NOT EXISTS auditoria (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -680,6 +772,10 @@ function initDb(db: Database.Database) {
   try { db.exec("ALTER TABLE remisiones ADD COLUMN firma_imagen TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE remisiones ADD COLUMN firma_nombre_confirmado TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE remisiones ADD COLUMN firma_hash TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  // Liquidaciones editables: desglose congelado y versión del documento (ver la tabla
+  // `liquidacion_conceptos` y lib/contabilidad.ts → sincronizarCuentaCobro).
+  try { db.exec("ALTER TABLE remisiones ADD COLUMN conceptos_json TEXT DEFAULT '[]'"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE remisiones ADD COLUMN version INTEGER DEFAULT 1"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE gastos ADD COLUMN pagos TEXT DEFAULT '[]'"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE gastos ADD COLUMN abonado REAL DEFAULT 0"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE gastos ADD COLUMN comprobante_pago_url TEXT DEFAULT ''"); } catch { /* ya existe */ }
