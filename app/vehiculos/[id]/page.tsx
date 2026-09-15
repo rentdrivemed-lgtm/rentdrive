@@ -223,12 +223,6 @@ export default function VehiculoDetalle() {
                   onChange={(i, f) => { setFechaInicio(i); setFechaFin(f); setMsg(''); }}
                   disabled={carInactivo}
                 />
-                {fechaInicio && fechaFin && (
-                  <div className="mt-2 text-xs bg-surface-2 border border-border rounded-xl px-3 py-2 flex justify-between text-ink/60">
-                    <span>{c.recogidaLabel}: <b className="text-ink">{fechaInicio}</b></span>
-                    <span>{c.devolucionLabel}: <b className="text-ink">{fechaFin}</b></span>
-                  </div>
-                )}
               </div>
 
               {/* Lugar y hora de recogida / entrega */}
