@@ -3,6 +3,7 @@ import { esPdfUrl } from '@/lib/documento-tipo';
 import { getAnthropic } from './anthropic';
 import { normalizarOrientacion } from './blur-placas';
 import { descargarAcotado } from './descarga-remota';
+import { urlEntregaDocumento } from './storage';
 
 export type ResultadoRegla = 'pasa' | 'falla' | 'no_aplica';
 export type Veredicto    = 'aprobado' | 'rechazado' | 'revision';
@@ -106,7 +107,11 @@ export async function fetchAsBase64(url: string, opts?: { ladoMaxPx?: number }):
   // en vez de meter en memoria lo que sea que responda el otro lado. El tope va algo
   // por encima de MAX_BASE64_BYTES para que los archivos que solo se pasan "un poco"
   // sigan dando el mensaje de tamaño de siempre, con su cifra real.
-  const { buffer: buf, contentType: ct } = await descargarAcotado(url, {
+  // `urlEntregaDocumento` (lib/storage.ts): si el archivo dejó de ser de entrega
+  // pública en el storage, devuelve la MISMA dirección firmada por el servidor; si
+  // sigue siendo pública, la devuelve intacta. Es lo que permite migrar documentos a
+  // privados sin tocar este código ni dejar una ventana en la que algo no se vea.
+  const { buffer: buf, contentType: ct } = await descargarAcotado(urlEntregaDocumento(url), {
     timeoutMs: 20000,
     maxBytes: MAX_DESCARGA_BYTES,
   });

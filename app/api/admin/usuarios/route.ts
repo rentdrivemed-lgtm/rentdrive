@@ -8,12 +8,13 @@ import {
   type PermisosExtraDelta,
 } from '@/lib/permisos';
 import { eliminarUsuarioInteligente } from '@/lib/eliminar';
+import { mapaDocumentos } from '@/lib/documentos-ref';
 
 export async function GET() {
   const g = await guardArea('usuarios');
   if ('error' in g) return g.error;
   const { db } = g;
-  const usuarios = db.prepare(`
+  const filas = db.prepare(`
     SELECT id, nombre, correo, rol, admin_nivel, permisos_extra, estado_cuenta, created_at,
            tipo_documento, documento_identidad, fecha_nacimiento,
            celular, celular_indicativo, direccion, ciudad, numero_licencia, contacto_emergencia,
@@ -27,7 +28,32 @@ export async function GET() {
            banco, numero_cuenta
     FROM usuarios
     ORDER BY created_at DESC
-  `).all();
+  `).all() as Array<Record<string, unknown>>;
+
+  // Las direcciones de los documentos de identidad NO salen de aquí. Se leen para
+  // saber cuáles existen y de qué tipo son, y se sustituyen por una REFERENCIA
+  // (`usuario/<id>/<clave>`) que solo resuelve `/api/documentos/...` contra la sesión
+  // de quien pide, dejando cada apertura en la bitácora.
+  //
+  // Por qué justo en esta respuesta: es la de mayor alcance. La consume todo el
+  // equipo con la sección «Usuarios», y de ella salían las URLs públicas y eternas
+  // que terminaban pegadas en WhatsApp o en el historial del navegador.
+  const usuarios = filas.map(u => {
+    const documentos_id = mapaDocumentos('usuario', u.id, {
+      cedula_frente:        u.cedula_url,
+      cedula_dorso:         u.cedula_url_dorso,
+      licencia_frente:      u.licencia_url,
+      licencia_dorso:       u.licencia_url_dorso,
+      certificado_bancario: u.certificado_bancario_url,
+    });
+    const {
+      cedula_url: _a, cedula_url_dorso: _b, licencia_url: _c, licencia_url_dorso: _d,
+      certificado_bancario_url: _e, ...resto
+    } = u;
+    void _a; void _b; void _c; void _d; void _e;
+    return { ...resto, documentos_id };
+  });
+
   return NextResponse.json({ usuarios });
 }
 

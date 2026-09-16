@@ -21,6 +21,7 @@ import sharp from 'sharp';
 import { numeroActa, omisionesDeActa, type ActaGuardada, type FaseFoto, type FotoActa } from './acta-servicio';
 import { CASILLAS, esUrlFotoSegura, nombreCasilla, ordenCasilla, type CasillaId } from './fotos-servicio';
 import { descargarAcotado } from './descarga-remota';
+import { urlEntregaDocumento } from './storage';
 
 function pesos(n: number): string {
   return `$${Math.round(Number(n) || 0).toLocaleString('es-CO')}`;
@@ -73,7 +74,9 @@ async function cargarImagen(url: string): Promise<ImagenPdf | null> {
       if (!abs.startsWith(base + path.sep)) return null; // no salir de public/
       original = await fs.readFile(abs);
     } else {
-      original = (await descargarAcotado(url, { timeoutMs: TIMEOUT_DESCARGA_MS, maxBytes: MAX_BYTES_FOTO })).buffer;
+      // `urlEntregaDocumento`: hoy las fotos de servicio son públicas y la devuelve
+      // intacta; si alguna vez dejan de serlo, la firma el servidor sin tocar esto.
+      original = (await descargarAcotado(urlEntregaDocumento(url), { timeoutMs: TIMEOUT_DESCARGA_MS, maxBytes: MAX_BYTES_FOTO })).buffer;
     }
 
     const buffer = await sharp(original)

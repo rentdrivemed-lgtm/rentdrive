@@ -78,9 +78,12 @@ function docsUsuarioCompletos(u: Usuario): boolean {
   if (u.rol === 'admin') return true;
   const lleno = (v?: string) => !!(v || '').trim();
   if (!lleno(u.tipo_documento) || !lleno(u.documento_identidad)) return false;
-  if (!lleno(u.cedula_url) || !lleno(u.cedula_url_dorso)) return false;
+  // Antes se miraba si la URL venía llena. Ya no llega ninguna URL: llega el mapa de
+  // documentos subidos (ver GET /api/admin/usuarios), que dice exactamente lo mismo.
+  const docs = u.documentos_id || {};
+  if (!docs.cedula_frente || !docs.cedula_dorso) return false;
   if (u.rol === 'propietario') {
-    return lleno(u.banco) && lleno(u.numero_cuenta) && lleno(u.certificado_bancario_url);
+    return lleno(u.banco) && lleno(u.numero_cuenta) && !!docs.certificado_bancario;
   }
   return true;
 }
@@ -691,6 +694,9 @@ export default function PersonasSeccion({ miNivel, miId }: { miNivel: AdminNivel
       {/* Modal perfil usuario */}
       {perfilModal && (() => {
         const u = perfilModal.u;
+        // Documentos de identidad de esta persona: el servidor manda qué hay subido y
+        // su referencia, nunca la dirección del archivo (ver GET /api/admin/usuarios).
+        const docsId = u.documentos_id || {};
         let emergencia = { nombre: '', telefono: '' };
         try { emergencia = JSON.parse(u.contacto_emergencia || '{}'); } catch { /* */ }
         const edad = calcularEdad(u.fecha_nacimiento || '');
@@ -731,10 +737,16 @@ export default function PersonasSeccion({ miNivel, miId }: { miNivel: AdminNivel
                   </div>
                 </div>
 
-                {/* Foto de la cédula (frente y dorso) */}
+                {/* Foto de la cédula (frente y dorso).
+                    Ya no se le pasa una URL del CDN sino la REFERENCIA del documento: cada
+                    apertura pasa por /api/documentos/..., que comprueba el permiso y la
+                    anota en la Bitácora. */}
                 <div className="grid grid-cols-2 gap-3">
-                  {[{ label: 'Cédula (frente)', url: u.cedula_url }, { label: 'Cédula (dorso)', url: u.cedula_url_dorso }].map(d => (
-                    <DocumentoVista key={d.label} label={d.label} url={d.url} titulo={u.nombre} />
+                  {[
+                    { label: 'Cédula (frente)', doc: docsId.cedula_frente },
+                    { label: 'Cédula (dorso)',  doc: docsId.cedula_dorso },
+                  ].map(d => (
+                    <DocumentoVista key={d.label} label={d.label} doc={d.doc} titulo={u.nombre} />
                   ))}
                 </div>
 
@@ -758,7 +770,7 @@ export default function PersonasSeccion({ miNivel, miId }: { miNivel: AdminNivel
                     existe (cuentas viejas de propietario que alcanzaron a llenarlo). La
                     columna NO se tocó: la usa la verificación con IA de los documentos del
                     arrendatario (ver app/api/verificar-documentos/route.ts). */}
-                {(u.rol !== 'propietario' || !!u.numero_licencia || !!u.licencia_url) && (
+                {(u.rol !== 'propietario' || !!u.numero_licencia || !!docsId.licencia_frente) && (
                   <>
                     <p className="text-[10px] font-bold text-ink/50 uppercase tracking-widest pt-1">Licencia de conducción</p>
                     <div className="bg-surface rounded-xl p-3 border border-border">
@@ -767,10 +779,10 @@ export default function PersonasSeccion({ miNivel, miId }: { miNivel: AdminNivel
                     </div>
                     {/* Las fotos de la licencia del PERFIL (`usuarios.licencia_url`) tampoco se
                         mostraban acá: solo se veían las de cada reserva. */}
-                    {(u.licencia_url || u.licencia_url_dorso) && (
+                    {(docsId.licencia_frente || docsId.licencia_dorso) && (
                       <div className="grid grid-cols-2 gap-3">
-                        <DocumentoVista label="Licencia (frente)" url={u.licencia_url} titulo={u.nombre} />
-                        <DocumentoVista label="Licencia (dorso)" url={u.licencia_url_dorso} titulo={u.nombre} />
+                        <DocumentoVista label="Licencia (frente)" doc={docsId.licencia_frente} titulo={u.nombre} />
+                        <DocumentoVista label="Licencia (dorso)" doc={docsId.licencia_dorso} titulo={u.nombre} />
                       </div>
                     )}
                   </>
@@ -781,7 +793,7 @@ export default function PersonasSeccion({ miNivel, miId }: { miNivel: AdminNivel
                     completar su perfil y se guarda en `usuarios.certificado_bancario_url`,
                     pero hasta ahora no se mostraba en ninguna pantalla del equipo: no había
                     forma de verificarlo ni de descargarlo para hacer la transferencia. */}
-                {(u.rol === 'propietario' || !!u.certificado_bancario_url || !!u.banco) && (
+                {(u.rol === 'propietario' || !!docsId.certificado_bancario || !!u.banco) && (
                   <>
                     <p className="text-[10px] font-bold text-ink/50 uppercase tracking-widest pt-1">Datos bancarios</p>
                     <div className="grid grid-cols-2 gap-3">
@@ -796,7 +808,7 @@ export default function PersonasSeccion({ miNivel, miId }: { miNivel: AdminNivel
                     </div>
                     <DocumentoVista
                       label="Certificado bancario"
-                      url={u.certificado_bancario_url}
+                      doc={docsId.certificado_bancario}
                       titulo={`${u.nombre} — certificado bancario`}
                       vacio="No lo ha subido todavía."
                       nota="Emitido por el banco, máximo 3 meses de antigüedad."

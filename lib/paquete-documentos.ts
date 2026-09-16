@@ -37,6 +37,7 @@ import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import type Database from 'better-sqlite3';
 import { descargarAcotado } from './descarga-remota';
+import { urlEntregaDocumento } from './storage';
 import { esUrlFotoSegura } from './fotos-servicio';
 import { crearZip, type EntradaZip } from './zip';
 import { leerPoliza, CLAVE_POLIZA, POLIZA_LABEL } from './poliza-vehiculo';
@@ -524,7 +525,10 @@ async function traerDocumento(url: string, ruta: string): Promise<{ buffer: Buff
     }
     let descargado;
     try {
-      descargado = await descargarAcotado(url, {
+      // `urlEntregaDocumento` firma la petición si el archivo ya no es de entrega
+      // pública en el storage, y devuelve la dirección intacta si lo sigue siendo.
+      // Sin esto, el .zip se quedaría vacío el día que los documentos pasen a privados.
+      descargado = await descargarAcotado(urlEntregaDocumento(url), {
         timeoutMs: TIMEOUT_DESCARGA_MS,
         maxBytes: MAX_BYTES_ARCHIVO,
       });

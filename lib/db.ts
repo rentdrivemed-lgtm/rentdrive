@@ -525,6 +525,14 @@ function initDb(db: Database.Database) {
       created_at TEXT DEFAULT (datetime('now', 'localtime'))
     );
 
+    -- Accesos a documentos de identidad (área 'documentos_id', ver
+    -- lib/documentos-acceso.ts). Cada apertura de una cédula, licencia o certificado
+    -- consulta esta tabla ANTES de escribir, para no repetir una línea idéntica dentro
+    -- de la ventana de deduplicación; sin índice esa consulta sería un recorrido
+    -- completo de la bitácora en cada imagen que se pinta en el panel.
+    CREATE INDEX IF NOT EXISTS idx_auditoria_doc_acceso
+      ON auditoria(area, accion, entidad, entidad_id, created_at);
+
     -- ─────────── Panel de Control interno del equipo (Tareas / Calendario / Documentos) ───────────
     -- Kanban de tareas del equipo (Por hacer / En proceso / Hecho).
     CREATE TABLE IF NOT EXISTS tareas_equipo (

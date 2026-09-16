@@ -10,6 +10,8 @@
 // cliente.
 
 
+import type { MapaDocumentos } from '@/lib/documentos-ref';
+
 export type Usuario = {
   id: number; nombre: string; correo: string;
   rol: string; admin_nivel?: string; permisos_extra?: string; estado_cuenta: string; created_at: string;
@@ -17,12 +19,12 @@ export type Usuario = {
   fecha_nacimiento?: string; celular?: string; celular_indicativo?: string;
   direccion?: string; ciudad?: string;
   numero_licencia?: string; contacto_emergencia?: string;
-  cedula_url?: string; cedula_url_dorso?: string;
-  // Documentos del perfil que antes no se mostraban en ninguna pantalla — en
-  // particular el certificado bancario del propietario, que se pedía como
-  // obligatorio y después no había forma de verlo (ver GET /api/admin/usuarios).
-  licencia_url?: string; licencia_url_dorso?: string;
-  certificado_bancario_url?: string;
+  // Documentos de identidad: ya NO llegan sus direcciones (ver GET /api/admin/usuarios).
+  // Llega el mapa de los que están subidos, cada uno con su REFERENCIA; la ficha los
+  // pide a /api/documentos/..., que comprueba permiso y registra el acceso.
+  // Claves: cedula_frente, cedula_dorso, licencia_frente, licencia_dorso,
+  // certificado_bancario (ver lib/documentos-ref.ts).
+  documentos_id?: MapaDocumentos;
   banco?: string; numero_cuenta?: string;
 };
 export type DocItem = { url: string; vence?: string };

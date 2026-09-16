@@ -6,6 +6,7 @@ import { enviarCorreo } from '@/lib/email';
 import { generarCotizacion } from '@/lib/contabilidad';
 import { consumirCreditos } from '@/lib/referidos';
 import { perfilIncompleto, CODIGO_PERFIL_INCOMPLETO } from '@/lib/perfil';
+import { mapaDocumentos } from '@/lib/documentos-ref';
 import { correoNoVerificado, CODIGO_CORREO_NO_VERIFICADO } from '@/lib/verificacion-correo';
 // Reglas de negocio compartidas con la vía de mostrador (POST /api/admin/reservas).
 // Ver lib/reserva-core.ts: ahí viven mínimo de noches, documentos (incluido el
@@ -29,6 +30,10 @@ type ReservaRow = {
   propietario_id: number; usuario_nombre: string; usuario_correo: string;
   propietario_nombre: string; fecha_inicio: string; fecha_fin: string;
   total: number; estado: string; pago_estado: string;
+  // Llegan en el `SELECT r.*` y NO salen en la respuesta: se convierten en
+  // referencias (`documentos_id`). Ver más abajo.
+  documento_id_url?: string | null; documento_id_url_dorso?: string | null;
+  licencia_url?: string | null; licencia_url_dorso?: string | null;
 };
 
 export async function GET(req: NextRequest) {
@@ -85,7 +90,30 @@ export async function GET(req: NextRequest) {
 
   query += ' ORDER BY r.fecha_inicio DESC';
 
-  const reservas = db.prepare(query).all(...params) as ReservaRow[];
+  const filas = db.prepare(query).all(...params) as ReservaRow[];
+
+  // Documentos de identidad del cliente: la fila los trae (es un `SELECT r.*`), pero
+  // sus DIRECCIONES no salen de aquí. Se sustituyen por una referencia por documento
+  // (`reserva/<id>/<clave>`) que solo resuelve /api/documentos/... contra la sesión de
+  // quien pide, y que deja cada apertura en la bitácora.
+  //
+  // Esta respuesta la reciben TRES roles distintos (el cliente, el propietario del
+  // vehículo y el equipo con la sección «Reservas»); era, junto con la de usuarios, la
+  // otra vía por la que una cédula pública salía de la aplicación.
+  const reservas = filas.map(r => {
+    const documentos_id = mapaDocumentos('reserva', r.id, {
+      documento_frente: r.documento_id_url,
+      documento_dorso:  r.documento_id_url_dorso,
+      licencia_frente:  r.licencia_url,
+      licencia_dorso:   r.licencia_url_dorso,
+    });
+    const {
+      documento_id_url: _a, documento_id_url_dorso: _b, licencia_url: _c, licencia_url_dorso: _d,
+      ...resto
+    } = r as ReservaRow & Record<string, unknown>;
+    void _a; void _b; void _c; void _d;
+    return { ...resto, documentos_id };
+  });
 
   const stats = {
     total:       reservas.length,

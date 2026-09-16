@@ -18,18 +18,164 @@ export type UploadResult = { url: string; path: string };
 // un sitio externo, o un dato inventado), sin que nunca haya pasado por el
 // storage real ni por revisión. Basta validar el dominio/prefijo real que
 // genera Cloudinary — no hace falta un sistema de tokens firmados para esto.
-const CLOUDINARY_HOST = 'https://res.cloudinary.com/';
+const CLOUDINARY_HOSTNAME = 'res.cloudinary.com';
 
-export function esUrlDeStorageValida(url: unknown): boolean {
-  if (typeof url !== 'string' || !url) return false;
+// ── Parser estricto de una URL de NUESTRO storage ───────────────────────
+//
+// Hasta ahora `esUrlDeStorageValida` era un `startsWith` del prefijo del cloud. Para
+// lo único que existía (¿esta URL salió de nuestra cuenta?) alcanzaba, pero desde que
+// los documentos de identidad pueden dejar de ser públicos hace falta saber TRES cosas
+// más sobre cada URL guardada, y todas viven en su forma:
+//
+//   · el `resource_type` (`image` / `raw` / `video`), porque firmar o renombrar un
+//     recurso en Cloudinary exige pasárselo y equivocarse da 404;
+//   · el TIPO DE ENTREGA (`upload` = público para cualquiera con el enlace,
+//     `authenticated` / `private` = hace falta firma del servidor);
+//   · el `public_id` real, que es lo único con lo que se puede volver a construir la
+//     URL firmada.
+//
+// Se parsea con `new URL` y se valida segmento por segmento en vez de con una regex
+// sobre la cadena entera: una regex sobre texto libre es justo donde se cuelan los
+// `@`, los `\`, los `..` y los host parecidos (`res.cloudinary.com.evil.tld`).
+export type TipoRecursoStorage = 'image' | 'raw' | 'video';
+export type EntregaStorage = 'upload' | 'authenticated' | 'private';
+
+export type RecursoStorage = {
+  cloudName: string;
+  resourceType: TipoRecursoStorage;
+  /** `upload` = lo abre cualquiera con el enlace. El resto exige firma del servidor. */
+  entrega: EntregaStorage;
+  /** Atajo legible de `entrega === 'upload'`. */
+  publica: boolean;
+  /** Firma `s--XXXX--` cuando la URL ya viene firmada (solo authenticated/private). */
+  firma: string | null;
+  /** `v1789…` si la URL trae versión explícita. */
+  version: string | null;
+  /** `public_id` tal y como lo conoce Cloudinary (en imagen/vídeo va SIN extensión). */
+  publicId: string;
+  /** Extensión de entrega (`jpg`, `webp`…). `null` en `raw`, que no lleva. */
+  formato: string | null;
+};
+
+const TIPOS_RECURSO = new Set<string>(['image', 'raw', 'video']);
+const TIPOS_ENTREGA = new Set<string>(['upload', 'authenticated', 'private']);
+const RE_FIRMA   = /^s--[A-Za-z0-9_-]{6,}--$/;
+const RE_VERSION = /^v\d{1,19}$/;
+// Charset de un segmento de `public_id`. Todos los nombres los genera NUESTRO código
+// (`doc-<timestamp>-<random>.<ext>`, `uploads/<timestamp>-<random>.jpg`…), así que se
+// puede ser restrictivo: sin `%` (nada de doble decodificación), sin `\`, sin `:` y sin
+// espacios. `.` se permite por la extensión, pero un segmento que sea exactamente `.`
+// o `..` se rechaza aparte.
+const RE_SEGMENTO = /^[A-Za-z0-9._@~-]+$/;
+const URL_STORAGE_MAX = 1000;
+
+/**
+ * Descompone una URL de nuestro storage. Devuelve `null` — nunca lanza — ante
+ * cualquier cosa que no sea, exactamente, una URL de entrega de NUESTRA cuenta de
+ * Cloudinary: otro host, otro cloud, http, puerto, credenciales embebidas, query
+ * string, fragmento, segmentos vacíos o con `..`, tipos de recurso/entrega
+ * desconocidos…
+ *
+ * Falla CERRADO si falta `CLOUDINARY_CLOUD_NAME`: sin el nombre del cloud no hay
+ * forma de distinguir nuestra cuenta de la de cualquier otro (mismo criterio que
+ * tenía `esUrlDeStorageValida` desde siempre).
+ */
+export function recursoDeUrlStorage(url: unknown): RecursoStorage | null {
+  if (typeof url !== 'string') return null;
+  const u = url.trim();
+  if (!u || u.length > URL_STORAGE_MAX) return null;
+  // Caracteres de control y `\`: parten la URL o la reinterpretan (el parser WHATWG
+  // trata `\` igual que `/`). Se descartan antes de llegar al parser.
+  if (/[\u0000-\u001f\u007f\\]/.test(u)) return null;
+
   const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
-  // Falla CERRADO si falta la env var: sin `cloudName` no hay forma de restringir el
-  // prefijo a NUESTRA cuenta, y aceptar el host genérico dejaría pasar URLs de
-  // cualquier cuenta de Cloudinary (no solo la nuestra). Mejor rechazar todo documento
-  // en ese escenario (un problema de configuración visible) que aceptar de más.
-  if (!cloudName) return false;
-  const prefijo = `${CLOUDINARY_HOST}${cloudName}/`;
-  return url.startsWith(prefijo);
+  if (!cloudName) return null;
+
+  let parsed: URL;
+  try { parsed = new URL(u); } catch { return null; }
+  if (parsed.protocol !== 'https:') return null;
+  if (parsed.hostname.toLowerCase() !== CLOUDINARY_HOSTNAME) return null;
+  if (parsed.port) return null;
+  if (parsed.username || parsed.password) return null;
+  // Las URLs que devuelve Cloudinary (`secure_url`) no traen ni query ni fragmento.
+  // Aceptarlos sería aceptar sufijos que ningún consumidor mira pero que sí cambian
+  // lo que ve un navegador o un CDN intermedio.
+  if (parsed.search || parsed.hash) return null;
+
+  const segs = parsed.pathname.split('/').filter(s => s !== '');
+  // Debe quedar al menos: <cloud>/<resource_type>/<entrega>/<public_id>
+  if (segs.length < 4) return null;
+  if (segs.some(s => s === '.' || s === '..')) return null;
+  if (segs[0] !== cloudName) return null;
+  const resourceType = segs[1];
+  const entrega = segs[2];
+  if (!TIPOS_RECURSO.has(resourceType) || !TIPOS_ENTREGA.has(entrega)) return null;
+
+  let i = 3;
+  let firma: string | null = null;
+  if (RE_FIRMA.test(segs[i])) {
+    // Una firma sobre entrega `upload` no significa nada: se rechaza en vez de
+    // ignorarla en silencio (sería una URL que no pudimos haber generado nosotros).
+    if (entrega === 'upload') return null;
+    firma = segs[i];
+    i += 1;
+  }
+  let version: string | null = null;
+  if (i < segs.length && RE_VERSION.test(segs[i])) {
+    version = segs[i];
+    i += 1;
+  }
+
+  const resto = segs.slice(i);
+  if (resto.length === 0) return null;
+  if (!resto.every(s => RE_SEGMENTO.test(s))) return null;
+  // Ningún `public_id` que genere este proyecto contiene un segmento con forma de
+  // versión (`v1789…`): las carpetas son `docs`, `uploads`, `registro-temp`,
+  // `tarjetas/...` y el nombre es `doc-<ts>-<random>`. Si aparece uno aquí dentro es
+  // que lo que se saltó antes NO era una firma ni una versión sino una
+  // TRANSFORMACIÓN (`fl_attachment`, `w_100,h_100`, …), y entonces el `public_id`
+  // que se deduciría sería falso. Fallar cerrado: una URL con transformaciones no la
+  // generó `uploadFile()`, así que no es una URL guardada legítima.
+  if (resto.some(s => RE_VERSION.test(s))) return null;
+
+  const ruta = resto.join('/');
+  let publicId = ruta;
+  let formato: string | null = null;
+  if (resourceType !== 'raw') {
+    // En imagen/vídeo Cloudinary añade la extensión de ENTREGA a la URL, pero el
+    // `public_id` (lo que hace falta para firmar o renombrar) va sin ella.
+    // Hasta 8 caracteres de extensión, no 5: entre los archivos reales de la cuenta
+    // hay uno subido con extensión `.unknown` (de una prueba de seguridad) y con el
+    // tope en 5 el `public_id` deducido se quedaba con la extensión pegada, que es
+    // justo el dato con el que se firma o se renombra. Nunca hay un punto dentro del
+    // `public_id` real: `uploadFile()` le quita SIEMPRE la última extensión al nombre.
+    const m = /^(.*)\.([A-Za-z0-9]{2,8})$/.exec(ruta);
+    if (m && m[1]) { publicId = m[1]; formato = m[2].toLowerCase(); }
+  }
+  if (!publicId) return null;
+
+  return {
+    cloudName,
+    resourceType: resourceType as TipoRecursoStorage,
+    entrega: entrega as EntregaStorage,
+    publica: entrega === 'upload',
+    firma, version, publicId, formato,
+  };
+}
+
+/**
+ * ¿Esta URL salió de una subida real a NUESTRO storage?
+ *
+ * Mismo contrato de siempre (y mismos llamadores), ahora apoyado en el parser de
+ * arriba en vez de en un `startsWith`. Es ESTRICTAMENTE MÁS CERRADO que antes: todo
+ * lo que aceptaba el `startsWith` y ya no pasa — `…/<cloud>/` a secas, rutas con
+ * `..`, con query o con segmentos raros — no era una URL que Cloudinary pudiera
+ * habernos devuelto. Lo único que se AÑADE es el tipo de entrega `authenticated` /
+ * `private`, que es la forma que tendrán los documentos cuando dejen de ser públicos:
+ * sin esto, migrar un documento a privado lo volvería inválido para siempre.
+ */
+export function esUrlDeStorageValida(url: unknown): boolean {
+  return recursoDeUrlStorage(url) !== null;
 }
 
 /**
@@ -140,6 +286,44 @@ export async function uploadFile(filename: string, contentType: string, data: Ar
   });
 
   return { url: result.secure_url, path: result.public_id };
+}
+
+// ── Entrega de un documento desde el SERVIDOR ──────────────────────────────
+//
+// Punto único por el que el servidor obtiene una dirección DESCARGABLE de un
+// documento guardado. Es lo que permite que la verificación con IA, el ZIP de
+// documentos, el acta y los contratos sigan funcionando igual antes y después de
+// que un documento pase de público a privado en Cloudinary: el JSON/columna sigue
+// guardando la URL canónica, y quien necesite los bytes pasa por acá.
+//
+// POR QUÉ NO SE LE ENTREGA ESTO AL NAVEGADOR. La firma de Cloudinary (`s--xxx--`)
+// NO caduca: es un HMAC del public_id y la transformación, sin componente temporal.
+// Solo caducan los enlaces construidos con `auth_token` (función de plan Advanced,
+// hay que habilitarla en la cuenta) o los `private_download_url` de recursos
+// `private`. Mandarle al navegador una URL firmada corriente sería, entonces,
+// repetir exactamente el problema que se quiere resolver: un enlace permanente que
+// abre el documento sin sesión y que no se puede revocar. Por eso las pantallas van
+// por `/api/documentos/...` (ver lib/documentos-acceso.ts) y esta función se queda
+// del lado del servidor.
+export function urlEntregaDocumento(url: string): string {
+  const rec = recursoDeUrlStorage(url);
+  // No es una URL de nuestro storage (p. ej. las legado en disco `/uploads/...`):
+  // se devuelve intacta. Quién puede o no descargarla lo decide la allowlist del
+  // llamador, igual que antes de este cambio.
+  if (!rec) return url;
+  // Entrega pública: la URL guardada ya sirve tal cual. No se firma de más.
+  if (rec.publica) return url;
+  return cloudinary.url(rec.publicId, {
+    resource_type: rec.resourceType,
+    type: rec.entrega,
+    secure: true,
+    sign_url: true,
+    // Sin el sufijo `?_a=` de analítica: la URL solo la usa el servidor para bajar
+    // los bytes y una query de más solo estorba al depurar.
+    analytics: false,
+    ...(rec.version ? { version: rec.version.slice(1) } : {}),
+    ...(rec.formato ? { format: rec.formato } : {}),
+  });
 }
 
 // ── Limpieza de documentos huérfanos (registro-temp) ────────────────────────

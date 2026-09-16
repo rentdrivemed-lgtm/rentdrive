@@ -13,9 +13,13 @@
 //     (con zoom, que es lo que hace falta para leer un número de cuenta) +
 //     "Descargar".
 //
-// La descarga suelta pasa por `urlDescarga()` (lib/cloudinary-descarga.ts), que le
-// mete el flag `fl_attachment` a la URL del CDN: sin eso el navegador abre el
-// archivo en vez de bajarlo, porque el atributo `download` se ignora cross-origin.
+// La descarga suelta depende de por dónde venga el documento:
+//   · con `doc` (documento privado) va a `/api/documentos/...?descargar=1`, y es el
+//     propio servidor el que responde con `Content-Disposition: attachment`;
+//   · con `url` (camino legado, aún sobre el CDN) pasa por `urlDescarga()`
+//     (lib/cloudinary-descarga.ts), que le mete el flag `fl_attachment`: sin eso el
+//     navegador abre el archivo en vez de bajarlo, porque el atributo `download` se
+//     ignora cross-origin.
 //
 // Módulo de cliente puro: solo importa módulos puros (`cloudinary-descarga`,
 // `fotos-servicio`) y componentes de cliente.
@@ -24,9 +28,23 @@ import VisorFotos from '@/components/VisorFotos';
 import { IconExport } from '@/components/Icons';
 import { urlDescarga } from '@/lib/cloudinary-descarga';
 import { esPdfUrl } from '@/lib/documento-tipo';
+import { rutaDocumento, type DocumentoDisponible } from '@/lib/documentos-ref';
 
 type Props = {
   label: string;
+  /**
+   * Documento PRIVADO: no llega su dirección, llega su referencia
+   * (`usuario/12/cedula_frente`). La ficha pide los bytes a `/api/documentos/...`,
+   * que comprueba la sesión y el permiso y deja el acceso en la bitácora. Tiene
+   * prioridad sobre `url`.
+   */
+  doc?: DocumentoDisponible | null;
+  /**
+   * Dirección directa del archivo. Camino LEGADO, el que queda para los documentos
+   * que todavía no pasaron al acceso controlado (documentos del vehículo en el panel
+   * del propietario, póliza). Se irá quitando a medida que cada pantalla se pase a
+   * `doc`.
+   */
   url?: string | null;
   /** Texto bajo el documento (vencimiento, quién lo gestiona, etc.). */
   nota?: string;
@@ -42,9 +60,14 @@ type Props = {
 // falso siempre y el documento se pintaba como <img> roto.
 const esPdf = esPdfUrl;
 
-export default function DocumentoVista({ label, url, nota, titulo, vacio, className }: Props) {
+export default function DocumentoVista({ label, doc, url, nota, titulo, vacio, className }: Props) {
   const [visor, setVisor] = useState(false);
-  const u = (url || '').trim();
+  // Con `doc`, la dirección que ve el navegador es siempre del PROPIO sitio y no
+  // revela nada del almacenamiento; el tipo (PDF o imagen) lo dice el servidor, que es
+  // el único que sigue viendo la URL real.
+  const u = doc ? rutaDocumento(doc.ambito, doc.id, doc.clave) : (url || '').trim();
+  const descarga = doc ? rutaDocumento(doc.ambito, doc.id, doc.clave, { descargar: true }) : urlDescarga(u);
+  const pdf = doc ? doc.pdf : esPdf(u);
 
   return (
     <div className={className || 'bg-surface rounded-xl p-3 border border-border'}>
@@ -52,13 +75,13 @@ export default function DocumentoVista({ label, url, nota, titulo, vacio, classN
 
       {!u ? (
         <p className="text-sm text-ink/50">{vacio || 'No subido.'}</p>
-      ) : esPdf(u) ? (
+      ) : pdf ? (
         <div className="flex items-center gap-3 flex-wrap">
           <a href={u} target="_blank" rel="noopener noreferrer"
             className="inline-flex items-center gap-2 text-sm text-accent hover:underline">
             📄 Ver PDF
           </a>
-          <a href={urlDescarga(u)} download
+          <a href={descarga} download
             className="inline-flex items-center gap-1 text-[11px] font-medium text-ink/60 hover:text-accent transition">
             <IconExport size={12} /> Descargar
           </a>
@@ -70,7 +93,7 @@ export default function DocumentoVista({ label, url, nota, titulo, vacio, classN
             <img src={u} alt={label} className="w-full max-h-44 object-contain rounded-lg border border-border hover:opacity-90 transition" />
             <span className="text-[11px] text-ink/50 mt-1 inline-block">Clic para ampliar</span>
           </button>
-          <a href={urlDescarga(u)} download
+          <a href={descarga} download
             className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-ink/60 hover:text-accent transition">
             <IconExport size={12} /> Descargar
           </a>
