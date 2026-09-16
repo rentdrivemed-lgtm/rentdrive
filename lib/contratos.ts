@@ -30,6 +30,7 @@ import {
   type CampoFaltante, type DatosContrato, type ExtremoOperacion, type Persona, type TipoDocumento,
 } from './contratos-datos';
 import { generarTexto } from './contratos-plantillas';
+import type { OverridesContrato } from './contratos-campos';
 
 type DB = Database.Database;
 
@@ -62,6 +63,9 @@ type FilaPersona = {
   nombre: string; correo: string; documento_identidad: string | null; tipo_documento: string | null;
   ciudad: string | null; direccion: string | null; celular: string | null; celular_indicativo: string | null;
   numero_licencia: string | null;
+  /** Columnas nuevas (ver lib/db.ts → crearColumnasDatosContrato): el acta las exige. */
+  licencia_categoria: string | null;
+  licencia_vence: string | null;
 };
 
 function armarPersona(f: FilaPersona): Persona {
@@ -80,6 +84,8 @@ function armarPersona(f: FilaPersona): Persona {
     licencia: {
       ...LICENCIA_VACIA,
       numero: oPendiente(f.numero_licencia),
+      categoria: oPendiente(f.licencia_categoria),
+      vigenciaHasta: oPendiente(f.licencia_vence),
     },
   };
 }
@@ -120,6 +126,19 @@ function extremo(fechaISO: string, l: Lugar | null): ExtremoOperacion {
   };
 }
 
+/**
+ * Aplica el parche de la operación a un extremo (entrega/restitución): la hora y el
+ * lugar tal como van IMPRESOS. La fecha nunca se parcha (ver `armarDatosContrato`).
+ * Un parche vacío deja el valor que salió de la reserva.
+ */
+function conParche(base: ExtremoOperacion, hora?: string, lugar?: string): ExtremoOperacion {
+  return {
+    fecha: base.fecha,
+    hora: (hora || '').trim() || base.hora,
+    lugar: (lugar || '').trim() || base.lugar,
+  };
+}
+
 function hoyISO(): string {
   const d = new Date();
   const p = (n: number) => String(n).padStart(2, '0');
@@ -137,13 +156,20 @@ type FilaContrato = {
   reserva_id: number; fecha_inicio: string; fecha_fin: string; total: number; recargo: number;
   creditos_usados: number; recogida: string; entrega: string;
   vehiculo_id: number; marca: string; modelo: string; anio: number; placa: string; documentos: string;
+  // Datos de la matrícula y de la carátula de la póliza. Antes NO existían en la
+  // base (se imprimían en blanco); hoy viven en la ficha del vehículo y se llenan
+  // desde la pantalla de datos del contrato (lib/contratos-edicion.ts).
+  color: string; numero_motor: string; numero_chasis: string; valor_asegurado: number;
+  poliza_numero: string; poliza_aseguradora: string; poliza_aseguradora_nit: string;
+  poliza_expedida_el: string; poliza_vigencia_desde: string; poliza_vigencia_hasta: string;
+  poliza_codigo_clausulado: string; poliza_nota_tecnica: string; poliza_deducible: string;
   propietario_id: number; cliente_id: number;
   p_nombre: string; p_correo: string; p_documento: string | null; p_tipo_doc: string | null;
   p_ciudad: string | null; p_direccion: string | null; p_celular: string | null; p_indicativo: string | null;
-  p_licencia: string | null;
+  p_licencia: string | null; p_licencia_categoria: string | null; p_licencia_vence: string | null;
   c_nombre: string; c_correo: string; c_documento: string | null; c_tipo_doc: string | null;
   c_ciudad: string | null; c_direccion: string | null; c_celular: string | null; c_indicativo: string | null;
-  c_licencia: string | null;
+  c_licencia: string | null; c_licencia_categoria: string | null; c_licencia_vence: string | null;
   fotos_salida: string | null; fotos_entrada: string | null;
 };
 
@@ -152,6 +178,12 @@ export type OpcionesContrato = {
   fecha?: string;
   /** Permite forzar el IVA (pruebas y vista previa); si no, se lee de `config`. */
   iva?: ConfigIva;
+  /**
+   * Parche de datos de ESTA operación (`contratos.overrides_json`), lo que se edita
+   * desde la pantalla de datos del contrato y no tiene ficha propia donde vivir.
+   * Ver lib/contratos-campos.ts y lib/contratos-edicion.ts.
+   */
+  overrides?: OverridesContrato;
 };
 
 /**
@@ -168,13 +200,26 @@ export function armarDatosContrato(db: DB, reservaId: number, op: OpcionesContra
            COALESCE(r.recogida, '{}') AS recogida, COALESCE(r.entrega, '{}') AS entrega,
            v.id AS vehiculo_id, v.marca, v.modelo, v.anio, COALESCE(v.placa, '') AS placa,
            COALESCE(v.documentos, '{}') AS documentos,
+           COALESCE(v.color, '') AS color, COALESCE(v.numero_motor, '') AS numero_motor,
+           COALESCE(v.numero_chasis, '') AS numero_chasis, COALESCE(v.valor_asegurado, 0) AS valor_asegurado,
+           COALESCE(v.poliza_numero, '') AS poliza_numero,
+           COALESCE(v.poliza_aseguradora, '') AS poliza_aseguradora,
+           COALESCE(v.poliza_aseguradora_nit, '') AS poliza_aseguradora_nit,
+           COALESCE(v.poliza_expedida_el, '') AS poliza_expedida_el,
+           COALESCE(v.poliza_vigencia_desde, '') AS poliza_vigencia_desde,
+           COALESCE(v.poliza_vigencia_hasta, '') AS poliza_vigencia_hasta,
+           COALESCE(v.poliza_codigo_clausulado, '') AS poliza_codigo_clausulado,
+           COALESCE(v.poliza_nota_tecnica, '') AS poliza_nota_tecnica,
+           COALESCE(v.poliza_deducible, '') AS poliza_deducible,
            v.propietario_id, r.usuario_id AS cliente_id,
            p.nombre AS p_nombre, p.correo AS p_correo, p.documento_identidad AS p_documento,
            p.tipo_documento AS p_tipo_doc, p.ciudad AS p_ciudad, p.direccion AS p_direccion,
            p.celular AS p_celular, p.celular_indicativo AS p_indicativo, p.numero_licencia AS p_licencia,
+           p.licencia_categoria AS p_licencia_categoria, p.licencia_vence AS p_licencia_vence,
            c.nombre AS c_nombre, c.correo AS c_correo, c.documento_identidad AS c_documento,
            c.tipo_documento AS c_tipo_doc, c.ciudad AS c_ciudad, c.direccion AS c_direccion,
            c.celular AS c_celular, c.celular_indicativo AS c_indicativo, c.numero_licencia AS c_licencia,
+           c.licencia_categoria AS c_licencia_categoria, c.licencia_vence AS c_licencia_vence,
            o.fotos_salida, o.fotos_entrada
     FROM reservas r
     JOIN vehiculos v ON v.id = r.vehiculo_id
@@ -194,17 +239,25 @@ export function armarDatosContrato(db: DB, reservaId: number, op: OpcionesContra
   // el canon corresponde a lo efectivamente cobrado, que es la base sobre la que
   // la cláusula cuarta liquida la comisión («canon efectivamente recaudado»).
   const canonRecaudado = Math.max(0, Math.round(Number(row.total) - Number(row.recargo)));
-  const canonDiario = Math.round(canonRecaudado / dias);
+
+  // El PARCHE de esta operación (lib/contratos-campos.ts). Es lo único que puede
+  // apartarse de lo que dice la base, y solo en los datos que no tienen ficha propia:
+  // canon, depósito, kilometraje, horas, lugares, conductores y fecha de suscripción.
+  // Nunca toca el texto: el texto se vuelve a generar con estos datos.
+  const ov = op.overrides ?? {};
+  const canonDiario = ov.canonDiario !== undefined && ov.canonDiario > 0
+    ? Math.round(ov.canonDiario)
+    : Math.round(canonRecaudado / dias);
 
   const derivados = calcularDerivados({
     dias,
     canonDiario,
     iva: op.iva ?? configIva(db),
-    deposito: DEPOSITO_GARANTIA,
+    deposito: ov.deposito !== undefined && ov.deposito >= 0 ? ov.deposito : DEPOSITO_GARANTIA,
   });
 
   const poliza = leerPoliza(row.documentos);
-  const fecha = op.fecha ?? hoyISO();
+  const fecha = ov.fecha || op.fecha || hoyISO();
 
   // Numeración provisional (no hay tabla `contratos` todavía, ver el inventario):
   // el marco de arrendamiento se numera por reserva, el de agencia por vehículo, y
@@ -223,11 +276,13 @@ export function armarDatosContrato(db: DB, reservaId: number, op: OpcionesContra
       nombre: row.p_nombre, correo: row.p_correo, documento_identidad: row.p_documento,
       tipo_documento: row.p_tipo_doc, ciudad: row.p_ciudad, direccion: row.p_direccion,
       celular: row.p_celular, celular_indicativo: row.p_indicativo, numero_licencia: row.p_licencia,
+      licencia_categoria: row.p_licencia_categoria, licencia_vence: row.p_licencia_vence,
     }),
     cliente: armarPersona({
       nombre: row.c_nombre, correo: row.c_correo, documento_identidad: row.c_documento,
       tipo_documento: row.c_tipo_doc, ciudad: row.c_ciudad, direccion: row.c_direccion,
       celular: row.c_celular, celular_indicativo: row.c_indicativo, numero_licencia: row.c_licencia,
+      licencia_categoria: row.c_licencia_categoria, licencia_vence: row.c_licencia_vence,
     }),
     agente: AGENTE,
     vehiculo: {
@@ -237,34 +292,50 @@ export function armarDatosContrato(db: DB, reservaId: number, op: OpcionesContra
       // modelo. Los documentos usan la nomenclatura de la matrícula.
       linea: enMayusculas(row.modelo) || PENDIENTE,
       anio: Number(row.anio) || 0,
-      color: PENDIENTE,
-      motor: PENDIENTE,
-      chasis: PENDIENTE,
+      color: oPendiente(row.color),
+      motor: oPendiente(row.numero_motor),
+      chasis: oPendiente(row.numero_chasis),
       servicio: 'particular',
-      valorAsegurado: 0,
+      valorAsegurado: Math.max(0, Math.round(Number(row.valor_asegurado) || 0)),
     },
     poliza: {
-      numero: PENDIENTE,
-      aseguradora: PENDIENTE,
-      aseguradoraNit: PENDIENTE,
+      numero: oPendiente(row.poliza_numero),
+      aseguradora: oPendiente(row.poliza_aseguradora),
+      aseguradoraNit: oPendiente(row.poliza_aseguradora_nit),
       // Las fechas van con la marca de pendiente (no vacías) para que el hueco se
       // VEA en el documento en vez de dejar una frase con dos espacios seguidos.
-      expedidaEl: PENDIENTE,
-      vigenciaDesde: PENDIENTE,
-      vigenciaHasta: poliza?.vence || PENDIENTE,
-      codigoClausulado: PENDIENTE,
-      notaTecnica: PENDIENTE,
-      deducible: PENDIENTE,
+      expedidaEl: oPendiente(row.poliza_expedida_el),
+      vigenciaDesde: oPendiente(row.poliza_vigencia_desde),
+      // DOS orígenes, y el orden importa: manda la columna que se escribe desde la
+      // pantalla de datos del contrato y, si está vacía, se usa la fecha que se cargó
+      // junto con el archivo de la carátula (`documentos.poliza.vence`), que es la que
+      // ya existía. Así el dato que alguien escribió a mano nunca se pisa en silencio.
+      vigenciaHasta: oPendiente(row.poliza_vigencia_hasta || poliza?.vence || ''),
+      codigoClausulado: oPendiente(row.poliza_codigo_clausulado),
+      notaTecnica: oPendiente(row.poliza_nota_tecnica),
+      deducible: oPendiente(row.poliza_deducible),
     },
     operacion: {
-      entrega: extremo(row.fecha_inicio, leerLugar(row.recogida)),
-      restitucion: extremo(row.fecha_fin, leerLugar(row.entrega)),
+      // Las FECHAS no admiten parche a propósito: salen de la reserva y de ellas
+      // dependen los días, el canon y la disponibilidad. Cambiarlas desde el contrato
+      // dejaría el documento diciendo una cosa y la reserva otra.
+      entrega: conParche(extremo(row.fecha_inicio, leerLugar(row.recogida)), ov.entregaHora, ov.entregaLugar),
+      restitucion: conParche(extremo(row.fecha_fin, leerLugar(row.entrega)), ov.restitucionHora, ov.restitucionLugar),
       // Política actual de DrivePass; el otrosí trae el texto de kilometraje
       // ilimitado fijo (ver el reporte).
-      kilometraje: 'ilimitado',
-      costoKmExceso: 'no aplica',
-      // La plataforma no guarda conductores autorizados distintos del cliente.
-      conductores: [],
+      kilometraje: ov.kilometraje || 'ilimitado',
+      costoKmExceso: ov.costoKmExceso || 'no aplica',
+      // Los conductores autorizados no tienen tabla propia (no son cuentas de la
+      // plataforma): son de ESTA operación y viven en el parche del contrato.
+      conductores: (ov.conductores ?? []).map(c => ({
+        nombre: enMayusculas(c.nombre) || PENDIENTE,
+        documento: oPendiente(documentoFormateado(c.documento || '')),
+        licencia: {
+          numero: oPendiente(c.licenciaNumero),
+          categoria: oPendiente(c.licenciaCategoria),
+          vigenciaHasta: oPendiente(c.licenciaVence),
+        },
+      })),
       fotosEntrega: parseFotosServicio(row.fotos_salida).length,
       fotosDevolucion: parseFotosServicio(row.fotos_entrada).length,
     },

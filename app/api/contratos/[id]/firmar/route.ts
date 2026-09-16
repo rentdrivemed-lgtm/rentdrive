@@ -35,7 +35,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   const body = await req.json().catch(() => ({})) as {
     bloque?: unknown; nombre_confirmado?: unknown; firma_imagen?: unknown;
-    metodo?: unknown; acepta?: unknown; version?: unknown;
+    metodo?: unknown; acepta?: unknown; version?: unknown; revision?: unknown;
   };
 
   const bloque = typeof body.bloque === 'string' ? body.bloque.trim() : '';
@@ -51,6 +51,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const version = Number(body.version);
   if (!Number.isInteger(version) || version <= 0) {
     return NextResponse.json({ error: 'Falta la versión del documento. Recarga la página e inténtalo de nuevo.' }, { status: 400 });
+  }
+  // Revisión de DATOS que el firmante tenía en pantalla. La `version` solo cambia al
+  // anular y reemitir; esto detecta lo otro que puede pasar mientras alguien lee: que el
+  // equipo complete un dato pendiente y el texto se vuelva a generar. Es opcional por
+  // compatibilidad (ver `FirmarOpciones.revision`), pero la pantalla siempre la manda.
+  const revision = body.revision === undefined ? undefined : Number(body.revision);
+  if (revision !== undefined && (!Number.isInteger(revision) || revision < 0)) {
+    return NextResponse.json({ error: 'La revisión del documento no es válida. Recarga la página e inténtalo de nuevo.' }, { status: 400 });
   }
   const nombreConfirmado = typeof body.nombre_confirmado === 'string' ? body.nombre_confirmado.trim() : '';
   if (!nombreConfirmado) {
@@ -87,6 +95,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     metodo: body.metodo,
     acepta: body.acepta === true,
     version,
+    revision,
     ip: ipCliente(req),
     userAgent: req.headers.get('user-agent') || '',
   });

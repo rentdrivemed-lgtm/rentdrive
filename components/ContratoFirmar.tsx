@@ -22,6 +22,7 @@
 // Componente de cliente puro: no importa módulos de servidor.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import FirmaEntrada, { type MetodoFirmaUI } from '@/components/FirmaEntrada';
+import ContratoDatos from '@/components/ContratoDatos';
 
 type Integridad = { ok: boolean; motivo: string };
 
@@ -63,11 +64,21 @@ type Detalle = {
     anulado_por_nombre: string; motivo_anulacion: string;
     /** '' = sin decidir · 'digital' = firma electrónica · 'papel' = mostrador. */
     via_firma: '' | 'digital' | 'papel';
+    /** Sube +1 cada vez que se completan los DATOS y el texto se vuelve a generar. */
+    datos_revision: number;
+    datos_editados_en: string;
+    datos_editados_por_nombre: string;
   };
   papel: Papel;
   firmas: Firma[];
   faltantes: { bloqueantes: Faltante[]; estructurales: Faltante[] };
-  permisos: { gestionar: boolean; firmar_agente: boolean; parte: string | null };
+  permisos: {
+    gestionar: boolean; firmar_agente: boolean; parte: string | null;
+    /** ¿Se pueden completar los DATOS? (sin firmar, sin vía elegida y con el área). */
+    editar_datos: boolean;
+    /** Si no se puede, por qué. */
+    motivo_no_editable: string;
+  };
 };
 
 /** Resultado de una petición del documento, antes de tocar el estado. */
@@ -113,6 +124,9 @@ export default function ContratoFirmar({ contratoId, onCambio }: Props) {
   const [errorFirma, setErrorFirma] = useState('');
 
   // Mostrador: subir el escaneado del ejemplar firmado a mano.
+  // Panel de DATOS (completar lo que falta). No edita el texto: lo regenera.
+  const [datosAbierto, setDatosAbierto] = useState(false);
+
   const [subiendoPapel, setSubiendoPapel] = useState(false);
   const [errorPapel, setErrorPapel] = useState('');
   const [confirmaPapel, setConfirmaPapel] = useState(false);
@@ -186,6 +200,9 @@ export default function ContratoFirmar({ contratoId, onCambio }: Props) {
           metodo,
           acepta,
           version: detalle.contrato.version,
+          // Si alguien completó un dato mientras se leía el documento, el texto se
+          // regeneró: el servidor rechaza la firma y hay que releerlo.
+          revision: detalle.contrato.datos_revision,
         }),
       });
       const json = await res.json().catch(() => ({}));
@@ -271,6 +288,9 @@ export default function ContratoFirmar({ contratoId, onCambio }: Props) {
   const puedeImprimirParaFirmar = sinViaElegida && detalle.faltantes.bloqueantes.length === 0;
   const puedeSubirEscaneado = detalle.permisos.gestionar && puedeImprimirParaFirmar;
   const listo = leido && !!firmaImagen && nombre.trim().length > 0 && acepta && !firmando;
+  // Completar datos: lo decide el servidor (área de contratos + sin firmar + sin vía
+  // elegida). Aquí solo se pinta.
+  const puedeEditarDatos = detalle.permisos.editar_datos === true;
 
   return (
     <div className="space-y-4">
@@ -352,7 +372,11 @@ export default function ContratoFirmar({ contratoId, onCambio }: Props) {
           <ul className="list-disc pl-4 space-y-0.5">
             {detalle.faltantes.bloqueantes.map(f => <li key={f.ruta}>{f.etiqueta}</li>)}
           </ul>
-          <p className="mt-1">Complétalos, anula este documento y emítelo de nuevo.</p>
+          <p className="mt-1">
+            {puedeEditarDatos
+              ? 'Complétalos abajo, en «Completar los datos del documento»: el texto se vuelve a generar con ellos.'
+              : 'Complétalos, anula este documento y emítelo de nuevo.'}
+          </p>
         </div>
       )}
 
@@ -365,10 +389,43 @@ export default function ContratoFirmar({ contratoId, onCambio }: Props) {
             {detalle.faltantes.estructurales.map(f => <li key={f.ruta}>{f.etiqueta}</li>)}
           </ul>
           <p className="mt-1.5">
-            La plataforma todavía no guarda estos datos, así que aparecen como espacios en blanco en el texto.
-            Míralos en el documento antes de firmar.
+            {puedeEditarDatos
+              ? 'Todavía no se han llenado, así que salen como espacios en blanco. No impiden firmar, pero se pueden completar abajo, en «Completar los datos del documento».'
+              : 'Todavía no se han llenado, así que salen como espacios en blanco en el texto. Míralos en el documento antes de firmar.'}
           </p>
         </details>
+      )}
+
+      {/* ── Completar los DATOS ───────────────────────────────────────────────
+          Lo que se edita son los datos, NUNCA el texto: al guardar, el documento se
+          vuelve a generar desde la plantilla del abogado. Solo mientras esté sin
+          firmar y sin vía de firma elegida; el servidor lo vuelve a comprobar. */}
+      {detalle.permisos.gestionar && (
+        puedeEditarDatos ? (
+          <div className="border border-border rounded-xl">
+            <button
+              type="button"
+              onClick={() => setDatosAbierto(v => !v)}
+              className="w-full text-left px-3.5 py-2.5 text-sm font-semibold text-accent"
+            >
+              {datosAbierto ? 'Cerrar los datos del documento' : 'Completar los datos del documento'}
+            </button>
+            {datosAbierto && (
+              <div className="border-t border-border p-3.5">
+                <ContratoDatos
+                  contratoId={contratoId}
+                  onGuardado={async () => { await refrescar(); onCambio?.(); }}
+                />
+              </div>
+            )}
+          </div>
+        ) : (
+          detalle.permisos.motivo_no_editable && (
+            <p className="text-[11px] text-ink/50">
+              Los datos de este documento ya no se pueden modificar: {detalle.permisos.motivo_no_editable}
+            </p>
+          )
+        )
       )}
 
       <div>

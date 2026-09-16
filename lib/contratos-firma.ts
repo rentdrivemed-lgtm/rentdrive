@@ -123,6 +123,18 @@ export type ContratoRow = {
   datos_json: string;
   /** Campos que quedaron en blanco al emitirlo (JSON de `CampoFaltante` reducido). */
   faltantes_json: string;
+  // ── Edición de DATOS (no del texto) ──
+  /**
+   * Parche de datos de ESTA operación: canon, depósito, kilometraje, horas, lugares,
+   * conductores autorizados y fecha de suscripción (JSON de `OverridesContrato`).
+   * Lo que es del vehículo o de la persona NO está aquí: está en su ficha.
+   */
+  overrides_json: string;
+  /** Sube +1 en cada edición de datos. Ver `firmarBloqueContrato`. */
+  datos_revision: number;
+  datos_editados_en: string;
+  datos_editados_por: number | null;
+  datos_editados_por_nombre: string;
   generado_por: number | null;
   generado_por_nombre: string;
   firmado_en: string;
@@ -440,8 +452,15 @@ export function generarContrato(
   return { ok: true, contrato, firmas: leerFirmas(db, crear), faltantes };
 }
 
-/** Quién tiene que poner el trazo de este bloque, según el snapshot congelado. */
-function firmanteEsperado(d: DatosContrato, b: DefBloqueFirma): { usuarioId: number | null; nombre: string; documento: string } {
+/**
+ * Quién tiene que poner el trazo de este bloque, según el snapshot congelado.
+ *
+ * Se exporta porque al editar los DATOS de un contrato todavía sin firmar hay que
+ * volver a abrir sus bloques con el nombre y el documento actualizados (si al cliente
+ * le acaban de escribir la cédula, el bloque tiene que esperar ESA cédula). Ver
+ * lib/contratos-edicion.ts → `resincronizarBloques`.
+ */
+export function firmanteEsperado(d: DatosContrato, b: DefBloqueFirma): { usuarioId: number | null; nombre: string; documento: string } {
   switch (b.rol) {
     case 'agente':
       // Cualquier administrador con `contratos_firmar_agente` puede suscribir por
@@ -501,6 +520,19 @@ export type FirmarOpciones = {
   acepta: boolean;
   /** Versión del documento que el firmante tenía en pantalla. */
   version: number;
+  /**
+   * Revisión de DATOS que el firmante tenía en pantalla (`contratos.datos_revision`).
+   *
+   * La `version` solo cambia al anular y reemitir, así que no detecta lo que sí puede
+   * pasar mientras alguien lee: que el equipo complete el número de chasis o corrija el
+   * canon y el texto se vuelva a generar. Este contador sí.
+   *
+   * Es OPCIONAL por compatibilidad con una pestaña abierta desde antes de que existiera:
+   * cuando no llega, no se comprueba. Omitirlo no le sirve a nadie para colar nada —el
+   * sello cubre igual el texto que efectivamente se firma— y quien se arriesga a firmar
+   * un texto que no leyó es quien lo omite.
+   */
+  revision?: number;
   ip: string;
   userAgent: string;
 };
@@ -552,6 +584,13 @@ export function firmarBloqueContrato(
 
   if (Number(opts.version) !== Number(contrato.version)) {
     return err(409, 'Este documento cambió mientras lo revisabas. Recárgalo y vuelve a leerlo antes de firmar.');
+  }
+
+  // Los DATOS se pueden completar mientras el documento esté sin firmar, y al hacerlo el
+  // texto se vuelve a generar. Si eso pasó después de que el firmante cargó la pantalla,
+  // lo que tiene delante ya no es lo que está en la base: hay que releerlo.
+  if (opts.revision !== undefined && Number(opts.revision) !== Number(contrato.datos_revision || 0)) {
+    return err(409, 'Los datos de este documento se completaron mientras lo revisabas. Recárgalo y vuelve a leerlo antes de firmar.');
   }
 
   const bloquean = faltantesQueBloquean(parsearFaltantes(contrato.faltantes_json));

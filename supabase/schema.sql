@@ -843,3 +843,63 @@ CREATE TABLE IF NOT EXISTS cotizaciones_bus (
 --   · `pago_registrado_por` hoy siempre coincide con `creada_por_admin_id`; se
 --     guarda aparte para poder registrar mañana un pago sobre una reserva nacida
 --     en la app sin perder quién lo hizo.
+
+-- ─────────────── datos editables de contratos (sep-2026) ───────────────
+-- Reflejo en Postgres de lib/db.ts → `crearColumnasDatosContrato`.
+--
+-- Qué resuelve: los seis documentos exigen datos que la plataforma NO guardaba en
+-- ninguna parte (número de motor, chasis, color, valor asegurado, los datos de la
+-- carátula de la póliza, la categoría y la vigencia de la licencia). Se imprimían
+-- como espacios en blanco y no había forma de llenarlos. Estas columnas son su casa.
+--
+-- El reparto (ver lib/contratos-campos.ts) es deliberado:
+--   · lo que es del VEHÍCULO  → `vehiculos`  → sirve para TODOS sus contratos;
+--   · lo que es de la PERSONA → `usuarios`   → ídem;
+--   · lo que es de ESTA operación (canon, depósito, kilometraje, horas, lugares,
+--     conductores autorizados, fecha de suscripción) → `contratos.overrides_json`,
+--     un parche que se aplica sobre el snapshot al REGENERAR el texto.
+--
+-- ⚠️ El TEXTO del contrato NO se edita nunca: se vuelve a generar desde la plantilla
+-- del abogado con los datos nuevos (lib/contratos-plantillas.ts). Y solo mientras el
+-- documento esté SIN FIRMAR y sin vía de firma elegida; uno firmado se anula y se
+-- reemite, que es lo que ya estaba implementado.
+
+-- `contratos` sí tiene su CREATE TABLE en este archivo, así que estos ALTER se aplican:
+ALTER TABLE contratos ADD COLUMN IF NOT EXISTS overrides_json            TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE contratos ADD COLUMN IF NOT EXISTS datos_revision            INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE contratos ADD COLUMN IF NOT EXISTS datos_editados_en         TEXT DEFAULT '';
+ALTER TABLE contratos ADD COLUMN IF NOT EXISTS datos_editados_por        INTEGER REFERENCES usuarios(id);
+ALTER TABLE contratos ADD COLUMN IF NOT EXISTS datos_editados_por_nombre TEXT DEFAULT '';
+
+-- `usuarios` también tiene su CREATE TABLE arriba (estas dos columnas son nuevas y no
+-- están en él; se agregan con el mismo DEFAULT '' que en SQLite):
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS licencia_categoria TEXT DEFAULT '';
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS licencia_vence     TEXT DEFAULT '';
+
+-- ⚠️ `vehiculos` NO tiene `CREATE TABLE` en este archivo (gap preexistente, ya
+-- documentado en los bloques de fotos_moderacion y del cotizador de buses), así que sus
+-- columnas quedan ANOTADAS y no declaradas. Sobre un Supabase que ya tenga la tabla:
+--   ALTER TABLE vehiculos ADD COLUMN IF NOT EXISTS color                    TEXT DEFAULT '';
+--   ALTER TABLE vehiculos ADD COLUMN IF NOT EXISTS numero_motor             TEXT DEFAULT '';
+--   ALTER TABLE vehiculos ADD COLUMN IF NOT EXISTS numero_chasis            TEXT DEFAULT '';
+--   ALTER TABLE vehiculos ADD COLUMN IF NOT EXISTS valor_asegurado          REAL DEFAULT 0;
+--   ALTER TABLE vehiculos ADD COLUMN IF NOT EXISTS poliza_numero            TEXT DEFAULT '';
+--   ALTER TABLE vehiculos ADD COLUMN IF NOT EXISTS poliza_aseguradora       TEXT DEFAULT '';
+--   ALTER TABLE vehiculos ADD COLUMN IF NOT EXISTS poliza_aseguradora_nit   TEXT DEFAULT '';
+--   ALTER TABLE vehiculos ADD COLUMN IF NOT EXISTS poliza_expedida_el       TEXT DEFAULT '';
+--   ALTER TABLE vehiculos ADD COLUMN IF NOT EXISTS poliza_vigencia_desde    TEXT DEFAULT '';
+--   ALTER TABLE vehiculos ADD COLUMN IF NOT EXISTS poliza_vigencia_hasta    TEXT DEFAULT '';
+--   ALTER TABLE vehiculos ADD COLUMN IF NOT EXISTS poliza_codigo_clausulado TEXT DEFAULT '';
+--   ALTER TABLE vehiculos ADD COLUMN IF NOT EXISTS poliza_nota_tecnica      TEXT DEFAULT '';
+--   ALTER TABLE vehiculos ADD COLUMN IF NOT EXISTS poliza_deducible         TEXT DEFAULT '';
+--
+-- Notas de diseño (idénticas en ambos motores):
+--   · `valor_asegurado` NO es `valor_comercial`: el contrato de agencia cita el valor
+--     ASEGURADO de la carátula, que es otro número (el comercial alimenta la tarifa).
+--   · `poliza_vigencia_hasta` vacía = se usa `documentos.poliza.vence`, que es la fecha
+--     que ya se carga junto con el archivo de la carátula (lib/poliza-vehiculo.ts sigue
+--     siendo la única fuente de verdad de ESE archivo).
+--   · `vehiculos.color` puede llegar también desde la lectura de la matrícula (OCR). El
+--     ALTER es idempotente en los dos motores, así que que las dos ramas lo declaren no
+--     rompe nada: quien no sobrescribe en silencio es el código (el OCR propone, la
+--     pantalla de datos del contrato confirma).
