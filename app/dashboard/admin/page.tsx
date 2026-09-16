@@ -15,6 +15,10 @@ import ReservaMostradorModal from '@/components/ReservaMostradorModal';
 import DocumentoVista from '@/components/DocumentoVista';
 import BotonPaqueteDocumentos from '@/components/BotonPaqueteDocumentos';
 import PolizaVehiculoAdmin from '@/components/PolizaVehiculoAdmin';
+import VisorFotos, { type FotoVisor } from '@/components/VisorFotos';
+import {
+  FiltroCampo, BotonOrdenLlegada, ResumenFiltros, CLASE_CONTROL_FILTRO,
+} from '@/components/FiltrosLista';
 import {
   puede, normalizarNivel, NIVEL_LABEL, NIVELES, GRUPOS_AREAS, areaLabel,
   parsePermisosExtra, type AdminNivel, type PermisosExtra, type PermisosExtraDelta,
@@ -23,6 +27,11 @@ import { parsePicoPlaca, picoPlacaVacio, placaRestringida, type PicoPlaca } from
 import { conDiasOcupados, diasOcupadosPorReservas, parseDiasGuardados } from '@/lib/dias-disponibles';
 import { tecnoRequerida } from '@/lib/tecnomecanica';
 import { fechaHoraRecogida, esNoShowAplicable } from '@/lib/cancelacion';
+import {
+  fechaRegistroCorta, fechaRegistroLarga, ordenarPorLlegada, enRangoRegistro,
+  type OrdenLlegada,
+} from '@/lib/fecha-registro';
+import { COMBUSTIBLE_LABELS, COMBUSTIBLES } from '@/lib/vehiculo-campos';
 import { IconUser, IconCar, IconX, IconCheck, IconCalendar, IconShield, IconExport } from '@/components/Icons';
 import type { VerificacionResultado } from '@/lib/verificacion-docs';
 import { urlDescarga } from '@/lib/cloudinary-descarga';
@@ -67,6 +76,11 @@ type Vehiculo = {
   documentos_estado?: string; documentos_nota?: string; documentos_revisiones?: string;
   en_vitrina?: number; archivado?: number;
   contenido_revision?: number; contenido_revision_motivo?: string;
+  // Fecha de llegada del vehículo a la plataforma. Viaja en el `SELECT v.*` de
+  // GET /api/vehiculos y no está entre los campos sensibles de lib/vehiculo-publico.ts.
+  // ⚠️ Está guardada en UTC (lib/db.ts usa `datetime('now')` para esta tabla): se muestra
+  // y se filtra SIEMPRE a través de lib/fecha-registro.ts, nunca en crudo.
+  created_at?: string;
 };
 
 const rolColor: Record<string, string> = {
@@ -108,6 +122,103 @@ const TIPO_DOC_LABELS: Record<string, string> = {
   pasaporte: 'Pasaporte',
   extranjeria: 'Cédula de extranjería',
 };
+
+// ── Filtros de las listas (Usuarios y Vehículos) ────────────────────────────
+//
+// DÓNDE SE FILTRA: en el NAVEGADOR, sobre las listas que estas dos pestañas ya traen
+// completas (`/api/admin/usuarios` y `/api/vehiculos?panelAdmin=1`). Dos razones:
+//   1) el panel YA necesita la lista entera en memoria para los contadores de arriba
+//      (`userStats`, `archivadasUsuariosCount`, `sinPrecio`, `propietariosConDocsEnRevision`):
+//      filtrar en el servidor obligaría a una segunda petición solo para los totales;
+//   2) `GET /api/vehiculos` es una ruta COMPARTIDA y pública — la consumen app/page.tsx,
+//      components/HeroSlider.tsx, components/ContabilidadPanel.tsx y el dashboard del
+//      propietario. Meterle parámetros de filtro nuevos es tocar el camino de cinco
+//      pantallas ajenas para un filtro que hoy es de una sola.
+// CUÁNDO HAY QUE MOVERLO AL SERVIDOR: hoy hay ~6 vehículos y pocos usuarios. El límite
+// práctico de este enfoque está en el orden de las 500–1.000 filas por lista (a partir de
+// ahí el JSON pesa y el re-render de la tabla completa en cada tecla empieza a notarse).
+// Al pasar ese punto: paginar en el servidor y mover estos mismos filtros a la query,
+// dejando los contadores en un endpoint de resumen aparte.
+/**
+ * Texto en minúsculas y SIN tildes, para que la búsqueda no obligue a escribirlas:
+ * "gomez" encuentra a "Gómez" y "pena" encuentra a "Peña". Se aplica igual a lo que se
+ * escribe y a lo que se compara, así que también funciona al revés (escribir con tilde
+ * encuentra un dato guardado sin ella).
+ */
+function plano(texto: unknown): string {
+  return String(texto ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+
+const ROL_FILTRO_LABELS: Record<string, string> = {
+  usuario: 'Cliente', propietario: 'Propietario', admin: 'Administrador',
+};
+const ESTADO_CUENTA_LABELS: Record<string, string> = {
+  activa: 'Activa', inactiva: 'Inactiva', archivada: 'Archivada',
+};
+const DOC_ESTADO_FILTRO_LABELS: Record<string, string> = {
+  sin_documentos: 'Sin documentos', en_revision: 'En revisión',
+  aprobado: 'Aprobados', denegado: 'Denegados',
+};
+
+/**
+ * ¿Esta cuenta tiene al día los documentos que el sistema le pide a su rol?
+ *
+ * No es un criterio inventado acá: es lo que cada flujo ya exige como obligatorio.
+ *   · Todos (menos admin): tipo y número de documento — `perfilIncompleto` (lib/perfil.ts).
+ *   · Cédula por frente Y dorso: la piden el registro y el perfil del propietario
+ *     (app/dashboard/propietario/page.tsx, "es obligatoria para verificar que la tarjeta
+ *     de propiedad esté a tu nombre").
+ *   · Propietario, además: banco, número de cuenta y certificado bancario — los tres
+ *     obligatorios para poder pagarle (mismo formulario de perfil).
+ * Las cuentas del EQUIPO (rol 'admin') no tienen documentación que subir, así que nunca
+ * salen como incompletas.
+ */
+function docsUsuarioCompletos(u: Usuario): boolean {
+  if (u.rol === 'admin') return true;
+  const lleno = (v?: string) => !!(v || '').trim();
+  if (!lleno(u.tipo_documento) || !lleno(u.documento_identidad)) return false;
+  if (!lleno(u.cedula_url) || !lleno(u.cedula_url_dorso)) return false;
+  if (u.rol === 'propietario') {
+    return lleno(u.banco) && lleno(u.numero_cuenta) && lleno(u.certificado_bancario_url);
+  }
+  return true;
+}
+
+/**
+ * Miniatura de la tarjeta del vehículo. Es un BOTÓN: abre `components/VisorFotos.tsx`
+ * (el mismo visor a pantalla completa de Operaciones y de la pantalla del mensajero,
+ * con zoom, flechas y cierre con Escape) en vez de dejar la foto recortada por el
+ * `object-cover`, que es justo lo que no deja ver un rayón o una placa.
+ *
+ * Si el vehículo no tiene ninguna foto abrible se pinta la imagen suelta, sin botón:
+ * un botón que no hace nada es peor que no tenerlo.
+ */
+function MiniaturaVehiculo({ portada, alt, cantidad, onAbrir, atenuada }: {
+  portada: string; alt: string; cantidad: number; onAbrir: () => void; atenuada?: boolean;
+}) {
+  if (!portada) return null;
+  const clasesImg = `w-20 h-14 object-cover rounded-xl flex-shrink-0 ${atenuada ? 'opacity-70' : ''}`;
+  /* eslint-disable-next-line @next/next/no-img-element */
+  const img = <img src={portada} alt={alt} className={clasesImg} />;
+  if (cantidad === 0) return img;
+  return (
+    <button type="button" onClick={onAbrir} title="Clic para ver las fotos en grande"
+      aria-label={`Ver en grande ${cantidad === 1 ? 'la foto' : `las ${cantidad} fotos`} de ${alt}`}
+      className="relative flex-shrink-0 rounded-xl group focus:outline-none focus:ring-2 focus:ring-accent/50">
+      {img}
+      <span aria-hidden="true"
+        className="absolute inset-0 rounded-xl bg-black/0 group-hover:bg-black/35 transition flex items-center justify-center text-white text-[10px] font-bold opacity-0 group-hover:opacity-100">
+        🔍 Ampliar
+      </span>
+      {cantidad > 1 && (
+        <span aria-hidden="true"
+          className="absolute -top-1 -right-1 min-w-4 h-4 px-1 rounded-full bg-ink text-white text-[9px] font-bold grid place-items-center">
+          {cantidad}
+        </span>
+      )}
+    </button>
+  );
+}
 
 // ── Verificador con IA: mapas y render reutilizable ──────────────────
 const VEREDICTO_BADGE: Record<string, string> = {
@@ -342,9 +453,31 @@ function DashboardAdminInner() {
   const [docNota, setDocNota] = useState('');
   const [filtroEstado, setFiltroEstado] = useState('');
   const [filtroBusq, setFiltroBusq] = useState('');
+  // ── Filtros de la lista de USUARIOS (todos en el navegador, ver el bloque de arriba) ──
+  const [usrBusq, setUsrBusq] = useState('');
+  const [usrRol, setUsrRol] = useState('');
+  // '' = todas menos las archivadas; 'archivada' es la vista que antes abría el botón
+  // "🗄️ Ver archivadas" (ese botón ahora escribe acá: una sola fuente de verdad).
+  const [usrEstado, setUsrEstado] = useState('');
+  const [usrDocs, setUsrDocs] = useState('');   // '' | completos | incompletos
+  const [usrDesde, setUsrDesde] = useState('');
+  const [usrHasta, setUsrHasta] = useState('');
+  const [usrOrden, setUsrOrden] = useState<OrdenLlegada>('recientes');
+  // ── Filtros de la lista de VEHÍCULOS ──
+  const [vehBusq, setVehBusq] = useState('');
+  const [vehPropietario, setVehPropietario] = useState('');   // id del propietario, como texto
+  const [vehDocs, setVehDocs] = useState('');                 // documentos_estado
+  const [vehDisponible, setVehDisponible] = useState('');     // '' | '1' | '0'
+  const [vehCombustible, setVehCombustible] = useState('');   // '' | gasolina | … | 'sin'
+  const [vehDesde, setVehDesde] = useState('');
+  const [vehHasta, setVehHasta] = useState('');
+  const [vehOrden, setVehOrden] = useState<OrdenLlegada>('recientes');
   const [perfilModal, setPerfilModal] = useState<{ u: Usuario } | null>(null);
+  // Visor de fotos a pantalla completa (components/VisorFotos.tsx), el MISMO que usan
+  // Operaciones y la pantalla del mensajero. Acá lo abren las miniaturas de la lista de
+  // vehículos y las del modal de fotos.
+  const [visorFotos, setVisorFotos] = useState<{ fotos: FotoVisor[]; indice: number; titulo: string } | null>(null);
   // ── Eliminar/archivar (usuarios y vehículos) ──
-  const [verArchivadosUsuarios, setVerArchivadosUsuarios] = useState(false);
   const [verArchivadosVehiculos, setVerArchivadosVehiculos] = useState(false);
   const [vehiculosArchivados, setVehiculosArchivados] = useState<Vehiculo[]>([]);
   // ── Moderación de contenido: vehículos con fotos marcadas por la IA, pendientes de revisión manual ──
@@ -1116,11 +1249,117 @@ function DashboardAdminInner() {
   );
 
   // Las cuentas archivadas (ver lib/eliminar.ts) se ocultan del listado normal — solo se
-  // ven al activar "Ver archivadas".
+  // ven al activar "Ver archivadas", que hoy no es un estado aparte sino el valor
+  // 'archivada' del filtro de estado (así el botón y el `select` nunca se contradicen).
   const archivadasUsuariosCount = usuarios.filter(u => u.estado_cuenta === 'archivada').length;
-  const usuariosFiltrados = usuarios.filter(u =>
+  // La misma condición que gatea el botón y la opción del `select`, repetida acá a
+  // propósito: si mañana alguien siembra este estado desde otro lado (una URL, un preset),
+  // la lista no debe destaparle cuentas archivadas a quien no gestiona el equipo.
+  const verArchivadosUsuarios = usrEstado === 'archivada' && puede(miNivel, 'usuarios_gestion');
+
+  // Universo sobre el que se cuenta "de cuántos": las archivadas solo entran cuando se
+  // están pidiendo a propósito, igual que antes.
+  const usuariosVisibles = usuarios.filter(u =>
     verArchivadosUsuarios ? u.estado_cuenta === 'archivada' : u.estado_cuenta !== 'archivada'
   );
+  const hayFiltrosUsuarios = !!(usrBusq.trim() || usrRol || usrEstado || usrDocs || usrDesde || usrHasta);
+  const limpiarFiltrosUsuarios = () => {
+    setUsrBusq(''); setUsrRol(''); setUsrEstado(''); setUsrDocs(''); setUsrDesde(''); setUsrHasta('');
+  };
+  const usuariosFiltrados = ordenarPorLlegada(
+    usuariosVisibles.filter(u => {
+      if (usrRol && u.rol !== usrRol) return false;
+      if (usrEstado && u.estado_cuenta !== usrEstado) return false;
+      if (usrDocs === 'completos' && !docsUsuarioCompletos(u)) return false;
+      if (usrDocs === 'incompletos' && docsUsuarioCompletos(u)) return false;
+      if (!enRangoRegistro(u.created_at, usrDesde, usrHasta)) return false;
+      const q = plano(usrBusq.trim());
+      if (q) {
+        // Nombre, correo, documento y celular (con y sin indicativo, para que sirva tanto
+        // "3001234567" como "+573001234567").
+        const celular = `${u.celular_indicativo || ''}${u.celular || ''}`;
+        const campos = [u.nombre, u.correo, u.documento_identidad, u.celular, celular];
+        if (!campos.some(c => plano(c).includes(q))) return false;
+      }
+      return true;
+    }),
+    usrOrden,
+  );
+
+  // ── Filtros de vehículos ───────────────────────────────────────────────────
+  // Se aplican IGUAL a las tres vistas de la pestaña (activos, archivados y en revisión
+  // de contenido): son tres consultas distintas al mismo endpoint, pero para quien mira
+  // la pantalla es la misma lista de carros, y tener el buscador solo en una de ellas
+  // obligaba a recordar en cuál sí funcionaba.
+  const propietariosDeVehiculos = (() => {
+    const mapa = new Map<number, string>();
+    for (const v of [...vehiculos, ...vehiculosArchivados, ...vehiculosRevisionContenido]) {
+      if (!mapa.has(v.propietario_id)) mapa.set(v.propietario_id, v.propietario_nombre || `Propietario #${v.propietario_id}`);
+    }
+    return [...mapa.entries()].sort((a, b) => a[1].localeCompare(b[1], 'es'));
+  })();
+  const hayFiltrosVehiculos = !!(vehBusq.trim() || vehPropietario || vehDocs || vehDisponible || vehCombustible || vehDesde || vehHasta);
+  const limpiarFiltrosVehiculos = () => {
+    setVehBusq(''); setVehPropietario(''); setVehDocs(''); setVehDisponible('');
+    setVehCombustible(''); setVehDesde(''); setVehHasta('');
+  };
+  const filtrarVehiculosLista = (lista: Vehiculo[]) => ordenarPorLlegada(
+    lista.filter(v => {
+      if (vehPropietario && String(v.propietario_id) !== vehPropietario) return false;
+      if (vehDocs && (v.documentos_estado || 'sin_documentos') !== vehDocs) return false;
+      if (vehDisponible && String(Number(v.disponible) === 1 ? 1 : 0) !== vehDisponible) return false;
+      // 'sin' = el propietario no declaró combustible (columna en ''), que es un caso real
+      // y útil de listar: son los carros a los que les falta ese dato de la matrícula.
+      if (vehCombustible === 'sin' && (v.combustible || '')) return false;
+      if (vehCombustible && vehCombustible !== 'sin' && (v.combustible || '') !== vehCombustible) return false;
+      if (!enRangoRegistro(v.created_at, vehDesde, vehHasta)) return false;
+      const q = plano(vehBusq.trim());
+      if (q) {
+        const campos = [v.placa, v.marca, v.modelo, `${v.marca} ${v.modelo}`, String(v.anio)];
+        if (!campos.some(c => plano(c).includes(q))) return false;
+      }
+      return true;
+    }),
+    vehOrden,
+  );
+  const vehiculosFiltrados = filtrarVehiculosLista(vehiculos);
+  const vehiculosArchivadosFiltrados = filtrarVehiculosLista(vehiculosArchivados);
+  const vehiculosRevisionFiltrados = filtrarVehiculosLista(vehiculosRevisionContenido);
+
+  // Abre el visor a pantalla completa con TODAS las fotos de un vehículo: primero las
+  // siete casillas etiquetadas (`fotos_detalle`) y después las sueltas de la galería
+  // (`fotos`) que no estén ya entre ellas.
+  const fotosDeVehiculo = (v: Vehiculo): FotoVisor[] => {
+    let detalle: Record<string, string> = {};
+    try { detalle = JSON.parse(v.fotos_detalle || '{}') as Record<string, string>; } catch { detalle = {}; }
+    const fotos: FotoVisor[] = [];
+    const vistas = new Set<string>();
+    for (const [clave, label] of Object.entries(FOTOS_LABELS)) {
+      const url = (detalle[clave] || '').trim();
+      if (!url || vistas.has(url)) continue;
+      vistas.add(url);
+      // `alt` (campo de FotoVisor): sin él el visor arma "Foto de frente 1 de 1", que
+      // no dice de qué carro es. Acá sí se sabe.
+      fotos.push({ url, grupo: label, alt: `${label} — ${v.marca} ${v.modelo} ${v.anio}` });
+    }
+    let galeria: string[] = [];
+    try { galeria = JSON.parse(v.fotos || '[]') as string[]; } catch { galeria = []; }
+    for (const u of galeria) {
+      const url = String(u || '').trim();
+      if (!url || vistas.has(url)) continue;
+      vistas.add(url);
+      fotos.push({ url, grupo: 'Galería', alt: `Foto de ${v.marca} ${v.modelo} ${v.anio}` });
+    }
+    return fotos;
+  };
+  const tituloVehiculo = (v: Vehiculo) =>
+    `${v.marca} ${v.modelo} ${v.anio}${v.placa ? ` · ${v.placa}` : ''}`;
+  const abrirVisorVehiculo = (v: Vehiculo, url?: string) => {
+    const fotos = fotosDeVehiculo(v);
+    if (fotos.length === 0) return;
+    const i = url ? fotos.findIndex(f => f.url === url) : 0;
+    setVisorFotos({ fotos, indice: i >= 0 ? i : 0, titulo: tituloVehiculo(v) });
+  };
 
   const reservasFiltradas = reservas
     .filter(r => {
@@ -1245,14 +1484,77 @@ function DashboardAdminInner() {
           </div>
         </div>
       )}
-      {tab === 'usuarios' && puede(miNivel, 'usuarios_gestion') && (
-        <div className="flex items-center justify-end mb-3">
-          <button onClick={() => setVerArchivadosUsuarios(v => !v)}
-            className={`text-xs px-3 py-1.5 rounded-xl border transition font-medium ${
-              verArchivadosUsuarios ? 'border-accent bg-accent text-white' : 'border-border text-ink/60 hover:bg-surface'
-            }`}>
-            {verArchivadosUsuarios ? '← Ver cuentas activas' : `🗄️ Ver archivadas (${archivadasUsuariosCount})`}
-          </button>
+      {/* Filtros de la lista de usuarios. Mismo estilo que los de la pestaña Reservas. */}
+      {tab === 'usuarios' && (
+        <div className="space-y-3 mb-4">
+          <div className="flex flex-wrap gap-3 items-end">
+            <FiltroCampo label="Buscar" className="flex-1 min-w-48">
+              <input
+                type="search" placeholder="Nombre, correo, documento o celular…"
+                className={CLASE_CONTROL_FILTRO}
+                value={usrBusq}
+                onChange={e => setUsrBusq(e.target.value)}
+              />
+            </FiltroCampo>
+            <FiltroCampo label="Rol">
+              <select className={CLASE_CONTROL_FILTRO} value={usrRol} onChange={e => setUsrRol(e.target.value)}>
+                <option value="">Todos</option>
+                {Object.entries(ROL_FILTRO_LABELS).map(([valor, label]) => (
+                  <option key={valor} value={valor}>{label}</option>
+                ))}
+              </select>
+            </FiltroCampo>
+            <FiltroCampo label="Estado de la cuenta">
+              <select className={CLASE_CONTROL_FILTRO} value={usrEstado} onChange={e => setUsrEstado(e.target.value)}>
+                <option value="">Todas (sin archivadas)</option>
+                {/* 'Archivada' se ofrece SOLO a quien ya podía abrir esa vista con el botón
+                    "🗄️ Ver archivadas" (usuarios_gestion). No es un dato nuevo —el listado
+                    de GET /api/admin/usuarios siempre las manda, a cualquier admin con el
+                    área 'usuarios'— pero el panel no se las mostraba, y este filtro no es
+                    el lugar para cambiar quién ve qué. */}
+                {Object.entries(ESTADO_CUENTA_LABELS)
+                  .filter(([valor]) => valor !== 'archivada' || puede(miNivel, 'usuarios_gestion'))
+                  .map(([valor, label]) => (
+                    <option key={valor} value={valor}>
+                      {label}{valor === 'archivada' ? ` (${archivadasUsuariosCount})` : ''}
+                    </option>
+                  ))}
+              </select>
+            </FiltroCampo>
+            <FiltroCampo label="Documentos">
+              <select className={CLASE_CONTROL_FILTRO} value={usrDocs} onChange={e => setUsrDocs(e.target.value)}>
+                <option value="">Todos</option>
+                <option value="completos">Completos</option>
+                <option value="incompletos">Incompletos</option>
+              </select>
+            </FiltroCampo>
+            <FiltroCampo label="Registrados desde" className="min-w-36">
+              <input type="date" className={CLASE_CONTROL_FILTRO} value={usrDesde} max={usrHasta || undefined}
+                onChange={e => setUsrDesde(e.target.value)} />
+            </FiltroCampo>
+            <FiltroCampo label="hasta" className="min-w-36">
+              <input type="date" className={CLASE_CONTROL_FILTRO} value={usrHasta} min={usrDesde || undefined}
+                onChange={e => setUsrHasta(e.target.value)} />
+            </FiltroCampo>
+            <BotonOrdenLlegada orden={usrOrden} onCambiar={setUsrOrden} titulo="fecha de registro" />
+          </div>
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <ResumenFiltros
+              mostrados={usuariosFiltrados.length}
+              total={usuariosVisibles.length}
+              hayFiltros={hayFiltrosUsuarios}
+              onLimpiar={limpiarFiltrosUsuarios}
+              etiqueta={verArchivadosUsuarios ? 'cuentas archivadas' : 'cuentas'}
+            />
+            {puede(miNivel, 'usuarios_gestion') && (
+              <button onClick={() => setUsrEstado(e => e === 'archivada' ? '' : 'archivada')}
+                className={`text-xs px-3 py-1.5 rounded-xl border transition font-medium ${
+                  verArchivadosUsuarios ? 'border-accent bg-accent text-white' : 'border-border text-ink/60 hover:bg-surface'
+                }`}>
+                {verArchivadosUsuarios ? '← Ver cuentas activas' : `🗄️ Ver archivadas (${archivadasUsuariosCount})`}
+              </button>
+            )}
+          </div>
         </div>
       )}
       {tab === 'usuarios' && (
@@ -1265,13 +1567,30 @@ function DashboardAdminInner() {
                   <th className="text-left px-4 py-3 text-xs font-bold text-ink/60 uppercase tracking-wide hidden sm:table-cell">Correo</th>
                   <th className="text-left px-4 py-3 text-xs font-bold text-ink/60 uppercase tracking-wide">Rol</th>
                   <th className="text-left px-4 py-3 text-xs font-bold text-ink/60 uppercase tracking-wide">Estado</th>
+                  {/* Fecha de llegada de esa persona a la plataforma. Es clicable: cambia
+                      el orden entre "más recientes primero" y "más antiguos primero",
+                      igual que el botón de la barra de filtros. */}
+                  <th className="text-left px-4 py-3 text-xs font-bold text-ink/60 uppercase tracking-wide">
+                    <button type="button"
+                      onClick={() => setUsrOrden(o => o === 'recientes' ? 'antiguos' : 'recientes')}
+                      title="Clic para invertir el orden"
+                      className="inline-flex items-center gap-1 uppercase tracking-wide hover:text-accent transition">
+                      Se registró
+                      <span aria-hidden="true" className="text-accent">{usrOrden === 'recientes' ? '↓' : '↑'}</span>
+                      <span className="sr-only">
+                        {usrOrden === 'recientes' ? 'más recientes primero' : 'más antiguos primero'}
+                      </span>
+                    </button>
+                  </th>
                   <th className="text-left px-4 py-3 text-xs font-bold text-ink/60 uppercase tracking-wide">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {usuariosFiltrados.length === 0 && (
-                  <tr><td colSpan={5} className="px-4 py-8 text-center text-sm text-ink/40">
-                    {verArchivadosUsuarios ? 'No hay cuentas archivadas.' : 'No hay usuarios.'}
+                  <tr><td colSpan={6} className="px-4 py-8 text-center text-sm text-ink/40">
+                    {hayFiltrosUsuarios
+                      ? 'Ningún usuario coincide con estos filtros. Prueba a quitar alguno o usa “✕ Limpiar filtros”.'
+                      : verArchivadosUsuarios ? 'No hay cuentas archivadas.' : 'No hay usuarios.'}
                   </td></tr>
                 )}
                 {usuariosFiltrados.map(u => (
@@ -1282,6 +1601,16 @@ function DashboardAdminInner() {
                         {u.nombre}
                         {u.rol === 'propietario' && propietariosConDocsEnRevision.has(u.id) && (
                           <span title="Tiene documentos pendientes de revisión" className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-warning/15 text-warning border border-warning/25 whitespace-nowrap">📄 Docs pendientes</span>
+                        )}
+                        {/* Distinto del badge de arriba: aquel habla de los documentos de
+                            SUS VEHÍCULOS; este, de los de SU CUENTA (ver docsUsuarioCompletos). */}
+                        {!docsUsuarioCompletos(u) && (
+                          <span title={u.rol === 'propietario'
+                            ? 'Le falta cédula (frente y dorso), datos bancarios o certificado bancario'
+                            : 'Le falta el documento de identidad o la foto de la cédula (frente y dorso)'}
+                            className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-ink/10 text-ink/60 border border-border whitespace-nowrap">
+                            🪪 Documentos incompletos
+                          </span>
                         )}
                       </span>
                     </td>
@@ -1298,6 +1627,12 @@ function DashboardAdminInner() {
                       }`}>
                         {u.estado_cuenta}
                       </span>
+                    </td>
+                    {/* `created_at` está en UTC: fechaRegistroCorta lo pasa a hora de
+                        Medellín antes de mostrarlo (ver lib/fecha-registro.ts). */}
+                    <td className="px-4 py-3 text-ink/60 whitespace-nowrap"
+                      title={`Se registró el ${fechaRegistroLarga(u.created_at)}`}>
+                      {fechaRegistroCorta(u.created_at)}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex gap-2 flex-wrap items-center">
@@ -1358,7 +1693,7 @@ function DashboardAdminInner() {
                   </tr>
                   {u.rol === 'admin' && puede(miNivel, 'usuarios_gestion') && u.id !== miId && permisosAbierto === u.id && (
                     <tr className="bg-surface">
-                      <td colSpan={5} className="px-4 py-4">
+                      <td colSpan={6} className="px-4 py-4">
                         <PermisosSecciones
                           u={u}
                           draft={permisosDraft[u.id] ?? parsePermisosExtra(u.permisos_extra)}
@@ -1381,44 +1716,130 @@ function DashboardAdminInner() {
       )}
 
       {/* ── VEHÍCULOS ── */}
+      {/* Filtros de la lista de vehículos: mismo estilo que Reservas y Usuarios. Los dos
+          botones de vista (archivados / en revisión de contenido) viven acá dentro porque
+          son parte de "qué carros estoy mirando", igual que el resto de la barra. */}
       {tab === 'vehiculos' && (
-        <div className="flex items-center justify-end gap-2 mb-3">
-          {vehiculosRevisionContenido.length > 0 && !verRevisionContenido && (
-            <span className="text-[10px] font-bold px-2 py-1 rounded-full bg-danger/15 text-danger border border-danger/25">
-              {vehiculosRevisionContenido.length} en revisión de contenido
-            </span>
-          )}
-          <button onClick={alternarVerRevisionContenido}
-            className={`text-xs px-3 py-1.5 rounded-xl border transition font-medium ${
-              verRevisionContenido ? 'border-danger bg-danger text-white' : 'border-border text-ink/60 hover:bg-surface'
-            }`}>
-            {verRevisionContenido ? '← Ver vehículos activos' : '🔞 Ver en revisión de contenido'}
-          </button>
-          <button onClick={alternarVerArchivadosVehiculos}
-            className={`text-xs px-3 py-1.5 rounded-xl border transition font-medium ${
-              verArchivadosVehiculos ? 'border-accent bg-accent text-white' : 'border-border text-ink/60 hover:bg-surface'
-            }`}>
-            {verArchivadosVehiculos ? '← Ver vehículos activos' : '🗄️ Ver archivados'}
-          </button>
+        <div className="space-y-3 mb-4">
+          <div className="flex flex-wrap gap-3 items-end">
+            <FiltroCampo label="Buscar" className="flex-1 min-w-48">
+              <input
+                type="search" placeholder="Placa, marca o modelo…"
+                className={CLASE_CONTROL_FILTRO}
+                value={vehBusq}
+                onChange={e => setVehBusq(e.target.value)}
+              />
+            </FiltroCampo>
+            <FiltroCampo label="Propietario" className="min-w-44">
+              <select className={CLASE_CONTROL_FILTRO} value={vehPropietario} onChange={e => setVehPropietario(e.target.value)}>
+                <option value="">Todos</option>
+                {propietariosDeVehiculos.map(([id, nombre]) => (
+                  <option key={id} value={String(id)}>{nombre}</option>
+                ))}
+              </select>
+            </FiltroCampo>
+            <FiltroCampo label="Documentos">
+              <select className={CLASE_CONTROL_FILTRO} value={vehDocs} onChange={e => setVehDocs(e.target.value)}>
+                <option value="">Todos</option>
+                {Object.entries(DOC_ESTADO_FILTRO_LABELS).map(([valor, label]) => (
+                  <option key={valor} value={valor}>{label}</option>
+                ))}
+              </select>
+            </FiltroCampo>
+            <FiltroCampo label="Disponible" className="min-w-32">
+              <select className={CLASE_CONTROL_FILTRO} value={vehDisponible} onChange={e => setVehDisponible(e.target.value)}>
+                <option value="">Todos</option>
+                <option value="1">Sí, activo</option>
+                <option value="0">No disponible</option>
+              </select>
+            </FiltroCampo>
+            <FiltroCampo label="Combustible">
+              <select className={CLASE_CONTROL_FILTRO} value={vehCombustible} onChange={e => setVehCombustible(e.target.value)}>
+                <option value="">Todos</option>
+                {COMBUSTIBLES.map(c => <option key={c} value={c}>{COMBUSTIBLE_LABELS[c]}</option>)}
+                <option value="sin">Sin declarar</option>
+              </select>
+            </FiltroCampo>
+            <FiltroCampo label="Publicados desde" className="min-w-36">
+              <input type="date" className={CLASE_CONTROL_FILTRO} value={vehDesde} max={vehHasta || undefined}
+                onChange={e => setVehDesde(e.target.value)} />
+            </FiltroCampo>
+            <FiltroCampo label="hasta" className="min-w-36">
+              <input type="date" className={CLASE_CONTROL_FILTRO} value={vehHasta} min={vehDesde || undefined}
+                onChange={e => setVehHasta(e.target.value)} />
+            </FiltroCampo>
+            <BotonOrdenLlegada orden={vehOrden} onCambiar={setVehOrden} titulo="fecha de publicación" />
+          </div>
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <ResumenFiltros
+              mostrados={
+                verRevisionContenido ? vehiculosRevisionFiltrados.length
+                  : verArchivadosVehiculos ? vehiculosArchivadosFiltrados.length
+                  : vehiculosFiltrados.length
+              }
+              total={
+                verRevisionContenido ? vehiculosRevisionContenido.length
+                  : verArchivadosVehiculos ? vehiculosArchivados.length
+                  : vehiculos.length
+              }
+              hayFiltros={hayFiltrosVehiculos}
+              onLimpiar={limpiarFiltrosVehiculos}
+              etiqueta={
+                verRevisionContenido ? 'vehículos en revisión'
+                  : verArchivadosVehiculos ? 'vehículos archivados'
+                  : 'vehículos'
+              }
+            />
+            <div className="flex items-center gap-2 flex-wrap">
+              {vehiculosRevisionContenido.length > 0 && !verRevisionContenido && (
+                <span className="text-[10px] font-bold px-2 py-1 rounded-full bg-danger/15 text-danger border border-danger/25">
+                  {vehiculosRevisionContenido.length} en revisión de contenido
+                </span>
+              )}
+              <button onClick={alternarVerRevisionContenido}
+                className={`text-xs px-3 py-1.5 rounded-xl border transition font-medium ${
+                  verRevisionContenido ? 'border-danger bg-danger text-white' : 'border-border text-ink/60 hover:bg-surface'
+                }`}>
+                {verRevisionContenido ? '← Ver vehículos activos' : '🔞 Ver en revisión de contenido'}
+              </button>
+              <button onClick={alternarVerArchivadosVehiculos}
+                className={`text-xs px-3 py-1.5 rounded-xl border transition font-medium ${
+                  verArchivadosVehiculos ? 'border-accent bg-accent text-white' : 'border-border text-ink/60 hover:bg-surface'
+                }`}>
+                {verArchivadosVehiculos ? '← Ver vehículos activos' : '🗄️ Ver archivados'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
       {tab === 'vehiculos' && verRevisionContenido && (
         <div className="space-y-3">
-          {vehiculosRevisionContenido.length === 0 && (
+          {vehiculosRevisionFiltrados.length === 0 && (
             <div className="text-center py-14 bg-surface-2 rounded-2xl border border-border">
               <IconCar size={48} className="text-ink/20 mx-auto mb-3" />
-              <p className="text-ink/50">No hay vehículos en revisión de contenido.</p>
+              <p className="text-ink/50">
+                {hayFiltrosVehiculos && vehiculosRevisionContenido.length > 0
+                  ? 'Ningún vehículo en revisión coincide con estos filtros. Prueba a quitar alguno o usa “✕ Limpiar filtros”.'
+                  : 'No hay vehículos en revisión de contenido.'}
+              </p>
             </div>
           )}
-          {vehiculosRevisionContenido.map(v => {
+          {vehiculosRevisionFiltrados.map(v => {
             let portada = '';
             try { portada = (JSON.parse(v.fotos) as string[])[0] || ''; } catch { portada = ''; }
+            // Se calcula UNA vez por tarjeta (parsea dos JSON): la miniatura necesita
+            // cuántas fotos hay para saber si vale la pena ofrecer el visor.
+            const fotosV = fotosDeVehiculo(v);
             return (
               <div key={v.id} className="bg-surface-2 rounded-2xl shadow-sm p-4 border border-danger/30 ring-1 ring-danger/20 flex gap-4 items-center flex-wrap">
-                {portada && <img src={portada} alt={v.marca} className="w-20 h-14 object-cover rounded-xl flex-shrink-0" />}
+                <MiniaturaVehiculo portada={portada} alt={`${v.marca} ${v.modelo}`}
+                  cantidad={fotosV.length} onAbrir={() => abrirVisorVehiculo(v, portada)} />
                 <div className="flex-1 min-w-0">
                   <p className="font-bold text-ink">{v.marca} {v.modelo} {v.anio}</p>
                   <p className="text-sm text-ink/50 mt-0.5">Propietario: {v.propietario_nombre} {v.placa && `· Placa: ${v.placa}`}</p>
+                  <p className="text-xs text-ink/40 mt-0.5" title={`Se publicó el ${fechaRegistroLarga(v.created_at)}`}>
+                    Publicado: {fechaRegistroCorta(v.created_at)}
+                  </p>
                   <p className="text-xs text-danger mt-1">🔞 {v.contenido_revision_motivo || 'La IA marcó al menos una foto como contenido inapropiado.'}</p>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
@@ -1438,21 +1859,32 @@ function DashboardAdminInner() {
       )}
       {tab === 'vehiculos' && verArchivadosVehiculos && (
         <div className="space-y-3">
-          {vehiculosArchivados.length === 0 && (
+          {vehiculosArchivadosFiltrados.length === 0 && (
             <div className="text-center py-14 bg-surface-2 rounded-2xl border border-border">
               <IconCar size={48} className="text-ink/20 mx-auto mb-3" />
-              <p className="text-ink/50">No hay vehículos archivados.</p>
+              <p className="text-ink/50">
+                {hayFiltrosVehiculos && vehiculosArchivados.length > 0
+                  ? 'Ningún vehículo archivado coincide con estos filtros. Prueba a quitar alguno o usa “✕ Limpiar filtros”.'
+                  : 'No hay vehículos archivados.'}
+              </p>
             </div>
           )}
-          {vehiculosArchivados.map(v => {
+          {vehiculosArchivadosFiltrados.map(v => {
             let portada = '';
             try { portada = (JSON.parse(v.fotos) as string[])[0] || ''; } catch { portada = ''; }
+            // Se calcula UNA vez por tarjeta (parsea dos JSON): la miniatura necesita
+            // cuántas fotos hay para saber si vale la pena ofrecer el visor.
+            const fotosV = fotosDeVehiculo(v);
             return (
               <div key={v.id} className="bg-surface-2 rounded-2xl shadow-sm p-4 border border-border flex gap-4 items-center flex-wrap">
-                {portada && <img src={portada} alt={v.marca} className="w-20 h-14 object-cover rounded-xl flex-shrink-0 opacity-70" />}
+                <MiniaturaVehiculo portada={portada} alt={`${v.marca} ${v.modelo}`} atenuada
+                  cantidad={fotosV.length} onAbrir={() => abrirVisorVehiculo(v, portada)} />
                 <div className="flex-1 min-w-0">
                   <p className="font-bold text-ink">{v.marca} {v.modelo} {v.anio}</p>
                   <p className="text-sm text-ink/50 mt-0.5">Propietario: {v.propietario_nombre} {v.placa && `· Placa: ${v.placa}`}</p>
+                  <p className="text-xs text-ink/40 mt-0.5" title={`Se publicó el ${fechaRegistroLarga(v.created_at)}`}>
+                    Publicado: {fechaRegistroCorta(v.created_at)}
+                  </p>
                 </div>
                 <button onClick={() => desarchivarVehiculo(v)}
                   className="text-xs px-3 py-1.5 rounded-xl border border-success/30 text-success hover:bg-success/10 transition font-medium">
@@ -1470,15 +1902,22 @@ function DashboardAdminInner() {
               <p className="text-danger mb-4">No pudimos cargar los vehículos. Revisa tu conexión.</p>
               <button onClick={cargarVehiculos} className="bg-accent text-white font-semibold px-5 py-2.5 rounded-xl text-sm">Reintentar</button>
             </div>
-          ) : vehiculos.length === 0 && (
+          ) : vehiculosFiltrados.length === 0 && (
             <div className="text-center py-14 bg-surface-2 rounded-2xl border border-border">
               <IconCar size={48} className="text-ink/20 mx-auto mb-3" />
-              <p className="text-ink/50">No hay vehículos publicados aún.</p>
+              <p className="text-ink/50">
+                {hayFiltrosVehiculos && vehiculos.length > 0
+                  ? 'Ningún vehículo coincide con estos filtros. Prueba a quitar alguno o usa “✕ Limpiar filtros”.'
+                  : 'No hay vehículos publicados aún.'}
+              </p>
             </div>
           )}
-          {vehiculos.map(v => {
+          {vehiculosFiltrados.map(v => {
             let portada = '';
             try { portada = (JSON.parse(v.fotos) as string[])[0] || ''; } catch { portada = ''; }
+            // Se calcula UNA vez por tarjeta (parsea dos JSON): la miniatura necesita
+            // cuántas fotos hay para saber si vale la pena ofrecer el visor.
+            const fotosV = fotosDeVehiculo(v);
             const sinPrecioV = !v.precio_dia || v.precio_dia === 0;
             const editandoPrecio = (vid: number) => vid in precioEdit;
             // La exención entra en la decisión: los eléctricos (y los híbridos/GNV que ya
@@ -1500,9 +1939,8 @@ function DashboardAdminInner() {
               <div key={v.id} className={`bg-surface-2 rounded-2xl shadow-sm p-4 border-l-4 ${leftBorder} ${enPP ? 'ring-1 ring-danger/30 bg-danger/5' : ''} ${!enPP && !sinPrecioV ? 'border' : ''}`}
                 style={!enPP && !sinPrecioV ? { borderWidth: '1px', borderColor: 'var(--color-border)' } : {}}>
                 <div className="flex gap-4 items-start flex-wrap">
-                  {portada && (
-                    <img src={portada} alt={v.marca} className="w-20 h-14 object-cover rounded-xl flex-shrink-0" />
-                  )}
+                  <MiniaturaVehiculo portada={portada} alt={`${v.marca} ${v.modelo}`}
+                    cantidad={fotosV.length} onAbrir={() => abrirVisorVehiculo(v, portada)} />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <p className="font-bold text-ink">{v.marca} {v.modelo} {v.anio}</p>
@@ -1520,6 +1958,11 @@ function DashboardAdminInner() {
                     <p className="text-sm text-ink/50 mt-0.5">Propietario: {v.propietario_nombre}</p>
                     <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                       {v.placa && <span className="text-xs text-ink/50">Placa: {v.placa}</span>}
+                      {/* Cuándo llegó este carro a la plataforma (created_at, en UTC → se
+                          pasa a hora de Medellín en lib/fecha-registro.ts). */}
+                      <span className="text-xs text-ink/40" title={`Se publicó el ${fechaRegistroLarga(v.created_at)}`}>
+                        📅 Publicado: {fechaRegistroCorta(v.created_at)}
+                      </span>
                       {v.documentos_estado === 'en_revision' && (
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-warning/15 text-warning border border-warning/25">📄 En revisión</span>
                       )}
@@ -2181,38 +2624,79 @@ function DashboardAdminInner() {
 
       {/* Modal fotos */}
       {fotoModal && (() => {
+        const v = fotoModal.v;
         let detalle: Record<string, string> = {};
-        try { detalle = JSON.parse(fotoModal.v.fotos_detalle || '{}'); } catch { detalle = {}; }
-        const tieneDetalle = Object.keys(detalle).length > 0;
+        try { detalle = JSON.parse(v.fotos_detalle || '{}'); } catch { detalle = {}; }
+        const tieneDetalle = Object.keys(detalle).some(k => (detalle[k] || '').trim());
+        // Fotos de la galería (`vehiculos.fotos`) que NO son ninguna de las siete casillas.
+        // Antes este modal solo miraba `fotos_detalle`, así que un carro publicado con fotos
+        // sueltas decía "no tiene fotos" aunque su miniatura sí se viera en la lista.
+        const enCasillas = new Set(Object.values(detalle).map(u => String(u || '').trim()).filter(Boolean));
+        let sueltas: string[] = [];
+        try { sueltas = (JSON.parse(v.fotos || '[]') as string[]).map(u => String(u || '').trim()); } catch { sueltas = []; }
+        sueltas = [...new Set(sueltas.filter(u => u && !enCasillas.has(u)))];
+        const hayAlgo = tieneDetalle || sueltas.length > 0;
         return (
           <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setFotoModal(null)}>
             <div className="bg-surface-2 rounded-3xl shadow-2xl max-w-3xl w-full p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
               <div className="flex justify-between items-center mb-5">
-                <h3 className="font-bold text-ink">{fotoModal.v.marca} {fotoModal.v.modelo} — Fotos</h3>
+                <div className="min-w-0">
+                  <h3 className="font-bold text-ink">{v.marca} {v.modelo} — Fotos</h3>
+                  {hayAlgo && <p className="text-[11px] text-ink/50 mt-0.5">Clic en una foto para verla completa y con zoom.</p>}
+                </div>
                 <button onClick={() => setFotoModal(null)} aria-label="Cerrar"
                   className="p-1.5 rounded-xl text-ink/50 hover:text-ink hover:bg-surface transition">
                   <IconX size={18} />
                 </button>
               </div>
-              {tieneDetalle ? (
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                  {Object.entries(FOTOS_LABELS).map(([key, label]) => (
-                    <div key={key}>
-                      <p className="text-xs text-ink/50 mb-1 font-medium">{label}</p>
-                      {detalle[key] ? (
-                        <img src={detalle[key]} alt={label} className="w-full h-28 object-cover rounded-xl border border-border" />
-                      ) : (
-                        <div className="w-full h-28 bg-surface rounded-xl flex items-center justify-center text-ink/25 text-xs border border-border">
-                          Sin foto
+              {hayAlgo ? (
+                <div className="space-y-5">
+                  {tieneDetalle && (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                      {Object.entries(FOTOS_LABELS).map(([key, label]) => (
+                        <div key={key}>
+                          <p className="text-xs text-ink/50 mb-1 font-medium">{label}</p>
+                          {detalle[key] ? (
+                            // Abre components/VisorFotos.tsx (el mismo de Operaciones): la
+                            // miniatura va con object-cover, o sea RECORTADA — sin ampliar no
+                            // se puede revisar un rayón ni leer una placa.
+                            <button type="button" onClick={() => abrirVisorVehiculo(v, detalle[key])}
+                              title="Clic para ver la foto en grande"
+                              className="block w-full rounded-xl focus:outline-none focus:ring-2 focus:ring-accent/50">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={detalle[key]} alt={label} className="w-full h-28 object-cover rounded-xl border border-border hover:opacity-85 transition" />
+                            </button>
+                          ) : (
+                            <div className="w-full h-28 bg-surface rounded-xl flex items-center justify-center text-ink/25 text-xs border border-border">
+                              Sin foto
+                            </div>
+                          )}
                         </div>
-                      )}
+                      ))}
                     </div>
-                  ))}
+                  )}
+                  {sueltas.length > 0 && (
+                    <div>
+                      <p className="text-xs text-ink/50 mb-2 font-medium">
+                        Otras fotos de la publicación ({sueltas.length})
+                      </p>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                        {sueltas.map((url, i) => (
+                          <button key={url} type="button" onClick={() => abrirVisorVehiculo(v, url)}
+                            title="Clic para ver la foto en grande"
+                            className="block w-full rounded-xl focus:outline-none focus:ring-2 focus:ring-accent/50">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={url} alt={`Foto ${i + 1} de ${v.marca} ${v.modelo}`} className="w-full h-28 object-cover rounded-xl border border-border hover:opacity-85 transition" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="text-center py-12">
                   <IconCar size={48} className="text-ink/20 mx-auto mb-3" />
-                  <p className="text-ink/50">Este vehículo no tiene fotos detalladas.</p>
+                  <p className="text-ink/50">Este vehículo no tiene fotos todavía.</p>
                 </div>
               )}
             </div>
@@ -2743,7 +3227,11 @@ function DashboardAdminInner() {
                 {/* Estado de cuenta */}
                 <div className="flex items-center justify-between pt-2 border-t border-border">
                   <div>
-                    <p className="text-xs text-ink/50">Registrado el {u.created_at?.split('T')[0] || u.created_at}</p>
+                    {/* `created_at` viene en UTC y se mostraba en crudo ('2026-09-16 01:00:00'):
+                        un registro de las 8 p. m. en Medellín se leía como del día siguiente. */}
+                    <p className="text-xs text-ink/50" title={fechaRegistroLarga(u.created_at)}>
+                      Registrado el {fechaRegistroCorta(u.created_at)}
+                    </p>
                     <p className="text-xs text-ink/50">Estado: <span className={u.estado_cuenta === 'activa' ? 'text-success font-semibold' : 'text-danger font-semibold'}>{u.estado_cuenta}</span></p>
                   </div>
                   <div className="flex items-center gap-2">
@@ -2850,6 +3338,19 @@ function DashboardAdminInner() {
           </div>
         );
       })()}
+
+      {/* Visor de fotos a pantalla completa — el MISMO componente que usan Operaciones y
+          la pantalla del mensajero (components/VisorFotos.tsx): zoom, flechas, pellizco en
+          móvil y cierre con Escape. Va al final y con su propio z-index (z-[100]), por
+          encima del modal de fotos desde el que también se abre. */}
+      {visorFotos && (
+        <VisorFotos
+          fotos={visorFotos.fotos}
+          indice={visorFotos.indice}
+          titulo={visorFotos.titulo}
+          onIndice={i => setVisorFotos(v => (v ? { ...v, indice: i } : v))}
+          onCerrar={() => setVisorFotos(null)} />
+      )}
     </div>
   );
 }
