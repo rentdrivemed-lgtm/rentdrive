@@ -238,3 +238,110 @@ export const PREFIJO_REVISION_PLACA = 'Foto pendiente de revisión manual de pla
 export function esRetencionPorPlaca(motivo: unknown): boolean {
   return typeof motivo === 'string' && motivo.startsWith(PREFIJO_REVISION_PLACA);
 }
+
+// ── Huella del sellado AUTOMÁTICO (idempotencia del reproceso en lote) ───────
+//
+// POR QUÉ. `POST /api/admin/reprocesar-placas` afirmaba ser idempotente y no lo era: al
+// trabajar sobre la foto YA SELLADA, cada corrida le estampaba sellos nuevos encima de los
+// de la anterior (comprobado en producción sobre el vehículo 13: tres logos superpuestos
+// sobre la misma placa). El arreglo de fondo es partir SIEMPRE de la foto original
+// (`fotos_moderacion.placa_origen_url`), y eso ya garantiza por construcción que los sellos
+// no se apilen: se estampan sobre un lienzo limpio.
+//
+// Pero "no apila" todavía no es "no hace nada": la detección lleva una llamada a un modelo,
+// que no es determinística, así que dos corridas seguidas producirían dos JPG distintos —
+// visualmente iguales, con un sello cada uno— y la URL publicada cambiaría en cada pasada
+// (subida a Cloudinary de más, churn en `vehiculos.fotos`, y un "corregida" en el reporte
+// que hace ruido sobre las correcciones de verdad). Para cerrar eso se guarda, junto a la
+// foto sellada, la HUELLA de lo que se estampó: el lienzo y los rectángulos. Si la corrida
+// nueva llega a un resultado equivalente, no se sube nada.
+//
+// Estas funciones son PURAS (viven acá y no en lib/blur-placas.ts, que arrastra `sharp`)
+// para poder comprobarlas con un script sin levantar el servidor.
+
+/** Lo que se guarda en `fotos_moderacion.placa_auto_zonas`. */
+export type HuellaSello = {
+  /** Lienzo (ya normalizado por EXIF) sobre el que valen los rectángulos. */
+  ancho: number;
+  alto: number;
+  zonas: RectanguloPx[];
+};
+
+/**
+ * Solape mínimo (intersección sobre unión) para dar por EQUIVALENTES dos rectángulos de dos
+ * corridas distintas sobre la MISMA foto original.
+ *
+ * No es 1.0 porque las coordenadas salen de un modelo: la misma placa vuelve con la caja
+ * corrida uno o dos puntos de la regla. Y el temblor pesa MUCHO más en los sellos chicos:
+ * medido sobre la foto del DEEPAL del catálogo, dos corridas seguidas sobre la MISMA foto
+ * original dieron `{13,1245,44,30}` y `{13,1243,44,35}` — el mismo sello sobre la misma
+ * placa, con 2 px de diferencia arriba y 5 de alto, y aun así solo 0.857 de solape porque el
+ * sello mide 44x30 px. En un sello grande esos mismos píxeles no se notan.
+ *
+ * Por eso 0.7 y no 0.85: cubre ese temblor con margen y sigue rechazando un sello que se
+ * movió más o menos un 15% de su propio tamaño, que es cuando de verdad está tapando otra
+ * cosa y conviene volver a publicar la foto. Equivocarse por lo bajo (dar por distintos dos
+ * sellados iguales) solo cuesta una subida de más: la garantía de que no se apilan sellos no
+ * depende de este número, sino de partir siempre de la foto original.
+ */
+export const IOU_MISMO_SELLO = 0.7;
+
+function iou(a: RectanguloPx, b: RectanguloPx): number {
+  const w = Math.min(a.left + a.width, b.left + b.width) - Math.max(a.left, b.left);
+  const h = Math.min(a.top + a.height, b.top + b.height) - Math.max(a.top, b.top);
+  if (w <= 0 || h <= 0) return 0;
+  const inter = w * h;
+  const union = a.width * a.height + b.width * b.height - inter;
+  return union > 0 ? inter / union : 0;
+}
+
+/** Lee la huella guardada en la BD. Devuelve `null` ante cualquier cosa que no cumpla el formato. */
+export function leerHuellaSello(json: unknown): HuellaSello | null {
+  if (typeof json !== 'string' || !json.trim()) return null;
+  let bruto: unknown;
+  try { bruto = JSON.parse(json); } catch { return null; }
+  if (!bruto || typeof bruto !== 'object' || Array.isArray(bruto)) return null;
+  const o = bruto as Record<string, unknown>;
+  const ancho = Number(o.ancho);
+  const alto = Number(o.alto);
+  if (!Number.isFinite(ancho) || !Number.isFinite(alto) || ancho <= 0 || alto <= 0) return null;
+  if (!Array.isArray(o.zonas)) return null;
+  const zonas: RectanguloPx[] = [];
+  for (const cruda of o.zonas) {
+    if (!cruda || typeof cruda !== 'object') return null;
+    const z = cruda as Record<string, unknown>;
+    const r = { left: Number(z.left), top: Number(z.top), width: Number(z.width), height: Number(z.height) };
+    if (!finito(r.left) || !finito(r.top) || !finito(r.width) || !finito(r.height)) return null;
+    if (r.width <= 0 || r.height <= 0) return null;
+    zonas.push(r);
+  }
+  return { ancho, alto, zonas };
+}
+
+/**
+ * ¿Las dos corridas estamparon, a efectos prácticos, LO MISMO? Exige el mismo lienzo, la
+ * misma cantidad de sellos y un emparejamiento 1:1 donde cada pareja solape al menos
+ * `IOU_MISMO_SELLO`. El emparejamiento es codicioso (se toma el mejor par disponible y se
+ * descarta): con 6 sellos como máximo por foto (`MAX_ZONAS_TAPADAS` en lib/blur-placas.ts)
+ * no hace falta nada más fino, y un empate mal resuelto solo puede devolver `false`, o sea
+ * volver a publicar la foto — el lado seguro del error.
+ */
+export function mismoSellado(previa: HuellaSello | null, nueva: HuellaSello): boolean {
+  if (!previa) return false;
+  if (previa.ancho !== nueva.ancho || previa.alto !== nueva.alto) return false;
+  if (previa.zonas.length !== nueva.zonas.length) return false;
+  if (nueva.zonas.length === 0) return false;
+
+  const libres = [...previa.zonas];
+  for (const z of nueva.zonas) {
+    let mejor = -1;
+    let mejorIou = 0;
+    for (let i = 0; i < libres.length; i++) {
+      const v = iou(z, libres[i]);
+      if (v > mejorIou) { mejorIou = v; mejor = i; }
+    }
+    if (mejor === -1 || mejorIou < IOU_MISMO_SELLO) return false;
+    libres.splice(mejor, 1);
+  }
+  return true;
+}

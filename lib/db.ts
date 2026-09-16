@@ -657,6 +657,23 @@ function initDb(db: Database.Database) {
       placa_manual_usuario_id INTEGER REFERENCES usuarios(id),
       placa_manual_at        TEXT DEFAULT '',
       placa_manual_zonas     TEXT DEFAULT '',
+      -- Sellado AUTOMÁTICO de placa (app/api/admin/reprocesar-placas). Comparte
+      -- placa_origen_url con el camino manual, y por el MISMO motivo: el sello se estampa
+      -- siempre sobre la foto original sin tapar, nunca sobre una ya sellada — si no, cada
+      -- corrida le apila un logo más encima a la anterior (pasó de verdad en producción con
+      -- el vehículo 13: tres sellos superpuestos). placa_auto_zonas guarda los rectángulos
+      -- que se estamparon y sobre qué lienzo, para reconocer que un reproceso nuevo da el
+      -- MISMO resultado y no volver a subir la foto (idempotencia real, no solo "no apila").
+      placa_auto_zonas       TEXT DEFAULT '',
+      -- Retención de placa DIFERIDA. La retención normal escribe
+      -- contenido_inapropiado = 1, y eso saca al vehículo de la vitrina pública
+      -- (vehiculos.contenido_revision). En un reproceso MASIVO eso puede tumbar media
+      -- flota de golpe, así que ese endpoint admite un modo que aplica los sellos y deja la
+      -- revisión anotada ACÁ —visible y contable en el panel de placas— sin retirar el
+      -- vehículo hasta que una persona la mire. Nunca se difiere una marca de contenido
+      -- inapropiado ni un "no se pudo moderar": esas siguen siendo fail-closed.
+      placa_revision_pendiente INTEGER DEFAULT 0,
+      placa_revision_motivo    TEXT DEFAULT '',
       created_at             TEXT DEFAULT (datetime('now', 'localtime'))
     );
 
@@ -866,6 +883,11 @@ function initDb(db: Database.Database) {
   try { db.exec("ALTER TABLE fotos_moderacion ADD COLUMN placa_manual_usuario_id INTEGER REFERENCES usuarios(id)"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE fotos_moderacion ADD COLUMN placa_manual_at TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE fotos_moderacion ADD COLUMN placa_manual_zonas TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  // Sellado automático seguro + retención diferida (ver el CREATE TABLE de arriba y
+  // app/api/admin/reprocesar-placas).
+  try { db.exec("ALTER TABLE fotos_moderacion ADD COLUMN placa_auto_zonas TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE fotos_moderacion ADD COLUMN placa_revision_pendiente INTEGER DEFAULT 0"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE fotos_moderacion ADD COLUMN placa_revision_motivo TEXT DEFAULT ''"); } catch { /* ya existe */ }
   migrarFotosModeracionNormalizada(db);
 
   try { db.exec("ALTER TABLE usuarios ADD COLUMN celular TEXT DEFAULT ''"); } catch { /* ya existe */ }

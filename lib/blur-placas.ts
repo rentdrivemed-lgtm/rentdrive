@@ -113,6 +113,24 @@ export type ResultadoDeteccion = {
    *  - `ninguna`       : no se tapó nada (`difuminada` es false).
    */
   via: 'color' | 'color_y_ia' | 'ia' | 'color_sin_ia' | 'ninguna';
+  /**
+   * Los rectángulos que REALMENTE se estamparon, en píxeles del lienzo ya normalizado por
+   * EXIF (`ancho` x `alto` de aquí abajo). Vacío cuando `difuminada` es false.
+   *
+   * Existe para el reproceso en lote (app/api/admin/reprocesar-placas), que necesita dos
+   * cosas que el buffer solo no da:
+   *  - GUARDARLOS junto a la foto sellada, para poder comparar en una corrida posterior si
+   *    el resultado nuevo es el MISMO y así no volver a subir una foto idéntica (ver
+   *    `placa_auto_zonas` en lib/db.ts);
+   *  - REPORTARLOS en el modo simulación, donde no se sube nada y lo único que se puede
+   *    mostrar de lo que habría pasado son las coordenadas.
+   * El camino manual (lib/tapar-placa-imagen.ts) ya devolvía su equivalente
+   * (`ResultadoTapado.rectangulos`); esto lo empareja del lado automático.
+   */
+  zonas: Rectangulo[];
+  /** Ancho/alto del lienzo ya normalizado por EXIF sobre el que valen `zonas`. */
+  ancho: number;
+  alto: number;
 };
 
 // ---------------------------------------------------------------------------------------
@@ -1088,6 +1106,129 @@ async function generarRectanguloMarca(width: number, height: number): Promise<Bu
   return sharp(Buffer.from(svgPlaca)).png().toBuffer();
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────
+// ¿ESTA ZONA YA LLEVA UN SELLO DE ESTE MISMO SISTEMA? (determinístico, sin IA)
+// ─────────────────────────────────────────────────────────────────────────────────────────
+//
+// EL FALLO QUE CIERRA. Reprocesar una foto YA SELLADA le apilaba sellos: pasó en producción
+// con el vehículo 13 (KIA Seltos), que terminó con tres logos superpuestos sobre la misma
+// placa. La causa de fondo es que el sistema no tenía forma de saber que la foto ya estaba
+// tapada, y NO basta con mirar el nombre del archivo ni la base de datos:
+//
+//   · `POST /api/upload` estampa el sello ANTES de subir la foto, así que la única copia que
+//     existe en Cloudinary ya viene sellada, con nombre de subida normal (`<ts>-<rand>.jpg`)
+//     y sin ninguna marca en `fotos_moderacion` que lo diga. Comprobado sobre el catálogo
+//     real: las fotos traseras del KIA Sportage, del Mazda 3 y del Nivus, que por nombre y
+//     por base parecen originales intactas, traen el sello horneado en los píxeles.
+//   · O sea que la mayoría de las fotos publicadas son "ya selladas sin original", y un
+//     reproceso que las trate como limpias vuelve a estampar encima.
+//
+// LA COMPROBACIÓN. No hace falta reconocer el sello en toda la foto (los hay de 10x5 px, que
+// ninguna detección de formas resuelve de verdad): basta con mirar EL RECTÁNGULO QUE SE
+// ESTÁ A PUNTO DE PINTAR. Si esa superficie ya es, en su mayor parte, el navy #1B3356 de la
+// marca Y además tiene algo del naranja #F25C2B del borde/las flechas, ahí ya hay un sello
+// nuestro y volver a pintar solo apila. Es una MEDICIÓN sobre los píxeles de un color que
+// ponemos nosotros, no una heurística: una placa real es amarilla o blanca con caracteres
+// negros, nunca navy con naranja.
+//
+// Se aplica en el ÚNICO sitio por el que pasan las dos vías automáticas (con IA y sin IA),
+// justo antes de componer, así que ninguna de las dos puede apilar.
+
+/** Escala de análisis de la máscara del sello. Barata y suficiente para un sello de 20 px. */
+const LADO_MASCARA_SELLO = 1400;
+
+/** Fracción del rectángulo que debe ser navy de marca para darlo por ya sellado. */
+const SELLO_NAVY_MIN = 0.45;
+/**
+ * Fracción de naranja de marca exigida además. Es baja (el borde y las flechas son una parte
+ * chica de la superficie) pero imprescindible: sin ella, el capó azul oscuro de un carro o
+ * una sombra fría podrían pasar por sello.
+ */
+const SELLO_NARANJA_MIN = 0.015;
+
+/** Píxeles del navy de fondo del sello (#1B3356 = 27,51,86), con tolerancia de JPEG. */
+function esNavyDeMarca(r: number, g: number, b: number): boolean {
+  return r <= 95 && g <= 110 && b >= 40 && b <= 170 && b - r >= 18 && b - g >= 10;
+}
+
+/** Píxeles del naranja de acento del sello (#F25C2B = 242,92,43). */
+function esNaranjaDeMarca(r: number, g: number, b: number): boolean {
+  return r >= 165 && g >= 40 && g <= 150 && b <= 120 && r - g >= 65 && g - b >= 10;
+}
+
+type MascaraSello = { navy: Uint8Array; naranja: Uint8Array; w: number; h: number };
+
+/**
+ * Máscara de los dos colores del sello sobre la imagen ya normalizada. Se calcula UNA vez por
+ * foto. Devuelve `null` si la imagen no se pudo decodificar: el llamador entonces no filtra
+ * nada (no se deja una placa sin tapar por no haber podido hacer esta comprobación).
+ */
+async function mascaraDelSello(buffer: Buffer): Promise<MascaraSello | null> {
+  try {
+    const { data, info } = await sharp(buffer)
+      .resize({ width: LADO_MASCARA_SELLO, height: LADO_MASCARA_SELLO, fit: 'inside', withoutEnlargement: true })
+      .removeAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const w = info.width, h = info.height, c = info.channels;
+    if (!w || !h || c < 3) return null;
+    const navy = new Uint8Array(w * h);
+    const naranja = new Uint8Array(w * h);
+    for (let i = 0, p = 0; i < w * h; i++, p += c) {
+      const r = data[p], g = data[p + 1], b = data[p + 2];
+      if (esNaranjaDeMarca(r, g, b)) naranja[i] = 1;
+      else if (esNavyDeMarca(r, g, b)) navy[i] = 1;
+    }
+    return { navy, naranja, w, h };
+  } catch (err) {
+    console.error('[blur-placas] No se pudo calcular la máscara del sello (no se filtrarán zonas ya selladas):', err);
+    return null;
+  }
+}
+
+/** ¿El rectángulo `r` (en píxeles de la imagen `imgW x imgH`) ya está cubierto por un sello nuestro? */
+function zonaYaSellada(m: MascaraSello, imgW: number, imgH: number, r: Rectangulo): boolean {
+  const sx = m.w / imgW;
+  const sy = m.h / imgH;
+  const x0 = Math.max(0, Math.floor(r.left * sx));
+  const y0 = Math.max(0, Math.floor(r.top * sy));
+  const x1 = Math.min(m.w - 1, Math.ceil((r.left + r.width) * sx) - 1);
+  const y1 = Math.min(m.h - 1, Math.ceil((r.top + r.height) * sy) - 1);
+  if (x1 < x0 || y1 < y0) return false;
+  let navy = 0, naranja = 0, total = 0;
+  for (let y = y0; y <= y1; y++) {
+    const fila = y * m.w;
+    for (let x = x0; x <= x1; x++) {
+      total++;
+      if (m.navy[fila + x]) navy++;
+      else if (m.naranja[fila + x]) naranja++;
+    }
+  }
+  if (total === 0) return false;
+  return navy / total >= SELLO_NAVY_MIN && naranja / total >= SELLO_NARANJA_MIN;
+}
+
+/**
+ * Descarta las zonas que ya están tapadas por un sello de este mismo sistema. Es la red que
+ * impide APILAR sellos, y corre en las dos vías automáticas.
+ */
+async function sinZonasYaSelladas(
+  buffer: Buffer, rectangulos: Rectangulo[], imgW: number, imgH: number,
+): Promise<Rectangulo[]> {
+  if (rectangulos.length === 0) return rectangulos;
+  const m = await mascaraDelSello(buffer);
+  if (!m) return rectangulos;
+  const salida = rectangulos.filter(r => {
+    if (!zonaYaSellada(m, imgW, imgH, r)) return true;
+    console.warn(
+      '[blur-placas][SELLO-YA-PUESTO] Esta zona ya está cubierta por un sello de DrivePass — no se vuelve a estampar (evita apilar sellos sobre una foto ya procesada).',
+      r,
+    );
+    return false;
+  });
+  return salida;
+}
+
 /**
  * Compone los rectángulos de marca (100% opacos) sobre la imagen, todos en la MISMA llamada
  * a `sharp().composite([...])`.
@@ -1123,10 +1264,16 @@ async function resolverSinIA(
   const fuertes = candidatos.filter(c => esCandidatoFuerte(c, imgW, imgH)).slice(0, MAX_ZONAS_TAPADAS);
   if (fuertes.length === 0) {
     console.warn('[blur-placas][PLACA-NO-TAPADA] La IA no pudo evaluar la foto y el detector de color no encontró ninguna placa amarilla clara — foto sin tapar y marcada para revisión manual');
-    return { buffer, difuminada: false, contenidoInapropiado: false, moderacionEvaluada: false, revisionManual: true, motivoRevision: 'La IA no pudo evaluar la foto.', via: 'ninguna' };
+    return { buffer, difuminada: false, contenidoInapropiado: false, moderacionEvaluada: false, revisionManual: true, motivoRevision: 'La IA no pudo evaluar la foto.', via: 'ninguna', zonas: [], ancho: imgW, alto: imgH };
   }
 
-  const rectangulos = fuertes.map(c => rectanguloDeCandidato(c, imgW, imgH));
+  // Se descartan las zonas que ya llevan un sello de este sistema: si esta foto ya pasó por
+  // acá antes, volver a estampar solo apila logos (ver `sinZonasYaSelladas`).
+  const rectangulos = await sinZonasYaSelladas(buffer, fuertes.map(c => rectanguloDeCandidato(c, imgW, imgH)), imgW, imgH);
+  if (rectangulos.length === 0) {
+    console.warn('[blur-placas][PLACA-NO-TAPADA] La IA no pudo evaluar la foto y lo único que encontró el detector de color ya estaba cubierto por un sello previo — no se toca la foto.');
+    return { buffer, difuminada: false, contenidoInapropiado: false, moderacionEvaluada: false, revisionManual: true, motivoRevision: 'La IA no pudo evaluar la foto.', via: 'ninguna', zonas: [], ancho: imgW, alto: imgH };
+  }
   console.warn(
     `[blur-placas][PLACA-VIA-COLOR-SIN-IA] La IA no pudo evaluar la foto, pero el detector de color encontró ${fuertes.length} placa(s) amarilla(s) clara(s) — se tapan igual (la foto queda además marcada para revisión manual porque no hubo moderación de contenido)`,
     rectangulos,
@@ -1135,6 +1282,7 @@ async function resolverSinIA(
   return {
     buffer: resultado, difuminada: true, contenidoInapropiado: false, moderacionEvaluada: false,
     revisionManual: true, motivoRevision: 'La IA no pudo evaluar la foto.', via: 'color_sin_ia',
+    zonas: rectangulos, ancho: imgW, alto: imgH,
   };
 }
 
@@ -1620,18 +1768,33 @@ export async function detectarYDifuminarPlaca(
     console.warn(
       `[blur-placas][PLACA-NO-TAPADA] No se tapó nada en esta foto (la IA reportó ${placas.length} placa(s), el detector de color ${candidatos.length} candidato(s) amarillo(s)).`,
     );
-    return { buffer, difuminada: false, contenidoInapropiado, motivoInapropiado, moderacionEvaluada: true, revisionManual, motivoRevision, via: 'ninguna' };
+    return { buffer, difuminada: false, contenidoInapropiado, motivoInapropiado, moderacionEvaluada: true, revisionManual, motivoRevision, via: 'ninguna', zonas: [], ancho: imgW, alto: imgH };
   }
 
-  const porColor = zonas.filter(z => z.origen === 'color').length;
-  const via: ResultadoDeteccion['via'] = porColor === zonas.length ? 'color' : porColor === 0 ? 'ia' : 'color_y_ia';
-  const superficie = zonas.reduce((s, z) => s + z.rect.width * z.rect.height, 0) / (imgW * imgH);
+  // Última red ANTES de pintar: nada de lo que se estampe puede caer sobre un sello que ya
+  // está ahí. Es lo que impide que un reproceso apile logos sobre una foto que `POST
+  // /api/upload` ya selló al subirla (ver `sinZonasYaSelladas` para por qué no alcanza con
+  // mirar el nombre del archivo ni la base de datos).
+  const rectangulos = await sinZonasYaSelladas(buffer, zonas.map(z => z.rect), imgW, imgH);
+  if (rectangulos.length === 0) {
+    console.warn(
+      '[blur-placas][PLACA-NO-TAPADA] Todo lo que se iba a tapar ya estaba cubierto por un sello previo de DrivePass — la foto se deja intacta.',
+    );
+    return { buffer, difuminada: false, contenidoInapropiado, motivoInapropiado, moderacionEvaluada: true, revisionManual, motivoRevision, via: 'ninguna', zonas: [], ancho: imgW, alto: imgH };
+  }
+
+  // `via` y la superficie se calculan sobre lo que DE VERDAD se va a pintar: entre medio
+  // pudo caerse alguna zona por estar ya sellada.
+  const pintadas = zonas.filter(z => rectangulos.includes(z.rect));
+  const porColor = pintadas.filter(z => z.origen === 'color').length;
+  const via: ResultadoDeteccion['via'] = porColor === pintadas.length ? 'color' : porColor === 0 ? 'ia' : 'color_y_ia';
+  const superficie = rectangulos.reduce((acc, r) => acc + r.width * r.height, 0) / (imgW * imgH);
   console.warn(
-    `[blur-placas][PLACA-TAPADA] ${zonas.length} zona(s) tapada(s) en una foto de ${imgW}x${imgH} (via: ${via}, ${(superficie * 100).toFixed(1)}% de la superficie). ` +
+    `[blur-placas][PLACA-TAPADA] ${rectangulos.length} zona(s) tapada(s) en una foto de ${imgW}x${imgH} (via: ${via}, ${(superficie * 100).toFixed(1)}% de la superficie). ` +
     `La IA reportó ${placas.length} placa(s); el detector de color, ${candidatos.length} candidato(s).`,
-    zonas.map(z => ({ ...z.rect, origen: z.origen, detalle: z.detalle })),
+    pintadas.map(z => ({ ...z.rect, origen: z.origen, detalle: z.detalle })),
   );
 
-  const resultado = await taparZonas(buffer, zonas.map(z => z.rect));
-  return { buffer: resultado, difuminada: true, contenidoInapropiado, motivoInapropiado, moderacionEvaluada: true, revisionManual, motivoRevision, via };
+  const resultado = await taparZonas(buffer, rectangulos);
+  return { buffer: resultado, difuminada: true, contenidoInapropiado, motivoInapropiado, moderacionEvaluada: true, revisionManual, motivoRevision, via, zonas: rectangulos, ancho: imgW, alto: imgH };
 }

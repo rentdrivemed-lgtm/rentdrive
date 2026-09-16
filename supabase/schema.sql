@@ -603,6 +603,18 @@ CREATE TABLE IF NOT EXISTS fotos_moderacion (
   placa_manual_usuario_id INTEGER REFERENCES usuarios(id),
   placa_manual_at         TEXT DEFAULT '',
   placa_manual_zonas      TEXT DEFAULT '',
+  -- Sellado AUTOMÁTICO de placa (app/api/admin/reprocesar-placas). Comparte
+  -- `placa_origen_url` con el camino manual y por el mismo motivo: el sello se estampa
+  -- siempre sobre la foto original, nunca sobre una ya sellada (si no, cada corrida apila
+  -- un logo más). `placa_auto_zonas` guarda los rectángulos estampados + el lienzo, para
+  -- reconocer un reproceso que da el mismo resultado y no volver a subir la foto.
+  placa_auto_zonas        TEXT DEFAULT '',
+  -- Retención de placa DIFERIDA: anota "hay que revisar esta foto" SIN sacar al vehículo
+  -- de la vitrina (que es lo que hace `contenido_inapropiado = 1` vía
+  -- `vehiculos.contenido_revision`). Solo para la retención por placa; nunca para
+  -- contenido inapropiado ni para "no se pudo moderar".
+  placa_revision_pendiente INTEGER DEFAULT 0,
+  placa_revision_motivo    TEXT DEFAULT '',
   created_at            TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
 );
 -- Bases ya desplegadas (paridad con los ALTER idempotentes de lib/db.ts):
@@ -611,6 +623,9 @@ ALTER TABLE fotos_moderacion ADD COLUMN IF NOT EXISTS placa_manual            IN
 ALTER TABLE fotos_moderacion ADD COLUMN IF NOT EXISTS placa_manual_usuario_id INTEGER REFERENCES usuarios(id);
 ALTER TABLE fotos_moderacion ADD COLUMN IF NOT EXISTS placa_manual_at         TEXT DEFAULT '';
 ALTER TABLE fotos_moderacion ADD COLUMN IF NOT EXISTS placa_manual_zonas      TEXT DEFAULT '';
+ALTER TABLE fotos_moderacion ADD COLUMN IF NOT EXISTS placa_auto_zonas         TEXT DEFAULT '';
+ALTER TABLE fotos_moderacion ADD COLUMN IF NOT EXISTS placa_revision_pendiente INTEGER DEFAULT 0;
+ALTER TABLE fotos_moderacion ADD COLUMN IF NOT EXISTS placa_revision_motivo    TEXT DEFAULT '';
 -- Nota: `vehiculos.contenido_revision` (INTEGER/boolean, default 0) y
 -- `vehiculos.contenido_revision_motivo` (TEXT, default '') son columnas nuevas de
 -- esta misma feature (moderación de contenido) que pertenecen a la tabla `vehiculos`.
