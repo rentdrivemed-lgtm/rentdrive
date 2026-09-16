@@ -1,121 +1,23 @@
 import type Database from 'better-sqlite3';
 
 // ============================================================================
-// Moderación de contenido — texto (lenguaje soez/inapropiado)
+// Moderación de contenido — texto: ELIMINADA (16-sep-2026)
 // ============================================================================
 //
-// Filtro simple por lista de palabras + coincidencia exacta de token (no
-// substring "a lo bruto"): normalizamos cada palabra del texto (minúsculas,
-// sin tildes, solo letras) y comparamos esa palabra COMPLETA contra la lista.
-// Esto evita el problema clásico de los filtros por substring — por ejemplo
-// "disputa"/"diputado" NO deben marcarse solo porque contienen "puta"/"puto"
-// como substring; con coincidencia de palabra completa no pasa, porque
-// "disputa" normalizado es "disputa", no "puta".
+// Había una lista de 91 palabras que rechazaba la descripción de un vehículo. Se
+// quitó a petición del dueño, y con razón: bloqueaba descripciones legítimas.
 //
-// Al normalizar cada palabra quitamos símbolos/números intercalados (p. ej.
-// "p.u.t.o", "p-u-t-o", "put0" sin la o) para tolerar evasión básica con
-// separadores, sin sobre-ingeniería (no se intenta cubrir leetspeak
-// completo ni frases fragmentadas entre palabras reales separadas por
-// espacio, que es exactamente el caso que produce falsos positivos).
+// La normalización quitaba tildes para que "coño" no se escapara escrito "cono",
+// pero eso mete "cono" en la lista — y un carro lleva CONOS de seguridad en el kit
+// de carretera obligatorio (aparecen hasta en el acta de entrega de este mismo
+// proyecto). "hp" estaba por el insulto colombiano y es también la unidad de
+// caballos de fuerza. El filtro fallaba justo con el vocabulario del negocio.
 //
-// Lista deliberadamente NO exhaustiva: cubre groserías/insultos comunes y
-// contenido sexual explícito en texto, en español (con variantes coloquiales
-// colombianas) e inglés básico. Se excluyen a propósito palabras que son de
-// uso cotidiano neutro en Colombia y darían muchos falsos positivos si se
-// incluyeran (p. ej. "coger" = tomar/agarrar en LatAm, "huevón" = muletilla
-// coloquial muy común y no necesariamente ofensiva; y "concha", ver nota abajo).
-//
-// Lista en crudo, SIN normalizar (puede tener tildes/ñ reales, tal como se leen). La
-// normalización se aplica al construir el Set más abajo — ver el comentario junto a
-// `PALABRAS_PROHIBIDAS`.
-//
-// Nota: se quitó "concha" (antes estaba en la lista): en Colombia es de uso neutro muy
-// común (nombre propio, "concha de coco/nuez", etc.) y solo es vulgar en el Cono Sur —
-// daba falsos positivos costosos aquí. "coño" sí se mantiene (grosería explícita también
-// en Colombia), y ahora SÍ puede coincidir (ver bug de normalización corregido abajo).
-const PALABRAS_PROHIBIDAS_RAW = [
-  // Español — groserías/insultos comunes
-  'mierda', 'mierdas', 'mierdero', 'mierdera',
-  'puta', 'putas', 'puto', 'putos', 'putica', 'putico',
-  'hijueputa', 'hijoeputa', 'hpta', 'hp', 'hdp',
-  'gonorrea', 'malparido', 'malparida', 'malnacido', 'malnacida',
-  'cabron', 'cabrona', 'cabrones',
-  'pendejo', 'pendeja', 'pendejada', 'pendejadas',
-  'culero', 'culera', 'culiado', 'culiada',
-  'verga', 'vergas',
-  'chingada', 'chingado', 'chingar', 'chingadera', 'chingaderas',
-  'joder', 'jodido', 'jodida',
-  'maricon', 'mariconada',
-  'perra', 'perras', 'zorra', 'zorras',
-  'gilipollas',
-  'coño',
-  'conchudo', 'conchuda',
-  'marica',
-  // Español — contenido sexual explícito
-  'porno', 'pornografia', 'pornografico', 'pornografica',
-  'prostituta', 'prostitutas', 'prostitucion',
-  'follar', 'follada', 'folladas',
-  'vagina', 'vaginas', 'pene', 'penes',
-  'tetas', 'chichis',
-  'orgia', 'orgias',
-  'xxx',
-  // Inglés básico
-  'fuck', 'fucking', 'fucked', 'fucker',
-  'shit', 'bullshit',
-  'bitch', 'bitches',
-  'asshole', 'assholes',
-  'bastard',
-  'dick', 'dicks',
-  'pussy',
-  'cunt',
-  'whore', 'whores',
-  'slut', 'sluts',
-  'porn', 'porno',
-  'cock',
-  'faggot',
-];
-
-function normalizarPalabra(palabra: string): string {
-  return palabra
-    .toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // quita tildes/diacríticos
-    .replace(/[^a-z]/g, ''); // deja solo letras (quita números y símbolos intercalados)
-}
-
-// IMPORTANTE (bug corregido): la lista de arriba se normaliza con la MISMA función
-// `normalizarPalabra` que se usa para normalizar el texto del usuario en
-// `contieneLenguajeInapropiado`. Antes la lista tenía 'coño' literal (con ñ real, SIN
-// pasar por normalizarPalabra) mientras que cada palabra del texto del usuario SÍ se
-// normalizaba antes de compararse — normalizarPalabra hace `.normalize('NFD')` seguido
-// de quitar diacríticos, lo que descompone la 'ñ' en 'n' + tilde y luego elimina la
-// tilde, dejando "cono". Como los dos lados de la comparación quedaban en formatos
-// distintos ("coño" en la lista vs "cono" viniendo del texto), 'coño' NUNCA podía
-// coincidir. Al normalizar también la lista con `.map(normalizarPalabra)`, ambos lados
-// quedan en el mismo formato y la comparación por Set funciona.
-const PALABRAS_PROHIBIDAS = new Set<string>(PALABRAS_PROHIBIDAS_RAW.map(normalizarPalabra));
-
-export type ChequeoTexto = { encontrado: boolean; palabra?: string };
-
-/**
- * Revisa un texto libre (descripción de vehículo, etc.) buscando lenguaje
- * soez/inapropiado por coincidencia de palabra COMPLETA (ver comentario del
- * módulo). Case-insensitive, tolerante a tildes y a símbolos/números
- * intercalados dentro de una misma palabra.
- */
-export function contieneLenguajeInapropiado(texto: unknown): ChequeoTexto {
-  // Defensa de tipo: `descripcion` llega del body de un POST/PUT sin validar su tipo
-  // río arriba — si el cliente manda un número, un objeto, etc. en vez de un string,
-  // `texto.split(...)` lanzaría un TypeError sin capturar (500) antes de esta guarda.
-  if (typeof texto !== 'string' || !texto) return { encontrado: false };
-  const palabras = texto.split(/\s+/);
-  for (const cruda of palabras) {
-    const limpia = normalizarPalabra(cruda);
-    if (limpia && PALABRAS_PROHIBIDAS.has(limpia)) {
-      return { encontrado: true, palabra: limpia };
-    }
-  }
-  return { encontrado: false };
-}
+// Se le ofrecieron dos alternativas —quitar solo las palabras ambiguas, o dejar
+// publicar y marcar para revisión— y eligió eliminarlo del todo, a sabiendas de que
+// lo que escriba un propietario sale directo a la vitrina pública. La red que queda
+// es la revisión manual de contenido del panel (`contenido_revision`), que sigue
+// intacta, igual que toda la moderación de IMÁGENES de más abajo.
 
 // ============================================================================
 // Moderación de contenido — imágenes (registro ALLOW-LIST de fotos subidas)

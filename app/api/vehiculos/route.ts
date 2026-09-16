@@ -7,7 +7,7 @@ import { precioMercadoSugerido, segmentoValido } from '@/lib/precioMercado';
 import { adminTieneArea, sinPermisoArea } from '@/lib/guard';
 import { perfilIncompleto, CODIGO_PERFIL_INCOMPLETO } from '@/lib/perfil';
 import { correoNoVerificado, CODIGO_CORREO_NO_VERIFICADO } from '@/lib/verificacion-correo';
-import { contieneLenguajeInapropiado, extraerUrlsFotos, fotosRegistradasEntre, normalizarUrlFoto } from '@/lib/moderacion';
+import { extraerUrlsFotos, fotosRegistradasEntre, normalizarUrlFoto } from '@/lib/moderacion';
 import { documentosConUrlsValidas } from '@/lib/storage';
 import { quitarPolizaDeEntrada } from '@/lib/poliza-vehiculo';
 import { esCombustibleValido, inscripcionExencionConfirmada, requiereInscripcionExencion, sanitizarClaseVehiculo } from '@/lib/vehiculo-campos';
@@ -227,13 +227,14 @@ export async function POST(req: NextRequest) {
   // request de una — más simple y mejor UX que mandarlo a revisión manual silenciosa (a
   // diferencia de las fotos, que son ambiguas para un humano sin mirar; una palabra soez es
   // inequívoca y el propietario puede corregirla al toque). Ver lib/moderacion.ts.
-  const chequeoTexto = contieneLenguajeInapropiado(descripcion);
-  if (chequeoTexto.encontrado) {
-    return NextResponse.json(
-      { error: 'Tu descripción contiene lenguaje inapropiado, por favor corrígela.' },
-      { status: 400 },
-    );
-  }
+  // El filtro de lenguaje en la descripción SE ELIMINÓ por decisión del dueño
+  // (16-sep-2026). Bloqueaba descripciones legítimas: "cono" estaba en la lista
+  // para atrapar "coño" —porque la normalización quita la tilde de la ñ— y un
+  // carro lleva CONOS de seguridad en el kit de carretera; "hp" estaba por el
+  // insulto y también son los caballos de fuerza. Se le ofreció quitar solo las
+  // palabras ambiguas o marcar para revisión sin bloquear, y eligió eliminarlo.
+  // Consecuencia asumida: lo que escriba un propietario sale directo a la vitrina
+  // pública; la red que queda es la revisión manual de contenido del panel.
 
   // Igual que en PUT /api/vehiculos/[id]: el calendario de disponibilidad se valida antes de
   // escribirlo. Sin esto, un `dias_disponibles` que no parsee entra crudo a la BD y después

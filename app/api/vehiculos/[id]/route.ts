@@ -5,7 +5,7 @@ import { adminTieneArea, sinPermisoArea } from '@/lib/guard';
 import { precioMercadoSugerido, segmentoValido } from '@/lib/precioMercado';
 import { eliminarVehiculoInteligente } from '@/lib/eliminar';
 import { registrarAuditoria } from '@/lib/permisos';
-import { contieneLenguajeInapropiado, extraerUrlsFotos, fotosRegistradasEntre, normalizarUrlFoto } from '@/lib/moderacion';
+import { extraerUrlsFotos, fotosRegistradasEntre, normalizarUrlFoto } from '@/lib/moderacion';
 import { documentosConUrlsValidas, esUrlDeStorageValida } from '@/lib/storage';
 import { tecnoRequerida } from '@/lib/tecnomecanica';
 import { CLAVE_POLIZA, POLIZA_LABEL, leerPoliza, normalizarPolizaEntrada, parsearDocumentos, quitarPolizaDeEntrada } from '@/lib/poliza-vehiculo';
@@ -164,13 +164,15 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   // mandarlo a revisión manual silenciosa. Aplica a ambos roles (propietario y admin) porque
   // `descripcion` es un campo visible públicamente.
   if (body.descripcion !== undefined) {
-    const chequeoTexto = contieneLenguajeInapropiado(body.descripcion);
-    if (chequeoTexto.encontrado) {
-      return NextResponse.json(
-        { error: 'Tu descripción contiene lenguaje inapropiado, por favor corrígela.' },
-        { status: 400 },
-      );
-    }
+    // El filtro de lenguaje en la descripción SE ELIMINÓ por decisión del dueño
+    // (16-sep-2026). Bloqueaba descripciones legítimas: "cono" estaba en la lista
+    // para atrapar "coño" —porque la normalización quita la tilde de la ñ— y un
+    // carro lleva CONOS de seguridad en el kit de carretera; "hp" estaba por el
+    // insulto y también son los caballos de fuerza. Se le ofreció quitar solo las
+    // palabras ambiguas o marcar para revisión sin bloquear, y eligió eliminarlo.
+    // Consecuencia asumida: lo que escriba un propietario sale directo a la vitrina
+    // pública; la red que queda es la revisión manual de contenido del panel.
+
   }
 
   // ── Validación/normalización de `anio` (ago-2026) ──

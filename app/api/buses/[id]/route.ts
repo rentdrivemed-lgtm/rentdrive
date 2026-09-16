@@ -3,7 +3,6 @@ import { getDb } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
 import { adminTieneArea, sinPermisoArea } from '@/lib/guard';
 import { registrarAuditoria, permisosDe } from '@/lib/permisos';
-import { contieneLenguajeInapropiado } from '@/lib/moderacion';
 import { eliminarVehiculoInteligente } from '@/lib/eliminar';
 import { notificarUsuarios } from '@/lib/panel';
 import {
@@ -117,13 +116,15 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   // Filtro de lenguaje inapropiado en la descripción (texto libre público) — mismo criterio
   // que PUT /api/vehiculos/[id] y POST /api/buses.
   if (body.descripcion !== undefined) {
-    const chequeoTexto = contieneLenguajeInapropiado(body.descripcion);
-    if (chequeoTexto.encontrado) {
-      return NextResponse.json(
-        { error: 'Tu descripción contiene lenguaje inapropiado, por favor corrígela.' },
-        { status: 400 },
-      );
-    }
+    // El filtro de lenguaje en la descripción SE ELIMINÓ por decisión del dueño
+    // (16-sep-2026). Bloqueaba descripciones legítimas: "cono" estaba en la lista
+    // para atrapar "coño" —porque la normalización quita la tilde de la ñ— y un
+    // carro lleva CONOS de seguridad en el kit de carretera; "hp" estaba por el
+    // insulto y también son los caballos de fuerza. Se le ofreció quitar solo las
+    // palabras ambiguas o marcar para revisión sin bloquear, y eligió eliminarlo.
+    // Consecuencia asumida: lo que escriba un propietario sale directo a la vitrina
+    // pública; la red que queda es la revisión manual de contenido del panel.
+
   }
 
   // Normalización de placa — mismo criterio que POST /api/buses.

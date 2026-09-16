@@ -3,7 +3,6 @@ import { getDb } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
 import { adminTieneArea, sinPermisoArea } from '@/lib/guard';
 import { registrarAuditoria, permisosDe } from '@/lib/permisos';
-import { contieneLenguajeInapropiado } from '@/lib/moderacion';
 import {
   categoriaPorPasajeros, anioBusValido, resetearTarifasBusACategoria,
   CAPACIDAD_MIN_PASAJEROS, CAPACIDAD_MAX_PASAJEROS,
@@ -119,15 +118,11 @@ export async function POST(req: NextRequest) {
   // que POST /api/vehiculos: se rechaza el request completo con un mensaje claro en vez de
   // mandarlo a revisión manual silenciosa (hallazgo QA/revisor-código, ronda post-Etapa 2:
   // este endpoint no aplicaba el filtro que ya usa el resto del proyecto).
-  if (descripcion !== undefined) {
-    const chequeoTexto = contieneLenguajeInapropiado(descripcion);
-    if (chequeoTexto.encontrado) {
-      return NextResponse.json(
-        { error: 'Tu descripción contiene lenguaje inapropiado, por favor corrígela.' },
-        { status: 400 },
-      );
-    }
-  }
+  // ELIMINADO (16-sep-2026, decisión del dueño): el filtro rechazaba descripciones
+  // legítimas — "cono" estaba en la lista para atrapar "coño" (la normalización quita
+  // la tilde de la ñ) y un vehículo lleva CONOS de seguridad en el kit de carretera;
+  // "hp" estaba por el insulto y también son los caballos de fuerza. Se le ofreció
+  // quitar solo las ambiguas o marcar para revisión sin bloquear, y eligió eliminarlo.
 
   const categoria = categoriaPorPasajeros(capacidad);
   const placaNorm = (placa || '').toString().toUpperCase().trim();
