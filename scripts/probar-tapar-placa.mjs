@@ -238,6 +238,14 @@ const MOTIVOS_PLACA = [
   `${puro.PREFIJO_REVISION_PLACA} Un tapado medido sobre los píxeles salió más grande de lo razonable y hubo que recortarlo.`,
   `${puro.PREFIJO_REVISION_PLACA} El tapado calculado desde la caja de la IA era desproporcionado y hubo que recortarlo.`,
   `${puro.PREFIJO_REVISION_PLACA} Se detectaron 9 placas y solo se taparon 6.`,
+  // Motivos que agrega el inventario de vehículos (ver EstadoPlacaVehiculo en lib/blur-placas.ts):
+  // son los que retienen la foto cuando la IA no da cuenta de la placa de algún vehículo, que es
+  // el caso de la placa BLANCA chica del fondo que el detector de color no puede ver.
+  `${puro.PREFIJO_REVISION_PLACA} Hay un vehículo en la foto cuya placa la IA no pudo ubicar ni descartar.`,
+  `${puro.PREFIJO_REVISION_PLACA} Hay 2 vehículos en la foto cuya placa la IA no pudo ubicar ni descartar.`,
+  `${puro.PREFIJO_REVISION_PLACA} La IA ubica la placa amarilla de otro vehículo en un sitio donde no hay ni un píxel amarillo, y ningún otro sello la cubre.`,
+  `${puro.PREFIJO_REVISION_PLACA} La IA dice haber reportado más placas de las que devolvió.`,
+  `${puro.PREFIJO_REVISION_PLACA} La IA reportó placas pero no enumeró ningún vehículo en la foto.`,
 ];
 for (const m of MOTIVOS_PLACA) ok(puro.esRetencionPorPlaca(m), `reconoce retención: "${m.slice(0, 72)}…"`);
 const MOTIVOS_NO_PLACA = [
