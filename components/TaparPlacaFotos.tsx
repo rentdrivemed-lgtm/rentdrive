@@ -26,6 +26,14 @@ export type FotoPlacaEstado = {
    * herramienta resuelve — por eso se distingue de una marca por contenido.
    */
   retenida_placa: boolean;
+  /**
+   * La retención es DIFERIDA: el reproceso en lote (app/api/admin/reprocesar-placas con
+   * `retencion: 'diferir'`) aplicó los sellos y dejó la revisión anotada SIN sacar el
+   * vehículo del catálogo público. Cuenta como retenida a todos los efectos de esta
+   * pantalla —es el mismo trabajo pendiente y se resuelve igual—; lo único distinto es que
+   * el carro sigue alquilándose mientras tanto.
+   */
+  revision_pendiente?: boolean;
   motivo: string;
   sin_registro: boolean;
   tapada_a_mano: boolean;
@@ -42,6 +50,8 @@ export type EstadoPlacas = {
   retenidas: number;
   /** Fotos marcadas por cualquier motivo (incluye las retenidas por placa). */
   marcadas: number;
+  /** De las retenidas, las que NO sacaron al vehículo de la vitrina (retención diferida). */
+  diferidas: number;
   recargar: () => void;
 };
 
@@ -79,6 +89,7 @@ export function usePlacasVehiculo(vehiculoId: number | null): EstadoPlacas {
     de,
     retenidas: fotos?.filter(f => f.retenida_placa).length ?? 0,
     marcadas: fotos?.filter(f => f.marcada).length ?? 0,
+    diferidas: fotos?.filter(f => f.revision_pendiente).length ?? 0,
     recargar,
   };
 }
@@ -174,6 +185,13 @@ export function AvisoPlacas({ placas, mensaje }: { placas: EstadoPlacas; mensaje
             Ábrela con “🛡️ Tapar placa”, marca cada placa visible (también las de terceros) y aplica el tapado.
             Después, si el vehículo quedó en revisión de contenido, apruébalo desde la lista.
           </p>
+          {placas.diferidas > 0 && (
+            <p className="text-[11px] text-ink/60 mt-1 leading-snug">
+              De esas, {placas.diferidas} {placas.diferidas !== 1 ? 'vienen' : 'viene'} de un reproceso en lote que
+              dejó la revisión pendiente <strong>sin sacar el vehículo de la vitrina</strong>: sigue publicado
+              mientras nadie la mire.
+            </p>
+          )}
         </div>
       )}
       {placas.marcadas > placas.retenidas && (

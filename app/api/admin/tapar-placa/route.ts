@@ -54,6 +54,12 @@ type RegistroFoto = {
   placa_manual: number;
   placa_manual_usuario_id: number | null;
   placa_manual_at: string;
+  /** Retención de placa DIFERIDA por el reproceso en lote: hay que revisar la foto, pero el
+   *  vehículo NO se sacó de la vitrina (ver `retencion: 'diferir'` en
+   *  app/api/admin/reprocesar-placas). Aquí se trata igual que una retención normal: es la
+   *  misma cola de trabajo y se resuelve con la misma herramienta. */
+  placa_revision_pendiente: number;
+  placa_revision_motivo: string;
 };
 
 const SELECT_VEHICULO =
@@ -61,7 +67,8 @@ const SELECT_VEHICULO =
 
 const SELECT_REGISTRO = `
   SELECT url, contenido_inapropiado, motivo, placa_origen_url, placa_manual,
-         placa_manual_usuario_id, placa_manual_at
+         placa_manual_usuario_id, placa_manual_at,
+         placa_revision_pendiente, placa_revision_motivo
     FROM fotos_moderacion WHERE url_normalizada = ?`;
 
 function parseFotos(json: string): string[] {
@@ -151,15 +158,25 @@ export async function GET(req: NextRequest) {
       // persona no podría ver la placa que tiene que marcar).
       origen_url: reg?.placa_origen_url || f.url,
       // `false` también cuando no hay registro (fotos anteriores al modelo allow-list de
-      // lib/moderacion.ts): que no esté marcada no significa que se haya revisado.
-      marcada: !!reg?.contenido_inapropiado,
+      // lib/moderacion.ts): que no esté marcada no significa que se haya revisado. La
+      // retención diferida entra acá también para que `marcadas >= retenidas` siga siendo
+      // cierto en el panel (que pinta "marcadas - retenidas" como fotos marcadas por
+      // contenido).
+      marcada: !!reg?.contenido_inapropiado || !!reg?.placa_revision_pendiente,
       // RETENIDA POR PLACA: el detector automático se rindió en esta foto y la dejó marcada
       // para que un humano la mire (ver `revisionManual` en lib/blur-placas.ts y el camino
       // fail-closed de app/api/upload/route.ts). Es exactamente el caso que esta herramienta
       // existe para resolver, así que se distingue de una marca por contenido inapropiado
       // —que cae en la MISMA columna `contenido_inapropiado`— leyendo el prefijo del motivo.
-      retenida_placa: !!reg?.contenido_inapropiado && esRetencionPorPlaca(reg?.motivo),
-      motivo: reg?.motivo || '',
+      // La retención DIFERIDA (reproceso en lote con `retencion:'diferir'`) cuenta igual:
+      // es exactamente el mismo trabajo pendiente, con la única diferencia de que el
+      // vehículo sigue en la vitrina mientras nadie la mire. Si no apareciera acá sería una
+      // cola invisible, que es justo lo que ese modo NO puede permitirse.
+      retenida_placa:
+        (!!reg?.contenido_inapropiado && esRetencionPorPlaca(reg?.motivo)) || !!reg?.placa_revision_pendiente,
+      /** true solo para la retención diferida: la foto hay que revisarla pero el vehículo sigue publicado. */
+      revision_pendiente: !!reg?.placa_revision_pendiente,
+      motivo: reg?.motivo || reg?.placa_revision_motivo || '',
       sin_registro: !reg,
       tapada_a_mano: !!reg?.placa_manual,
       tapada_a_mano_por: manualPor,
@@ -311,18 +328,26 @@ export async function POST(req: NextRequest) {
       // contenido" y "se alcanzó el límite de detección" tienen sus propios motivos (ver
       // app/api/upload/route.ts) y significan que la moderación NUNCA corrió sobre esta foto.
       // Esas se mantienen marcadas: siguen siendo fail-closed.
-      const eraRetencionPlaca = !!registro?.contenido_inapropiado && esRetencionPorPlaca(registro?.motivo);
+      //
+      // La retención DIFERIDA (`placa_revision_pendiente`, que pone el reproceso en lote
+      // cuando se le pide no tumbar la vitrina) se levanta por el mismo motivo y en el
+      // mismo acto: la revisión que estaba pendiente acaba de hacerse a mano.
+      const eraRetencionPlaca =
+        (!!registro?.contenido_inapropiado && esRetencionPorPlaca(registro?.motivo))
+        || !!registro?.placa_revision_pendiente;
+      const eraMarcaContenido = !!registro?.contenido_inapropiado && !esRetencionPorPlaca(registro?.motivo);
       registrarFotoModeracion(
         db,
         nuevaUrl,
         vehiculo.propietario_id,
-        eraRetencionPlaca ? false : !!registro?.contenido_inapropiado,
-        eraRetencionPlaca ? '' : (registro?.motivo || ''),
+        eraMarcaContenido,
+        eraMarcaContenido ? (registro?.motivo || '') : '',
       );
       db.prepare(
         `UPDATE fotos_moderacion
             SET placa_origen_url = ?, placa_manual = 1, placa_manual_usuario_id = ?,
-                placa_manual_at = datetime('now', 'localtime'), placa_manual_zonas = ?
+                placa_manual_at = datetime('now', 'localtime'), placa_manual_zonas = ?,
+                placa_revision_pendiente = 0, placa_revision_motivo = ''
           WHERE url_normalizada = ?`,
       ).run(urlOrigen, user.id, JSON.stringify(zonasFinales), normalizarUrlFoto(nuevaUrl));
 
