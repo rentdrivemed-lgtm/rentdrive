@@ -151,6 +151,15 @@ export default function PolizaVehiculoAdmin({ vehiculoId, documentos, titulo, on
             <input type="date" value={vence} onChange={e => setVence(e.target.value)}
               className="w-full border border-border rounded-lg px-2 py-1.5 text-xs text-ink bg-surface-2 focus:outline-none focus:ring-1 focus:ring-accent/40" />
           </div>
+          {/* Un botón apagado sin explicación es un callejón sin salida: el usuario no
+              sabe si falta un campo, si algo falló o si la pantalla está rota. */}
+          {(!url || !vence) && (
+            <p className="text-[11px] text-warning">
+              {!url && !vence ? 'Falta subir la carátula y poner la fecha de vencimiento.'
+                : !url ? 'Falta subir la carátula de la póliza.'
+                : 'Falta la fecha de vencimiento de la póliza.'}
+            </p>
+          )}
           <div className="flex gap-1.5 flex-wrap">
             <button type="button" disabled={guardando || !url || !vence}
               onClick={() => void enviar({ poliza: { url, vence } })}

@@ -32,6 +32,11 @@ export default function DocUpload({ label, value, onChange, required, soloImagen
   const [subiendo, setSubiendo] = useState(false);
   const [error, setError] = useState('');
   const [recorteUrl, setRecorteUrl] = useState<string | null>(null);
+  // Si la vista previa no se puede pintar (un PDF que el navegador no dibuja, un
+  // archivo que el CDN no entrega, un formato que esta máquina no soporta) NO se deja
+  // el icono de imagen rota: se cae a la ficha de archivo, que dice el nombre y sigue
+  // siendo válida para guardar. El cuadro roto no informa de nada y parece un fallo.
+  const [previaFallo, setPreviaFallo] = useState(false);
 
   const subirArchivo = async (file: File | Blob, nombreArchivo: string) => {
     setError('');
@@ -49,6 +54,7 @@ export default function DocUpload({ label, value, onChange, required, soloImagen
       const res = await fetch('/api/upload/documento', { method: 'POST', body: fd });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setError(data.error || 'Error al subir'); return; }
+      setPreviaFallo(false);
       onChange(data.url);
     } catch {
       setError('Sin conexión — revisa tu internet e intenta de nuevo.');
@@ -126,9 +132,21 @@ export default function DocUpload({ label, value, onChange, required, soloImagen
               <span className="text-[10px] text-success font-medium text-center break-all px-1">{fileName}</span>
               <span className="absolute top-1.5 right-1.5 bg-success/100 text-white text-[10px] rounded-full px-1.5 py-0.5 font-bold">✓</span>
             </div>
+          ) : previaFallo ? (
+            <div className="flex flex-col items-center gap-1 py-3 px-2 w-full">
+              <span className="text-2xl">📄</span>
+              <span className="text-[10px] text-success font-medium text-center break-all px-1">{fileName}</span>
+              <span className="text-[9px] text-ink/40">Archivo cargado (sin vista previa)</span>
+              <span className="absolute top-1.5 right-1.5 bg-success/100 text-white text-[10px] rounded-full px-1.5 py-0.5 font-bold">✓</span>
+            </div>
           ) : (
             <>
-              <img src={value} alt={label} className="w-full h-full object-cover rounded-xl" style={{ maxHeight: 80 }} />
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={value} alt={label}
+                onError={() => setPreviaFallo(true)}
+                className="w-full h-full object-cover rounded-xl" style={{ maxHeight: 80 }}
+              />
               <span className="absolute top-1.5 right-1.5 bg-success/100 text-white text-[10px] rounded-full px-1.5 py-0.5 font-bold">✓</span>
             </>
           )
