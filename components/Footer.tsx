@@ -1,13 +1,26 @@
 'use client';
 import Link from 'next/link';
 import { LogoWordmark } from '@/components/Logo';
+import { IconPin } from '@/components/Icons';
 import { useLang } from '@/contexts/LanguageContext';
+import {
+  CONTACTO_BARRIO,
+  CONTACTO_CIUDAD,
+  CONTACTO_DIRECCION,
+  CONTACTO_GOOGLE_MAPS_URL,
+  CONTACTO_INSTAGRAM_URL,
+  CONTACTO_INSTAGRAM_USUARIO,
+  CONTACTO_TEL_HREF,
+  CONTACTO_TELEFONO_VISIBLE,
+  CONTACTO_WAZE_URL,
+  CONTACTO_WHATSAPP_URL,
+} from '@/lib/contacto';
 
 export default function Footer() {
   const { t } = useLang();
   return (
     <footer className="bg-brand text-white/60 mt-auto">
-      <div className="max-w-7xl mx-auto px-6 py-10 grid grid-cols-1 sm:grid-cols-3 gap-8 text-center sm:text-left">
+      <div className="max-w-7xl mx-auto px-6 py-10 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8 text-center sm:text-left">
         {/* Brand */}
         <div className="flex flex-col items-center sm:items-start gap-2.5">
           <LogoWordmark height={42} />
@@ -16,7 +29,7 @@ export default function Footer() {
 
         {/* Links */}
         <div>
-          <p className="text-white/80 font-semibold text-sm mb-3">Plataforma</p>
+          <p className="text-white/80 font-semibold text-sm mb-3">{t.footer.platform}</p>
           <div className="space-y-1.5 text-sm">
             <Link href="/para-usuarios" className="block hover:text-white transition">{t.nav.rent}</Link>
             <Link href="/propietarios-info" className="block hover:text-white transition">{t.nav.owners}</Link>
@@ -24,9 +37,48 @@ export default function Footer() {
           </div>
         </div>
 
+        {/* Contacto */}
+        <div>
+          <p className="text-white/80 font-semibold text-sm mb-3">{t.footer.contact}</p>
+          {/* <address> es el elemento semántico para los datos de contacto del
+              negocio: ayuda a lectores de pantalla y a los buscadores. */}
+          <address className="not-italic text-sm space-y-3">
+            <div className="flex gap-2 justify-center sm:justify-start">
+              {/* En el celular la columna va centrada y el pin a un costado de un
+                  bloque de 3 líneas se ve descolgado: solo aparece de sm en adelante,
+                  donde el texto se alinea a la izquierda y el icono sí ancla. */}
+              <IconPin size={15} className="hidden sm:block mt-0.5 shrink-0 text-white/35" />
+              <div>
+                <span className="block text-white/40 text-xs">{t.footer.point}</span>
+                <span className="block text-white/75">{CONTACTO_DIRECCION}</span>
+                <span className="block text-white/40 text-xs">{CONTACTO_BARRIO}, {CONTACTO_CIUDAD}</span>
+                <span className="block text-white/40 text-xs mt-1.5">
+                  {t.footer.directions}:{' '}
+                  <a href={CONTACTO_GOOGLE_MAPS_URL} target="_blank" rel="noopener noreferrer"
+                    className="text-white/70 hover:text-white underline underline-offset-2 transition">Google Maps</a>
+                  {' · '}
+                  <a href={CONTACTO_WAZE_URL} target="_blank" rel="noopener noreferrer"
+                    className="text-white/70 hover:text-white underline underline-offset-2 transition">Waze</a>
+                </span>
+              </div>
+            </div>
+            {/* `block py-0.5`: en el celular cada enlace ocupa el ancho de la
+                columna y algo más de alto, para que se pueda tocar sin apuntar. */}
+            <div className="space-y-1">
+              <a href={CONTACTO_TEL_HREF} aria-label={`${t.footer.call} ${CONTACTO_TELEFONO_VISIBLE}`}
+                className="block py-0.5 hover:text-white transition">{CONTACTO_TELEFONO_VISIBLE}</a>
+              <a href={CONTACTO_WHATSAPP_URL} target="_blank" rel="noopener noreferrer"
+                className="block py-0.5 hover:text-white transition">{t.footer.whatsapp}</a>
+              <a href={CONTACTO_INSTAGRAM_URL} target="_blank" rel="noopener noreferrer"
+                aria-label={`${t.footer.instagram} (@${CONTACTO_INSTAGRAM_USUARIO})`}
+                className="block py-0.5 hover:text-white transition">@{CONTACTO_INSTAGRAM_USUARIO}</a>
+            </div>
+          </address>
+        </div>
+
         {/* Legal + payments */}
         <div>
-          <p className="text-white/80 font-semibold text-sm mb-3">Pagos aceptados</p>
+          <p className="text-white/80 font-semibold text-sm mb-3">{t.footer.payments}</p>
           <div className="flex gap-2 mb-4 justify-center sm:justify-start">
             {/* Visa */}
             <div className="bg-surface-2 rounded-lg px-3 py-1.5 flex items-center justify-center" style={{minWidth: 54}}>

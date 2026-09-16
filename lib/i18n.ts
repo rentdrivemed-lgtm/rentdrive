@@ -10,6 +10,16 @@ export const es = {
   footer: {
     tagline: 'Alquiler de carros entre particulares',
     copy: `© ${new Date().getFullYear()} DrivePass. Todos los derechos reservados.`,
+    // Contacto: SOLO las etiquetas se traducen. La dirección, el celular y el
+    // usuario de Instagram son datos duros y viven en `lib/contacto.ts`.
+    platform: 'Plataforma',
+    payments: 'Pagos aceptados',
+    contact: 'Contacto',
+    point: 'Punto de atención',
+    directions: 'Cómo llegar',
+    call: 'Llamar',
+    whatsapp: 'Escríbenos por WhatsApp',
+    instagram: 'Síguenos en Instagram',
   },
 };
 
@@ -27,5 +37,13 @@ export const en: Translations = {
   footer: {
     tagline: 'Peer-to-peer car rental',
     copy: `© ${new Date().getFullYear()} DrivePass. All rights reserved.`,
+    platform: 'Platform',
+    payments: 'Accepted payments',
+    contact: 'Contact',
+    point: 'Service point',
+    directions: 'Get directions',
+    call: 'Call',
+    whatsapp: 'Message us on WhatsApp',
+    instagram: 'Follow us on Instagram',
   },
 };

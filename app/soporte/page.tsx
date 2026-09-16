@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { IconArrowL, IconSend } from '@/components/Icons';
+import { CONTACTO_TELEFONO_VISIBLE, CONTACTO_WHATSAPP_URL } from '@/lib/contacto';
 
 type Mensaje = { id: number; remitente_tipo: 'solicitante' | 'admin' | 'ia'; contenido: string; created_at: string };
 type Conversacion = { id: number; estado: string };
@@ -110,9 +111,19 @@ export default function SoportePage() {
       {/* Mensajes */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-2 bg-surface">
         {mensajes.length === 0 && (
-          <p className="text-center text-ink/40 text-sm mt-10">
-            Escríbenos tu duda — te respondemos al instante.
-          </p>
+          <div className="text-center mt-10 space-y-2">
+            <p className="text-ink/40 text-sm">
+              Escríbenos tu duda — te respondemos al instante.
+            </p>
+            {/* El chat ocupa toda la pantalla, así que el pie de página con los
+                datos de contacto queda debajo del pliegue y nadie lo ve. Aquí va
+                la salida a WhatsApp, que es por donde escribe la mayoría. */}
+            <p className="text-ink/40 text-xs">
+              ¿Prefieres WhatsApp?{' '}
+              <a href={CONTACTO_WHATSAPP_URL} target="_blank" rel="noopener noreferrer"
+                className="text-accent font-semibold hover:underline">{CONTACTO_TELEFONO_VISIBLE}</a>
+            </p>
+          </div>
         )}
         {mensajes.map(m => {
           const esPropio = m.remitente_tipo === 'solicitante';
