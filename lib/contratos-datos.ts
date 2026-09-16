@@ -10,12 +10,17 @@
 // lib/contratos.ts (server-only).
 //
 // ── Sobre los datos que faltan ──────────────────────────────────────────────
-// Hoy la base NO tiene varios campos que los documentos exigen (número de motor,
-// chasis, color, categoría y vigencia de la licencia, datos de la póliza…). En vez
-// de inventarlos, el mapeo los deja en `PENDIENTE` y `CAMPOS_CONTRATO` declara
-// cuáles son, de dónde deberían salir y en qué documentos aparecen. De ahí sale
-// `faltantesDe()`, que es lo que la fase 2 debe usar para NO dejar firmar un
+// Un dato que no se sabe NO se inventa: el mapeo lo deja en `PENDIENTE` y
+// `CAMPOS_CONTRATO` declara cuál es, de dónde sale y en qué documentos aparece. De
+// ahí sale `faltantesDe()`, que es lo que la fase 2 usa para NO dejar firmar un
 // documento incompleto.
+//
+// Hasta sep-2026 varios de esos campos no tenían dónde vivir en la base (número de
+// motor, chasis, color, valor asegurado, categoría y vigencia de la licencia, los
+// datos de la carátula de la póliza): se imprimían en blanco y no había forma de
+// llenarlos. Ya la tienen —columnas propias en `vehiculos` y `usuarios`, más el
+// parche por operación de `contratos.overrides_json`— y se llenan desde la pantalla
+// de datos del contrato (lib/contratos-campos.ts + lib/contratos-edicion.ts).
 
 import type { ConfigIva, Derivados } from './contratos-calculo';
 
@@ -210,14 +215,31 @@ export type DefCampo = {
   etiqueta: string;
   /** Columna/JSON de donde sale, o la razón por la que no sale de ningún lado. */
   fuente: string;
-  /** false = HOY NO EXISTE EN LA BASE. Este es el inventario que pidió el dueño. */
+  /**
+   * ¿Su ausencia BLOQUEA la firma? (ver lib/contratos-firma.ts → faltantesQueBloquean).
+   *
+   * ⚠️ El nombre viene de cuando las dos cosas eran la misma: `true` significaba «el
+   * dato tiene dónde vivir en la base y está vacío, así que firmar con ese hueco es
+   * descuido» y `false`, «la plataforma no guarda ese dato todavía».
+   *
+   * Desde sep-2026 TODOS los campos de este inventario tienen ya dónde vivir: la
+   * pantalla de datos del contrato los llena y los guarda (lib/contratos-campos.ts,
+   * lib/db.ts → crearColumnasDatosContrato). Lo que sigue distinguiendo la bandera es
+   * si el hueco IMPIDE FIRMAR o si sale en blanco en el documento y se le muestra al
+   * firmante antes de que ponga el trazo. Los que quedan en `false` —los datos de la
+   * carátula de la póliza, el valor asegurado, el color/motor/chasis— se dejaron sin
+   * bloquear a propósito: el texto los imprime como renglones rotulados en blanco (así
+   * está redactada el acta) y volverlos bloqueantes dejaría sin poder firmar cualquier
+   * operación en la que no se tenga la carátula a mano en el mostrador. Convertirlos en
+   * exigibles es una decisión del dueño y se hace cambiando esta bandera, nada más.
+   */
   enBD: boolean;
   documentos: TipoDocumento[];
 };
 
 /**
- * Inventario explícito. `enBD: false` = campo que hay que agregar a la base (o a
- * la carátula de la póliza) para poder firmar el documento completo.
+ * Inventario explícito de los datos que llenan los documentos: de dónde sale cada
+ * uno y si su ausencia impide firmar.
  */
 export const CAMPOS_CONTRATO: readonly DefCampo[] = [
   // ── Propietario (EL EMPRESARIO / EL ARRENDADOR / EL ACREEDOR) ────────────
@@ -233,28 +255,28 @@ export const CAMPOS_CONTRATO: readonly DefCampo[] = [
   { ruta: 'cliente.correo', etiqueta: 'Correo del arrendatario', fuente: 'usuarios.correo', enBD: true, documentos: ['arrendamiento', 'otrosi-arrendamiento', 'acta-entrega'] },
   { ruta: 'cliente.celular', etiqueta: 'Teléfono del arrendatario', fuente: 'usuarios.celular', enBD: true, documentos: ['acta-entrega'] },
   { ruta: 'cliente.licencia.numero', etiqueta: 'Número de licencia de conducción', fuente: 'usuarios.numero_licencia', enBD: true, documentos: ['acta-entrega'] },
-  { ruta: 'cliente.licencia.categoria', etiqueta: 'Categoría de la licencia', fuente: 'NO EXISTE — la exige el acta y la cláusula tercera del arrendamiento; hay que agregar usuarios.licencia_categoria', enBD: false, documentos: ['acta-entrega'] },
-  { ruta: 'cliente.licencia.vigenciaHasta', etiqueta: 'Vigencia de la licencia', fuente: 'NO EXISTE — hay que agregar usuarios.licencia_vence (la IA de documentos ya la lee del carné)', enBD: false, documentos: ['acta-entrega'] },
+  { ruta: 'cliente.licencia.categoria', etiqueta: 'Categoría de la licencia', fuente: 'usuarios.licencia_categoria (se llena desde la pantalla de datos del contrato)', enBD: false, documentos: ['acta-entrega'] },
+  { ruta: 'cliente.licencia.vigenciaHasta', etiqueta: 'Vigencia de la licencia', fuente: 'usuarios.licencia_vence (se llena desde la pantalla de datos del contrato; la IA de documentos ya la lee del carné)', enBD: false, documentos: ['acta-entrega'] },
 
   // ── Vehículo ─────────────────────────────────────────────────────────────
   { ruta: 'vehiculo.placa', etiqueta: 'Placa', fuente: 'vehiculos.placa', enBD: true, documentos: ['agencia', 'otrosi-agencia', 'arrendamiento', 'otrosi-arrendamiento', 'acta-entrega'] },
   { ruta: 'vehiculo.marca', etiqueta: 'Marca', fuente: 'vehiculos.marca', enBD: true, documentos: ['otrosi-agencia', 'otrosi-arrendamiento', 'acta-entrega'] },
   { ruta: 'vehiculo.linea', etiqueta: 'Línea', fuente: 'vehiculos.modelo (la columna «modelo» guarda en realidad la LÍNEA: Corolla, CX-5…)', enBD: true, documentos: ['otrosi-agencia', 'otrosi-arrendamiento', 'acta-entrega'] },
-  { ruta: 'vehiculo.color', etiqueta: 'Color', fuente: 'NO EXISTE — hay que agregar vehiculos.color (la tarjeta de propiedad lo trae y el OCR ya la lee)', enBD: false, documentos: ['acta-entrega'] },
-  { ruta: 'vehiculo.motor', etiqueta: 'Número de motor', fuente: 'NO EXISTE — hay que agregar vehiculos.numero_motor', enBD: false, documentos: ['acta-entrega'] },
-  { ruta: 'vehiculo.chasis', etiqueta: 'Número de chasis', fuente: 'NO EXISTE — hay que agregar vehiculos.numero_chasis', enBD: false, documentos: ['acta-entrega'] },
-  { ruta: 'vehiculo.valorAsegurado', etiqueta: 'Valor asegurado', fuente: 'NO EXISTE — `vehiculos.valor_comercial` NO sirve: el contrato cita el valor ASEGURADO de la carátula, que es otro número', enBD: false, documentos: ['agencia'] },
+  { ruta: 'vehiculo.color', etiqueta: 'Color', fuente: 'vehiculos.color (se llena desde la pantalla de datos del contrato; la tarjeta de propiedad lo trae y el OCR lo propone)', enBD: false, documentos: ['acta-entrega'] },
+  { ruta: 'vehiculo.motor', etiqueta: 'Número de motor', fuente: 'vehiculos.numero_motor (se llena desde la pantalla de datos del contrato)', enBD: false, documentos: ['acta-entrega'] },
+  { ruta: 'vehiculo.chasis', etiqueta: 'Número de chasis', fuente: 'vehiculos.numero_chasis (se llena desde la pantalla de datos del contrato)', enBD: false, documentos: ['acta-entrega'] },
+  { ruta: 'vehiculo.valorAsegurado', etiqueta: 'Valor asegurado', fuente: 'vehiculos.valor_asegurado (se llena desde la pantalla de datos del contrato). OJO: `valor_comercial` NO sirve, el contrato cita el valor ASEGURADO de la carátula, que es otro número', enBD: false, documentos: ['agencia'] },
 
   // ── Póliza ───────────────────────────────────────────────────────────────
-  { ruta: 'poliza.numero', etiqueta: 'Número de la póliza', fuente: 'NO EXISTE — `vehiculos.documentos.poliza` solo guarda {url, vence}', enBD: false, documentos: ['agencia', 'otrosi-agencia', 'arrendamiento', 'otrosi-arrendamiento', 'acta-entrega'] },
-  { ruta: 'poliza.aseguradora', etiqueta: 'Aseguradora', fuente: 'NO EXISTE — ídem', enBD: false, documentos: ['agencia', 'otrosi-agencia', 'arrendamiento', 'otrosi-arrendamiento', 'acta-entrega'] },
-  { ruta: 'poliza.aseguradoraNit', etiqueta: 'NIT de la aseguradora', fuente: 'NO EXISTE — ídem', enBD: false, documentos: ['agencia', 'otrosi-agencia', 'arrendamiento', 'otrosi-arrendamiento'] },
-  { ruta: 'poliza.expedidaEl', etiqueta: 'Fecha de expedición de la póliza', fuente: 'NO EXISTE — ídem', enBD: false, documentos: ['agencia'] },
-  { ruta: 'poliza.vigenciaDesde', etiqueta: 'Vigencia desde', fuente: 'NO EXISTE — ídem', enBD: false, documentos: ['agencia', 'otrosi-agencia', 'arrendamiento', 'otrosi-arrendamiento'] },
-  { ruta: 'poliza.vigenciaHasta', etiqueta: 'Vigencia hasta', fuente: 'vehiculos.documentos.poliza.vence (ES EL ÚNICO DATO DE LA PÓLIZA QUE SÍ EXISTE)', enBD: true, documentos: ['agencia', 'otrosi-agencia', 'arrendamiento', 'otrosi-arrendamiento'] },
-  { ruta: 'poliza.codigoClausulado', etiqueta: 'Código del clausulado', fuente: 'NO EXISTE — ídem', enBD: false, documentos: ['agencia'] },
-  { ruta: 'poliza.notaTecnica', etiqueta: 'Nota técnica', fuente: 'NO EXISTE — ídem', enBD: false, documentos: ['agencia'] },
-  { ruta: 'poliza.deducible', etiqueta: 'Deducible', fuente: 'NO EXISTE — ídem', enBD: false, documentos: ['acta-entrega'] },
+  { ruta: 'poliza.numero', etiqueta: 'Número de la póliza', fuente: 'vehiculos.poliza_numero (se llena desde la pantalla de datos del contrato; `documentos.poliza` solo guarda {url, vence})', enBD: false, documentos: ['agencia', 'otrosi-agencia', 'arrendamiento', 'otrosi-arrendamiento', 'acta-entrega'] },
+  { ruta: 'poliza.aseguradora', etiqueta: 'Aseguradora', fuente: 'vehiculos.poliza_aseguradora (ídem)', enBD: false, documentos: ['agencia', 'otrosi-agencia', 'arrendamiento', 'otrosi-arrendamiento', 'acta-entrega'] },
+  { ruta: 'poliza.aseguradoraNit', etiqueta: 'NIT de la aseguradora', fuente: 'vehiculos.poliza_aseguradora_nit (ídem)', enBD: false, documentos: ['agencia', 'otrosi-agencia', 'arrendamiento', 'otrosi-arrendamiento'] },
+  { ruta: 'poliza.expedidaEl', etiqueta: 'Fecha de expedición de la póliza', fuente: 'vehiculos.poliza_expedida_el (ídem)', enBD: false, documentos: ['agencia'] },
+  { ruta: 'poliza.vigenciaDesde', etiqueta: 'Vigencia desde', fuente: 'vehiculos.poliza_vigencia_desde (ídem)', enBD: false, documentos: ['agencia', 'otrosi-agencia', 'arrendamiento', 'otrosi-arrendamiento'] },
+  { ruta: 'poliza.vigenciaHasta', etiqueta: 'Vigencia hasta', fuente: 'vehiculos.poliza_vigencia_hasta y, si está vacía, vehiculos.documentos.poliza.vence (la fecha que se carga con la carátula)', enBD: true, documentos: ['agencia', 'otrosi-agencia', 'arrendamiento', 'otrosi-arrendamiento'] },
+  { ruta: 'poliza.codigoClausulado', etiqueta: 'Código del clausulado', fuente: 'vehiculos.poliza_codigo_clausulado (ídem)', enBD: false, documentos: ['agencia'] },
+  { ruta: 'poliza.notaTecnica', etiqueta: 'Nota técnica', fuente: 'vehiculos.poliza_nota_tecnica (ídem)', enBD: false, documentos: ['agencia'] },
+  { ruta: 'poliza.deducible', etiqueta: 'Deducible', fuente: 'vehiculos.poliza_deducible (ídem)', enBD: false, documentos: ['acta-entrega'] },
 
   // ── Operación ────────────────────────────────────────────────────────────
   { ruta: 'operacion.entrega.fecha', etiqueta: 'Fecha de entrega', fuente: 'reservas.fecha_inicio', enBD: true, documentos: ['otrosi-agencia', 'otrosi-arrendamiento', 'acta-entrega'] },
@@ -263,11 +285,21 @@ export const CAMPOS_CONTRATO: readonly DefCampo[] = [
   { ruta: 'operacion.restitucion.fecha', etiqueta: 'Fecha de restitución', fuente: 'reservas.fecha_fin', enBD: true, documentos: ['otrosi-agencia', 'otrosi-arrendamiento', 'acta-entrega'] },
   { ruta: 'operacion.restitucion.hora', etiqueta: 'Hora de restitución', fuente: 'reservas.entrega.hora', enBD: true, documentos: ['otrosi-arrendamiento', 'acta-entrega'] },
   { ruta: 'operacion.restitucion.lugar', etiqueta: 'Lugar de restitución', fuente: 'reservas.entrega', enBD: true, documentos: ['otrosi-arrendamiento', 'acta-entrega'] },
-  { ruta: 'operacion.costoKmExceso', etiqueta: 'Costo por kilómetro en exceso', fuente: 'NO EXISTE — hoy el kilometraje es ilimitado por política, así que el campo del acta va en blanco', enBD: false, documentos: ['acta-entrega'] },
+  { ruta: 'operacion.costoKmExceso', etiqueta: 'Costo por kilómetro en exceso', fuente: 'contratos.overrides_json (costoKmExceso). Por política el kilometraje es ilimitado, así que por defecto dice «no aplica»', enBD: false, documentos: ['acta-entrega'] },
 ] as const;
 
 /** Los campos que HOY no tienen dónde vivir en la base. Inventario para el dueño. */
 export const CAMPOS_SIN_ORIGEN: readonly DefCampo[] = CAMPOS_CONTRATO.filter(c => !c.enBD);
+
+/**
+ * Valor que hay en una ruta del snapshot ('vehiculo.motor', 'derivados.canonDiario').
+ * Se exporta porque la pantalla de datos del contrato necesita mostrar, campo por
+ * campo, lo que HOY dice el documento — y tiene que leerlo del mismo sitio del que
+ * lo lee `faltantesDe()`, o las dos cosas se desincronizan.
+ */
+export function valorEnRuta(d: DatosContrato, ruta: string): unknown {
+  return leerRuta(d, ruta);
+}
 
 function leerRuta(obj: unknown, ruta: string): unknown {
   return ruta.split('.').reduce<unknown>((acc, parte) => {

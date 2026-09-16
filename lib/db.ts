@@ -995,6 +995,10 @@ function initDb(db: Database.Database) {
   // para no chocar con otras migraciones en curso sobre este mismo archivo.
   // Reflejo en Postgres: supabase/schema.sql, bloque «contratos digitales».
   crearTablasContratos(db);
+  // Los DATOS que rellenan los contratos y que hasta ahora no tenían dónde vivir
+  // (motor, chasis, color, carátula de la póliza, categoría y vigencia de la
+  // licencia) + el parche por operación. Ver lib/contratos-campos.ts.
+  crearColumnasDatosContrato(db);
 
   migrarCotizacionesReservaOpcional(db);
   migrarUsuariosEstadoArchivada(db);
@@ -1547,4 +1551,67 @@ function crearTablasContratos(db: Database.Database) {
         AND EXISTS (SELECT 1 FROM contrato_firmas f WHERE f.contrato_id = contratos.id AND f.firmada_en <> '')
     `);
   } catch { /* la tabla de firmas todavía no existe */ }
+}
+
+// ── Los datos que rellenan los contratos (edición de datos, sep-2026) ───────
+//
+// Hasta ahora `lib/contratos-datos.ts` declaraba un inventario de campos que los
+// seis documentos exigen y que NO tenían dónde vivir en la base: el número de
+// motor, el chasis, el color, el valor asegurado, los datos de la carátula de la
+// póliza y la categoría y vigencia de la licencia. Se imprimían como espacios en
+// blanco y no había forma de llenarlos. Estas columnas son esa casa.
+//
+// El reparto sigue el criterio del dueño y está explicado en lib/contratos-campos.ts:
+//   · lo que es del VEHÍCULO  → `vehiculos` (sirve para todos sus contratos);
+//   · lo que es de la PERSONA → `usuarios`  (ídem);
+//   · lo que es de ESTA operación → `contratos.overrides_json`, un parche que se
+//     aplica sobre el snapshot al regenerar el texto. No es texto: son datos.
+//
+// Va al FINAL del archivo, en su propia función, para no chocar con las otras
+// ramas que están tocando las columnas de `vehiculos` en paralelo. El patrón es el
+// de siempre (ALTER dentro de try/catch: si la columna ya existe, no pasa nada), lo
+// cual además hace que coincidir con otra rama en `vehiculos.color` sea inofensivo.
+//
+// Reflejo en Postgres: supabase/schema.sql, bloque «datos editables de contratos».
+function crearColumnasDatosContrato(db: Database.Database) {
+  const columnas: Array<[tabla: string, definicion: string]> = [
+    // Ficha del vehículo: la matrícula.
+    ['vehiculos', "color TEXT DEFAULT ''"],
+    ['vehiculos', "numero_motor TEXT DEFAULT ''"],
+    ['vehiculos', "numero_chasis TEXT DEFAULT ''"],
+    // Valor ASEGURADO de la carátula. Es OTRO número distinto de `valor_comercial`
+    // (que es el precio del carro en el mercado y alimenta la tarifa).
+    ['vehiculos', 'valor_asegurado REAL DEFAULT 0'],
+    // Carátula de la póliza. El archivo y su fecha de vencimiento siguen viviendo en
+    // `vehiculos.documentos.poliza` (lib/poliza-vehiculo.ts, que sigue siendo la
+    // única fuente de verdad de ESE archivo); lo que va aquí son los datos que el
+    // contrato cita dentro de sus cláusulas y que la carátula no guardaba.
+    ['vehiculos', "poliza_numero TEXT DEFAULT ''"],
+    ['vehiculos', "poliza_aseguradora TEXT DEFAULT ''"],
+    ['vehiculos', "poliza_aseguradora_nit TEXT DEFAULT ''"],
+    ['vehiculos', "poliza_expedida_el TEXT DEFAULT ''"],
+    ['vehiculos', "poliza_vigencia_desde TEXT DEFAULT ''"],
+    // Si está vacía se usa `documentos.poliza.vence` (ver lib/contratos.ts).
+    ['vehiculos', "poliza_vigencia_hasta TEXT DEFAULT ''"],
+    ['vehiculos', "poliza_codigo_clausulado TEXT DEFAULT ''"],
+    ['vehiculos', "poliza_nota_tecnica TEXT DEFAULT ''"],
+    ['vehiculos', "poliza_deducible TEXT DEFAULT ''"],
+    // Ficha de la persona: la licencia de conducción. El número ya existía
+    // (`numero_licencia`); faltaban la categoría y la vigencia, que el acta exige.
+    ['usuarios', "licencia_categoria TEXT DEFAULT ''"],
+    ['usuarios', "licencia_vence TEXT DEFAULT ''"],
+    // Parche de ESTA operación (canon, depósito, kilometraje, horas y lugares,
+    // conductores autorizados, fecha de suscripción) + rastro del último cambio.
+    ['contratos', "overrides_json TEXT NOT NULL DEFAULT '{}'"],
+    // Contador de ediciones de datos. Sube +1 cada vez que se regenera el texto con
+    // datos nuevos y viaja hasta el formulario de firma: si alguien editó los datos
+    // mientras el firmante leía el documento, la firma se rechaza y hay que releerlo.
+    ['contratos', 'datos_revision INTEGER NOT NULL DEFAULT 0'],
+    ['contratos', "datos_editados_en TEXT DEFAULT ''"],
+    ['contratos', 'datos_editados_por INTEGER REFERENCES usuarios(id)'],
+    ['contratos', "datos_editados_por_nombre TEXT DEFAULT ''"],
+  ];
+  for (const [tabla, definicion] of columnas) {
+    try { db.exec(`ALTER TABLE ${tabla} ADD COLUMN ${definicion}`); } catch { /* ya existe */ }
+  }
 }

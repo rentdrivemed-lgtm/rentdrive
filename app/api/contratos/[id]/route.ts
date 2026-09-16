@@ -12,6 +12,7 @@ import {
   tituloDocumento, verificarSelloFirma,
 } from '@/lib/contratos-firma';
 import { resumenPapel } from '@/lib/contratos-papel';
+import { motivoNoEditable } from '@/lib/contratos-edicion';
 
 export const dynamic = 'force-dynamic';
 
@@ -73,6 +74,11 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const faltantes = parsearFaltantes(contrato.faltantes_json);
   const bloqueantes = faltantesQueBloquean(faltantes);
 
+  // ¿Se pueden COMPLETAR los datos de este documento? Solo el equipo con el área de
+  // contratos, y solo mientras esté sin firmar y sin vía de firma elegida. Cuando no
+  // se puede, la pantalla tiene que poder decir POR QUÉ (lo dice `motivoNoEditable`).
+  const motivoNoEdita = motivoNoEditable(contrato, firmas.filter(f => !!f.firmada_en).length);
+
   return NextResponse.json({
     contrato: {
       id: contrato.id,
@@ -93,6 +99,12 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       // que poder decirlo con claridad — un contrato firmado a mano NO es lo mismo que
       // uno con firma electrónica verificada.
       via_firma: contrato.via_firma,
+      // Contador de ediciones de DATOS. Viaja hasta el formulario de firma: si alguien
+      // completa un dato mientras el firmante lee, el texto se regenera y la firma se
+      // rechaza hasta que lo relea (ver lib/contratos-firma.ts → firmarBloqueContrato).
+      datos_revision: Number(contrato.datos_revision) || 0,
+      datos_editados_en: contrato.datos_editados_en || '',
+      datos_editados_por_nombre: contrato.datos_editados_por_nombre || '',
     },
     // Ficha del ejemplar firmado a mano, cuando lo hay. Nunca el contenido del archivo:
     // eso se pide aparte, en GET /api/contratos/[id]/escaneo.
@@ -101,6 +113,12 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     // Los huecos se muestran de frente: los estructurales no impiden firmar, pero el
     // firmante tiene que saber qué espacios van en blanco antes de poner el trazo.
     faltantes: { bloqueantes, estructurales: faltantes.filter(f => !f.enBD) },
-    permisos: { gestionar: acceso.puedeGestionar, firmar_agente: acceso.puedeFirmarComoAgente, parte: acceso.parte },
+    permisos: {
+      gestionar: acceso.puedeGestionar,
+      firmar_agente: acceso.puedeFirmarComoAgente,
+      parte: acceso.parte,
+      editar_datos: acceso.puedeGestionar && motivoNoEdita === '',
+      motivo_no_editable: motivoNoEdita,
+    },
   });
 }
