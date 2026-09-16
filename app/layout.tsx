@@ -6,6 +6,15 @@ import Providers from "@/components/Providers";
 import ConditionalShell from "@/components/ConditionalShell";
 import SwRegistrar from "@/components/SwRegistrar";
 import Analytics from "@/components/Analytics";
+import {
+  CONTACTO_BARRIO,
+  CONTACTO_CIUDAD,
+  CONTACTO_DEPARTAMENTO,
+  CONTACTO_DIRECCION,
+  CONTACTO_GOOGLE_MAPS_URL,
+  CONTACTO_INSTAGRAM_URL,
+  CONTACTO_TELEFONO_E164,
+} from "@/lib/contacto";
 
 const BASE_URL = process.env.NEXT_PUBLIC_APP_URL || "https://www.drivepasscol.com";
 
@@ -83,9 +92,14 @@ export const viewport: Viewport = {
   viewportFit: "cover",
 };
 
+// Datos del negocio para buscadores. La dirección, el teléfono y las redes
+// salen de `lib/contacto.ts` —los mismos que muestra el pie de página—, para que
+// lo que Google indexa y lo que ve el cliente nunca se contradigan.
 const jsonLd = {
   "@context": "https://schema.org",
-  "@type": "LocalBusiness",
+  // AutoRental es el subtipo exacto (alquiler de vehículos) y hereda de
+  // LocalBusiness; se declaran los dos para no perder el que ya estaba indexado.
+  "@type": ["LocalBusiness", "AutoRental"],
   "@id": `${BASE_URL}/#business`,
   name: "DrivePass",
   alternateName: "DrivePass Medellín",
@@ -94,14 +108,20 @@ const jsonLd = {
   logo: `${BASE_URL}/brand/logo-mark.svg`,
   image: `${BASE_URL}/brand/og-image.jpg`,
   email: "hola@drivepass.com.co",
+  telephone: CONTACTO_TELEFONO_E164,
+  sameAs: [CONTACTO_INSTAGRAM_URL],
+  hasMap: CONTACTO_GOOGLE_MAPS_URL,
   address: {
     "@type": "PostalAddress",
-    streetAddress: "Medellín",
-    addressLocality: "Medellín",
-    addressRegion: "Antioquia",
+    streetAddress: `${CONTACTO_DIRECCION}, ${CONTACTO_BARRIO}`,
+    addressLocality: CONTACTO_CIUDAD,
+    addressRegion: CONTACTO_DEPARTAMENTO,
     postalCode: "050001",
     addressCountry: "CO",
   },
+  // Coordenada aproximada de Medellín, NO la puerta del punto de atención: del
+  // número exacto solo está confirmada la calle. Cuando el dueño mande el pin de
+  // Google Maps se actualiza aquí y en los enlaces de `lib/contacto.ts`.
   geo: { "@type": "GeoCoordinates", latitude: 6.2442, longitude: -75.5812 },
   areaServed: [
     { "@type": "City", name: "Medellín" },
