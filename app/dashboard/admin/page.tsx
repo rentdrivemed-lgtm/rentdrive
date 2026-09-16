@@ -16,6 +16,8 @@ import DocumentoVista from '@/components/DocumentoVista';
 import BotonPaqueteDocumentos from '@/components/BotonPaqueteDocumentos';
 import PolizaVehiculoAdmin from '@/components/PolizaVehiculoAdmin';
 import VisorFotos, { type FotoVisor } from '@/components/VisorFotos';
+import TaparPlacaManual from '@/components/TaparPlacaManual';
+import { FotoPlaca, AvisoPlacas, usePlacasVehiculo, vehiculoConFotoCambiada } from '@/components/TaparPlacaFotos';
 import {
   FiltroCampo, BotonOrdenLlegada, ResumenFiltros, CLASE_CONTROL_FILTRO,
 } from '@/components/FiltrosLista';
@@ -434,6 +436,8 @@ function DashboardAdminInner() {
   const [errorListas, setErrorListas] = useState<{ usuarios?: boolean; vehiculos?: boolean; reservas?: boolean }>({});
   const [precioEdit, setPrecioEdit] = useState<Record<number, string>>({});
   const [fotoModal, setFotoModal] = useState<{ v: Vehiculo } | null>(null);
+  const [placaEditor, setPlacaEditor] = useState<{ v: Vehiculo; url: string; origenUrl: string } | null>(null);
+  const [placaMsg, setPlacaMsg] = useState('');
   const [docModal, setDocModal] = useState<{ v: Vehiculo } | null>(null);
   // Editor de calendario del admin (mismas capacidades que el propietario, ver modal abajo).
   const [dispModal, setDispModal] = useState<{ v: Vehiculo } | null>(null);
@@ -632,6 +636,18 @@ function DashboardAdminInner() {
 
   const cargarVehiculos = () =>
     fetch('/api/vehiculos?panelAdmin=1').then(r => r.json()).then(d => setVehiculos(d.vehiculos || [])).catch(() => setErrorListas(e => ({ ...e, vehiculos: true })));
+
+  // ── Tapado manual de placas (components/TaparPlacaFotos.tsx) ─────────────
+  // Estado de placa de las fotos del vehículo abierto en el modal "Fotos"; se pide solo
+  // cuando hay modal abierto y se recarga tras aplicar un tapado.
+  const placas = usePlacasVehiculo(fotoModal?.v.id ?? null);
+
+  const abrirEditorPlaca = (v: Vehiculo, url: string) => {
+    setPlacaMsg('');
+    // Si esta foto ya salió de un tapado manual anterior, se edita sobre la ORIGINAL (así el
+    // sello nuevo no se apila sobre el viejo y además se ve la placa que hay que marcar).
+    setPlacaEditor({ v, url, origenUrl: placas.de(url)?.origen_url || url });
+  };
 
   // `reservasOk` se marca aparte de `errorListas.reservas` a propósito: `errorListas` solo
   // controla el recuadro de "Reintentar" de la pestaña Reservas (que un admin sin esa área ni
@@ -2642,34 +2658,35 @@ function DashboardAdminInner() {
               <div className="flex justify-between items-center mb-5">
                 <div className="min-w-0">
                   <h3 className="font-bold text-ink">{v.marca} {v.modelo} — Fotos</h3>
-                  {hayAlgo && <p className="text-[11px] text-ink/50 mt-0.5">Clic en una foto para verla completa y con zoom.</p>}
+                  {hayAlgo && <p className="text-[11px] text-ink/50 mt-0.5">Clic en una foto para verla completa y con zoom · “🛡️ Tapar placa” si quedó alguna a la vista.</p>}
                 </div>
                 <button onClick={() => setFotoModal(null)} aria-label="Cerrar"
                   className="p-1.5 rounded-xl text-ink/50 hover:text-ink hover:bg-surface transition">
                   <IconX size={18} />
                 </button>
               </div>
+              <AvisoPlacas placas={placas} mensaje={placaMsg} />
               {hayAlgo ? (
                 <div className="space-y-5">
                   {tieneDetalle && (
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                       {Object.entries(FOTOS_LABELS).map(([key, label]) => (
                         <div key={key}>
-                          <p className="text-xs text-ink/50 mb-1 font-medium">{label}</p>
                           {detalle[key] ? (
                             // Abre components/VisorFotos.tsx (el mismo de Operaciones): la
                             // miniatura va con object-cover, o sea RECORTADA — sin ampliar no
                             // se puede revisar un rayón ni leer una placa.
-                            <button type="button" onClick={() => abrirVisorVehiculo(v, detalle[key])}
-                              title="Clic para ver la foto en grande"
-                              className="block w-full rounded-xl focus:outline-none focus:ring-2 focus:ring-accent/50">
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img src={detalle[key]} alt={label} className="w-full h-28 object-cover rounded-xl border border-border hover:opacity-85 transition" />
-                            </button>
+                            <FotoPlaca
+                              url={detalle[key]} label={label} alt={label} estado={placas.de(detalle[key])}
+                              onVer={() => abrirVisorVehiculo(v, detalle[key])}
+                              onTapar={() => abrirEditorPlaca(v, detalle[key])} />
                           ) : (
-                            <div className="w-full h-28 bg-surface rounded-xl flex items-center justify-center text-ink/25 text-xs border border-border">
-                              Sin foto
-                            </div>
+                            <>
+                              <p className="text-xs text-ink/50 mb-1 font-medium">{label}</p>
+                              <div className="w-full h-28 bg-surface rounded-xl flex items-center justify-center text-ink/25 text-xs border border-border">
+                                Sin foto
+                              </div>
+                            </>
                           )}
                         </div>
                       ))}
@@ -2682,12 +2699,10 @@ function DashboardAdminInner() {
                       </p>
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                         {sueltas.map((url, i) => (
-                          <button key={url} type="button" onClick={() => abrirVisorVehiculo(v, url)}
-                            title="Clic para ver la foto en grande"
-                            className="block w-full rounded-xl focus:outline-none focus:ring-2 focus:ring-accent/50">
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={url} alt={`Foto ${i + 1} de ${v.marca} ${v.modelo}`} className="w-full h-28 object-cover rounded-xl border border-border hover:opacity-85 transition" />
-                          </button>
+                          <FotoPlaca
+                            key={url} url={url} alt={`Foto ${i + 1} de ${v.marca} ${v.modelo}`} estado={placas.de(url)}
+                            onVer={() => abrirVisorVehiculo(v, url)}
+                            onTapar={() => abrirEditorPlaca(v, url)} />
                         ))}
                       </div>
                     </div>
@@ -3350,6 +3365,32 @@ function DashboardAdminInner() {
           titulo={visorFotos.titulo}
           onIndice={i => setVisorFotos(v => (v ? { ...v, indice: i } : v))}
           onCerrar={() => setVisorFotos(null)} />
+      )}
+
+      {/* Tapado MANUAL de placa: red de seguridad para cuando la detección automática no
+          tapó la placa (o tapó donde no era). Ver components/TaparPlacaManual.tsx. */}
+      {placaEditor && (
+        <TaparPlacaManual
+          vehiculoId={placaEditor.v.id}
+          url={placaEditor.url}
+          origenUrl={placaEditor.origenUrl}
+          titulo={tituloVehiculo(placaEditor.v)}
+          onCerrar={() => setPlacaEditor(null)}
+          onGuardado={(nuevaUrl, aviso) => {
+            const { v, url: anterior } = placaEditor;
+            setPlacaEditor(null);
+            setPlacaMsg(aviso || 'Listo: la placa quedó tapada y la foto publicada se actualizó. La original se conserva por si hay que rehacerlo.');
+            if (nuevaUrl) {
+              // El modal abierto tiene una copia del vehículo: se actualiza en el acto para
+              // que la miniatura muestre ya la foto sellada, sin esperar a la recarga.
+              setFotoModal(fm => (fm && fm.v.id === v.id ? { v: vehiculoConFotoCambiada(fm.v, anterior, nuevaUrl) } : fm));
+              setVehiculos(vs => vs.map(x => (x.id === v.id ? vehiculoConFotoCambiada(x, anterior, nuevaUrl) : x)));
+              setVehiculosRevisionContenido(vs => vs.map(x => (x.id === v.id ? vehiculoConFotoCambiada(x, anterior, nuevaUrl) : x)));
+              setVehiculosArchivados(vs => vs.map(x => (x.id === v.id ? vehiculoConFotoCambiada(x, anterior, nuevaUrl) : x)));
+            }
+            placas.recargar();
+          }}
+        />
       )}
     </div>
   );
