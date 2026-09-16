@@ -123,6 +123,10 @@ export const AREA_LABEL: Record<string, string> = {
   config_editar_financiero: 'Config. financiera (comisión, NIT, referidos)',
   contratos_firmar_agente: 'Firmar contratos como DrivePass (representante legal)',
   usuarios_gestion: 'Gestión del equipo',
+  // Área SOLO de bitácora: no está en AREA_NIVELES, así que no es una sección ni una
+  // casilla asignable — solo le pone nombre legible a los accesos a documentos de
+  // identidad que registra lib/documentos-acceso.ts.
+  documentos_id: 'Documentos de identidad',
 };
 
 export function areaLabel(area: string): string {

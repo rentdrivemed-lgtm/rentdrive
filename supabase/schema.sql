@@ -303,6 +303,12 @@ CREATE TABLE IF NOT EXISTS auditoria (
   created_at     TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
 );
 
+-- Accesos a documentos de identidad (área 'documentos_id', ver lib/documentos-acceso.ts):
+-- cada apertura de una cédula/licencia/certificado consulta la bitácora antes de escribir
+-- (deduplicación por ventana), y sin índice eso sería un recorrido completo de la tabla.
+CREATE INDEX IF NOT EXISTS idx_auditoria_doc_acceso
+  ON auditoria(area, accion, entidad, entidad_id, created_at);
+
 -- ─────────────── Panel de Control interno (Tareas / Calendario / Documentos) ───────────────
 CREATE TABLE IF NOT EXISTS tareas_equipo (
   id                SERIAL PRIMARY KEY,

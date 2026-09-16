@@ -19,7 +19,7 @@
 // servicio logístico (ver PUT /api/reservas/[id]). Es el mismo endpoint y el mismo
 // cuerpo que usa la acción rápida de la vista HOY: una sola vía de aprobación.
 import { useEffect, useState } from 'react';
-import { esPdfUrl } from '@/lib/documento-tipo';
+import { rutaDocumento, type DocumentoDisponible, type MapaDocumentos } from '@/lib/documentos-ref';
 import CalendarioReservas, { type ReservaCalendario } from '@/components/CalendarioReservas';
 import ReservaMostradorModal from '@/components/ReservaMostradorModal';
 import BotonPaqueteDocumentos from '@/components/BotonPaqueteDocumentos';
@@ -48,8 +48,12 @@ export default function ReservasSeccion() {
   const [accionando, setAccionando] = useState<number | null>(null);
   const [rechazando, setRechazando] = useState<{ id: number; nota: string } | null>(null);
   const [clienteDocs, setClienteDocs] = useState<{ r: ReservaCalendario & {
-    documento_id_url?: string; documento_id_url_dorso?: string; documento_es_pasaporte?: number;
-    licencia_url?: string; licencia_url_dorso?: string;
+    documento_es_pasaporte?: number;
+    // Documentos de identidad del cliente: GET /api/reservas ya NO devuelve sus
+    // direcciones, solo el mapa de los que están subidos con su referencia
+    // (`reserva/<id>/<clave>`). Verlos pasa por /api/documentos/..., que comprueba
+    // el permiso y deja el acceso en la Bitácora.
+    documentos_id?: MapaDocumentos;
     // Llega en el `SELECT r.*` de GET /api/reservas; el tipo compartido
     // `ReservaCalendario` no lo declara porque el calendario no lo usa. Acá hace
     // falta para armar el enlace al paquete de documentos de ESE cliente.
@@ -434,11 +438,12 @@ export default function ReservasSeccion() {
       {/* Modal documentos del cliente (arrendatario) */}
       {clienteDocs && (() => {
         const r = clienteDocs.r;
-        const docs: { label: string; url?: string }[] = [
-          { label: r.documento_es_pasaporte ? 'Pasaporte' : 'Documento de identidad (frente)', url: r.documento_id_url },
-          ...(r.documento_es_pasaporte ? [] : [{ label: 'Documento de identidad (dorso)', url: r.documento_id_url_dorso }]),
-          { label: 'Licencia de conducción (frente)', url: r.licencia_url },
-          { label: 'Licencia de conducción (dorso)', url: r.licencia_url_dorso },
+        const dId = r.documentos_id || {};
+        const docs: { label: string; doc?: DocumentoDisponible }[] = [
+          { label: r.documento_es_pasaporte ? 'Pasaporte' : 'Documento de identidad (frente)', doc: dId.documento_frente },
+          ...(r.documento_es_pasaporte ? [] : [{ label: 'Documento de identidad (dorso)', doc: dId.documento_dorso }]),
+          { label: 'Licencia de conducción (frente)', doc: dId.licencia_frente },
+          { label: 'Licencia de conducción (dorso)', doc: dId.licencia_dorso },
         ];
         return (
           <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setClienteDocs(null)}>
@@ -453,24 +458,28 @@ export default function ReservasSeccion() {
                 </button>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {docs.map(d => (
-                  <div key={d.label} className="bg-surface rounded-2xl p-3 border border-border">
-                    <p className="text-[11px] font-semibold text-ink/50 uppercase tracking-wide mb-2">{d.label}</p>
-                    {d.url ? (
-                      esPdfUrl(d.url) ? (
-                        <a href={d.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 text-sm text-accent hover:underline">📄 Ver PDF</a>
+                {docs.map(d => {
+                  // La dirección es siempre del propio sitio y la resuelve el servidor.
+                  const src = d.doc ? rutaDocumento(d.doc.ambito, d.doc.id, d.doc.clave) : '';
+                  return (
+                    <div key={d.label} className="bg-surface rounded-2xl p-3 border border-border">
+                      <p className="text-[11px] font-semibold text-ink/50 uppercase tracking-wide mb-2">{d.label}</p>
+                      {d.doc && src ? (
+                        d.doc.pdf ? (
+                          <a href={src} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 text-sm text-accent hover:underline">📄 Ver PDF</a>
+                        ) : (
+                          <a href={src} target="_blank" rel="noopener noreferrer" className="block">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={src} alt={d.label} className="w-full max-h-56 object-contain rounded-lg border border-border hover:opacity-90 transition" />
+                            <span className="text-[11px] text-ink/50 mt-1 inline-block">Clic para ampliar</span>
+                          </a>
+                        )
                       ) : (
-                        <a href={d.url} target="_blank" rel="noopener noreferrer" className="block">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={d.url} alt={d.label} className="w-full max-h-56 object-contain rounded-lg border border-border hover:opacity-90 transition" />
-                          <span className="text-[11px] text-ink/50 mt-1 inline-block">Clic para ampliar</span>
-                        </a>
-                      )
-                    ) : (
-                      <p className="text-sm text-ink/50">No subido.</p>
-                    )}
-                  </div>
-                ))}
+                        <p className="text-sm text-ink/50">No subido.</p>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
               {/* Paquete completo del CLIENTE: además de los documentos de esta reserva,
                   trae los de su perfil y los de sus otras reservas en un solo .zip. */}
