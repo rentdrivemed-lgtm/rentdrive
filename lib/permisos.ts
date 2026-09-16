@@ -36,6 +36,11 @@ export const AREA_NIVELES: Record<string, AdminNivel[]> = {
   reservas:     ['principal', 'socio', 'secretaria'],
   operaciones:  ['principal', 'socio', 'secretaria'],
   contabilidad: ['principal', 'socio'],
+  // Contratos digitales: ver, emitir y anular los seis documentos de una reserva.
+  // Se le da a los mismos niveles que contabilidad (no a secretaría) porque un
+  // documento emitido es un acto jurídico con el cliente y con el propietario, y
+  // anularlo tumba firmas ya recogidas.
+  contratos:    ['principal', 'socio'],
   mercado:      ['principal', 'socio'],
   calculadora:  ['principal', 'socio'],
   buses:        ['principal', 'socio'],
@@ -58,6 +63,13 @@ export const AREA_NIVELES: Record<string, AdminNivel[]> = {
   // `config_editar_financiero` toca dinero (comisión) y datos fiscales (NIT): nunca
   // 'secretaria' por defecto, aunque sí es asignable por excepción como cualquier otra área.
   config_editar_financiero: ['principal', 'socio'], // comisión, empresa/NIT, referidos
+  // Suscribir un contrato EN NOMBRE DE DrivePass (EL AGENTE). El texto de los seis
+  // documentos dice que quien firma por la empresa es su REPRESENTANTE LEGAL, así que
+  // este permiso es el más estrecho del sistema después de `usuarios_gestion`: solo
+  // 'principal' por nivel. Sí es asignable por excepción (no reparte permisos ni crea
+  // cuentas, así que no habilita escalada), para que el día que el representante legal
+  // sea otra persona del equipo se le pueda dar la casilla sin subirlo a principal.
+  contratos_firmar_agente:  ['principal'],
 };
 
 // ── Permisos por empleado (excepciones al nivel) ─────────────────────────────
@@ -93,6 +105,7 @@ export const AREA_LABEL: Record<string, string> = {
   buses: 'Buses',
   reservas: 'Reservas',
   contabilidad: 'Contabilidad',
+  contratos: 'Contratos digitales',
   mercado: 'Mercado',
   calculadora: 'Calculadora',
   leads: 'Leads',
@@ -108,6 +121,7 @@ export const AREA_LABEL: Record<string, string> = {
   tableros: 'Tableros',
   config_editar_operativo: 'Config. operativa (WhatsApp, pico y placa)',
   config_editar_financiero: 'Config. financiera (comisión, NIT, referidos)',
+  contratos_firmar_agente: 'Firmar contratos como DrivePass (representante legal)',
   usuarios_gestion: 'Gestión del equipo',
 };
 
@@ -119,9 +133,9 @@ export function areaLabel(area: string): string {
 // asignable que no se haya listado arriba, para que nunca quede una sección oculta
 // si se agrega una nueva a AREA_NIVELES.
 const GRUPOS_BASE: { titulo: string; areas: string[] }[] = [
-  { titulo: 'Panel de administración', areas: ['usuarios', 'vehiculos', 'buses', 'reservas', 'contabilidad', 'mercado', 'calculadora', 'leads', 'soporte', 'nfc', 'config', 'auditoria'] },
+  { titulo: 'Panel de administración', areas: ['usuarios', 'vehiculos', 'buses', 'reservas', 'contabilidad', 'contratos', 'mercado', 'calculadora', 'leads', 'soporte', 'nfc', 'config', 'auditoria'] },
   { titulo: 'Panel de control del equipo', areas: ['panel', 'operaciones', 'tareas', 'calendario', 'documentos', 'tableros'] },
-  { titulo: 'Acciones sensibles', areas: ['config_editar_operativo', 'config_editar_financiero'] },
+  { titulo: 'Acciones sensibles', areas: ['config_editar_operativo', 'config_editar_financiero', 'contratos_firmar_agente'] },
 ];
 
 export const GRUPOS_AREAS: { titulo: string; areas: string[] }[] = (() => {

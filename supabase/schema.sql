@@ -412,6 +412,136 @@ CREATE TABLE IF NOT EXISTS actas_servicio (
   UNIQUE (operacion_id, version)
 );
 
+-- ─────────────── contratos digitales (documento congelado + firmas) ───────────────
+-- Reflejo en Postgres de `contratos` y `contrato_firmas` (lib/db.ts →
+-- crearTablasContratos). Los seis documentos que redactó el abogado se generan desde
+-- una reserva (lib/contratos.ts), se CONGELAN aquí palabra por palabra y se firman por
+-- bloques (lib/contratos-firma.ts).
+--
+-- Dos ideas que explican la forma de las dos tablas:
+--   1. Un contrato firmado es INMUTABLE: `texto` guarda el documento tal como se firmó
+--      y `datos_json` el snapshot del que salió (mismo criterio que actas_servicio).
+--      No hay edición ni regeneración en sitio: se anula (la fila NO se borra) y se
+--      emite otro con `version` +1.
+--   2. Un documento tiene VARIAS firmas, de personas distintas y en momentos distintos
+--      (el acta de entrega y devolución recoge las de devolución días después), por eso
+--      las firmas viven en su propia tabla y no en columnas de `contratos`.
+--
+-- `contrato_firmas.firma_hash` es el sello de integridad (HMAC-SHA256 con FIRMA_SECRET)
+-- y cubre el TEXTO ÍNTEGRO del documento: alterar una cláusula en la base después de
+-- firmada hace que el sello deje de verificar.
+--
+-- ⚠️ Paridad SQLite↔Supabase — mismo gap preexistente que ya documentan `actas_servicio`
+-- y el cotizador de buses: este archivo NO tiene `CREATE TABLE reservas`, así que la FK
+-- a `reservas` se deja ANOTADA y no declarada (declararla haría fallar el script contra
+-- un Supabase que aún no tenga esa tabla). Cuando se reconstruya `CREATE TABLE reservas`
+-- para Postgres, agregar entonces:
+--   ALTER TABLE contratos ADD CONSTRAINT contratos_reserva_fk
+--     FOREIGN KEY (reserva_id) REFERENCES reservas(id);
+CREATE TABLE IF NOT EXISTS contratos (
+  id                  SERIAL PRIMARY KEY,
+  reserva_id          INTEGER NOT NULL,
+  vehiculo_id         INTEGER NOT NULL REFERENCES vehiculos(id),
+  -- Partes congeladas: quién era el propietario y quién el cliente EN EL MOMENTO de
+  -- emitir. Un cambio de dueño del vehículo no reescribe quién firmó.
+  propietario_id      INTEGER NOT NULL REFERENCES usuarios(id),
+  cliente_id          INTEGER NOT NULL REFERENCES usuarios(id),
+  tipo                TEXT NOT NULL CHECK (tipo IN ('agencia','otrosi-agencia','arrendamiento','otrosi-arrendamiento','acta-entrega','pagare')),
+  -- Consecutivo propio del archivo (CAR-000012, CAR-000012-R2…). Distinto del número
+  -- que el texto del documento cita en sus cláusulas.
+  numero              TEXT NOT NULL DEFAULT '',
+  version             INTEGER NOT NULL DEFAULT 1,
+  estado              TEXT NOT NULL DEFAULT 'pendiente' CHECK (estado IN ('pendiente','firmado','anulado')),
+  texto               TEXT NOT NULL,
+  datos_json          TEXT NOT NULL DEFAULT '{}',
+  faltantes_json      TEXT NOT NULL DEFAULT '[]',
+  generado_por        INTEGER REFERENCES usuarios(id),
+  generado_por_nombre TEXT DEFAULT '',
+  firmado_en          TEXT DEFAULT '',
+  anulado_en          TEXT DEFAULT '',
+  anulado_por         INTEGER REFERENCES usuarios(id),
+  anulado_por_nombre  TEXT DEFAULT '',
+  motivo_anulacion    TEXT DEFAULT '',
+  -- ── Vía por la que se firmó (fase 4: el mostrador) ──────────────────────────
+  -- '' = sin decidir · 'digital' = firma electrónica por bloques · 'papel' = se
+  -- imprimió, se firmó a mano y se subió el escaneado. Son EXCLUYENTES: ver
+  -- lib/contratos-papel.ts y lib/contratos-firma.ts.
+  via_firma               TEXT NOT NULL DEFAULT '' CHECK (via_firma IN ('','digital','papel')),
+  -- Metadatos del escaneado; los BYTES viven en `contrato_escaneos`.
+  papel_subido_en         TEXT DEFAULT '',
+  papel_subido_por        INTEGER REFERENCES usuarios(id),
+  papel_subido_por_nombre TEXT DEFAULT '',
+  papel_nombre_archivo    TEXT DEFAULT '',
+  papel_mime              TEXT DEFAULT '',
+  papel_bytes             INTEGER NOT NULL DEFAULT 0,
+  papel_sha256            TEXT DEFAULT '',
+  -- Sello HMAC-SHA256 ('cp1:<hex>') del acto de firma en papel: cubre el texto íntegro
+  -- del documento Y la huella del escaneado.
+  papel_sello             TEXT DEFAULT '',
+  created_at          TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
+  UNIQUE (reserva_id, tipo, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_contratos_reserva ON contratos(reserva_id);
+CREATE INDEX IF NOT EXISTS idx_contratos_cliente ON contratos(cliente_id);
+CREATE INDEX IF NOT EXISTS idx_contratos_propietario ON contratos(propietario_id);
+
+CREATE TABLE IF NOT EXISTS contrato_firmas (
+  id                      SERIAL PRIMARY KEY,
+  contrato_id             INTEGER NOT NULL REFERENCES contratos(id),
+  -- Identificador del bloque dentro del documento ('arrendatario',
+  -- 'devolucion-agente'…). Ver lib/contratos-bloques.ts.
+  bloque                  TEXT NOT NULL,
+  etiqueta                TEXT NOT NULL DEFAULT '',
+  rol                     TEXT NOT NULL CHECK (rol IN ('agente','cliente','propietario','codeudor')),
+  momento                 TEXT NOT NULL DEFAULT 'suscripcion' CHECK (momento IN ('suscripcion','entrega','devolucion')),
+  orden                   INTEGER NOT NULL DEFAULT 1,
+  -- NULL cuando no es una cuenta concreta: EL AGENTE (cualquier admin con el permiso
+  -- `contratos_firmar_agente`) y los codeudores solidarios.
+  usuario_esperado_id     INTEGER REFERENCES usuarios(id),
+  nombre_esperado         TEXT DEFAULT '',
+  documento_esperado      TEXT DEFAULT '',
+  -- '' = bloque pendiente. Un bloque firmado NO se puede volver a firmar.
+  firmada_en              TEXT NOT NULL DEFAULT '',
+  firmada_por_id          INTEGER REFERENCES usuarios(id),
+  firma_nombre_confirmado TEXT DEFAULT '',
+  -- PNG en data URI (trazo en pantalla o imagen cargada y normalizada).
+  firma_imagen            TEXT DEFAULT '',
+  firma_metodo            TEXT DEFAULT '',
+  firma_ip                TEXT DEFAULT '',
+  firma_user_agent        TEXT DEFAULT '',
+  -- Sello HMAC-SHA256 ('cf1:<hex>'). Ver lib/contratos-firma.ts → calcularSelloFirma.
+  firma_hash              TEXT DEFAULT '',
+  created_at              TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
+  UNIQUE (contrato_id, bloque)
+);
+
+CREATE INDEX IF NOT EXISTS idx_contrato_firmas_contrato ON contrato_firmas(contrato_id);
+
+-- El escaneado del contrato firmado A MANO (fase 4: el mostrador). El archivo se guarda
+-- en la BASE y no en el CDN porque es el original probatorio de un contrato y el sello
+-- `papel_sello` cubre su huella: una dirección de CDN puede caducar o ser sustituida sin
+-- que el sello se entere. Tabla aparte (1 a 1) para que un `SELECT *` sobre `contratos`
+-- no arrastre varios MB por fila. INMUTABLE: no se reemplaza; si quedó mal se anula el
+-- documento y se emite otro.
+CREATE TABLE IF NOT EXISTS contrato_escaneos (
+  id                INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+  contrato_id       INTEGER NOT NULL REFERENCES contratos(id),
+  -- Contenido del archivo en base64 (PDF o imagen). El tipo se reconoce por los BYTES,
+  -- nunca por lo que declare el cliente (ver lib/contratos-papel.ts).
+  contenido_base64  TEXT NOT NULL,
+  mime              TEXT NOT NULL DEFAULT '',
+  bytes             INTEGER NOT NULL DEFAULT 0,
+  sha256            TEXT NOT NULL DEFAULT '',
+  nombre_archivo    TEXT DEFAULT '',
+  subido_por        INTEGER REFERENCES usuarios(id),
+  subido_por_nombre TEXT DEFAULT '',
+  subido_ip         TEXT DEFAULT '',
+  subido_user_agent TEXT DEFAULT '',
+  created_at        TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
+  UNIQUE (contrato_id)
+);
+
 -- ─────────────── casillas guiadas de fotos del servicio (columnas de `operaciones`) ───────────────
 -- ⚠️ Paridad SQLite↔Supabase — MISMO gap preexistente que el bloque de arriba: este
 -- archivo NO tiene `CREATE TABLE operaciones`, así que las columnas nuevas de esa tabla

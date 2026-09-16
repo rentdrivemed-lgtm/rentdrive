@@ -17,6 +17,13 @@ out/
 rentdrive.db
 rentdrive.db-shm
 rentdrive.db-wal
+# Copias de trabajo que hacen los scripts de prueba (scripts/probar-contratos-pdf.ts):
+# son una COPIA ENTERA de la base, con datos personales. Nunca al repositorio.
+rentdrive-prueba-*.db
+rentdrive-prueba-*.db-shm
+rentdrive-prueba-*.db-wal
+# Carpeta por defecto donde esos scripts dejan los PDF y los zip generados.
+/salida-contratos-pdf/
 
 # Archivos subidos por usuarios (se persisten con volumen en Railway)
 public/uploads/*

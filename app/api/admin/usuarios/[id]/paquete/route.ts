@@ -28,7 +28,7 @@ import { consumirIntento } from '@/lib/limite-tasa';
 import {
   listarDocumentosPersona, construirPaquete, fechaHoraColombia,
   tomarTurnoPaquete, liberarTurnoPaquete, cuerpoZip, ERROR_OCUPADO,
-  MAX_ARCHIVOS,
+  MAX_ARCHIVOS, MAX_CONTRATOS,
 } from '@/lib/paquete-documentos';
 
 export const dynamic = 'force-dynamic';
@@ -80,6 +80,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
         persona: lista.persona.nombre,
         correo: lista.persona.correo,
         archivos: lista.documentos.length,
+        contratos: lista.contratos.length,
       }),
     });
     return NextResponse.json({
@@ -88,11 +89,16 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       vehiculos: lista.vehiculos,
       reservas: lista.reservas,
       excedentes: lista.excedentes.length,
+      contratos: lista.contratos.length,
+      contratos_excedentes: lista.contratosExcedentes.length,
       max_archivos: MAX_ARCHIVOS,
+      max_contratos: MAX_CONTRATOS,
     }, { headers: { 'Cache-Control': 'no-store' } });
   }
 
-  if (lista.documentos.length === 0) {
+  // Los contratos cuentan: una persona puede no tener ni una foto subida y sí tener sus
+  // contratos digitales firmados, y ese paquete sí tiene sentido.
+  if (lista.documentos.length === 0 && lista.contratos.length === 0) {
     return NextResponse.json({ error: 'Esta persona no tiene documentos cargados todavía.' }, { status: 404 });
   }
 
@@ -120,6 +126,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       generadoPor: `${user.nombre} (${user.correo})`,
       fechaHora,
       fechaISO,
+      // `db` va en el contexto porque los CONTRATOS no se descargan de ningún lado: se
+      // generan leyendo su texto congelado (lib/contrato-pdf.ts).
+      db,
     });
   } catch (e) {
     console.error('[paquete-documentos] no se pudo armar el zip:', e instanceof Error ? e.message : e);
