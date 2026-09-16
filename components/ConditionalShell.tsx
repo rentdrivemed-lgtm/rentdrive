@@ -5,7 +5,12 @@ import Footer from '@/components/Footer';
 import BottomNav from '@/components/BottomNav';
 import type { ReactNode } from 'react';
 
-const RUTAS_SIN_SHELL = ['/acceso-drivepass', '/control'];
+// `/panel` (panel unificado del equipo) se suma a la lista por el mismo motivo que
+// `/control`: trae su propia barra superior, su propia barra lateral y su propia
+// barra inferior de celular, así que la navegación pública (Navbar/Footer/BottomNav)
+// sobraría y además chocaría con la barra inferior del panel. No cambia nada para
+// las rutas que ya estaban.
+const RUTAS_SIN_SHELL = ['/acceso-drivepass', '/control', '/panel'];
 
 export default function ConditionalShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
