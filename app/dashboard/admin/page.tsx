@@ -1417,6 +1417,16 @@ function DashboardAdminInner() {
             🎛️ Panel de control interno
             <span className="text-[10px] opacity-80">↗</span>
           </a>
+          {/* Puerta al panel nuevo (`/panel`). Se construye AL LADO de este, no encima: mientras
+              la migración avanza sección por sección, los dos conviven y esta pantalla sigue
+              siendo la de referencia. Sin este enlace la única vía era escribir la URL a mano,
+              que fue justo lo que pasó la primera vez que el dueño lo buscó. Se quita cuando
+              el panel nuevo pase a ser el principal. */}
+          <a href="/panel"
+            className="inline-flex items-center gap-2 text-ink font-semibold text-sm px-5 h-11 rounded-xl border border-accent/50 bg-accent/10 transition hover:bg-accent/20 hover:-translate-y-0.5">
+            ✨ Probar el panel nuevo
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent/20 text-accent font-bold uppercase tracking-wide">Beta</span>
+          </a>
         </div>
       </div>
 
