@@ -10,11 +10,20 @@
 // REAL sigue siendo del servidor en cada API. Un grupo sin entradas visibles no se
 // pinta. Este archivo NO define permisos nuevos ni toca el modelo: solo lo consume.
 //
-// ETAPA 1: conviven dos tipos de entrada.
-//   · `seccion` — la pantalla vive DENTRO de /panel (componentes ya independientes).
-//   · `enlace`  — todavía apunta a la pantalla actual (/dashboard/admin o /control),
-//                 que sigue funcionando exactamente igual. Se irán convirtiendo en
-//                 secciones en etapas siguientes, sin tocar la agrupación.
+// DOS TIPOS DE ENTRADA:
+//   · `seccion` — la pantalla vive DENTRO de /panel.
+//   · `enlace`  — todavía apunta a la pantalla de siempre, que sigue funcionando igual.
+//
+// ETAPA 2 (esta): Reservas, Vehículos, Personas, Mercado y Configuración pasaron de
+// enlace a sección. NO son una copia: el panel de siempre (/dashboard/admin) monta
+// exactamente los mismos componentes (components/panel/{Personas,Vehiculos,Reservas,
+// Mercado}Seccion.tsx), así que las dos pantallas no pueden desincronizarse.
+//
+// SIGUEN COMO ENLACE los cuatro módulos de /control (Tareas, Calendario, Documentos y
+// Tableros): su interfaz está escrita con las clases de app/control/control.css —otra
+// paleta (crema/ámbar) y otras tipografías (Oswald + IBM Plex), que no son las de la
+// marca— y montarlos aquí sin reescribir su estilo metería dos identidades visuales en
+// la misma pantalla. Portarlos es reestilarlos, no moverlos: es su propia etapa.
 //
 // Módulo puro (datos + iconos SVG del set de la app): no importa nada de servidor.
 import type { ReactNode } from 'react';
@@ -52,7 +61,7 @@ export const GRUPOS_PANEL: GrupoPanel[] = [
   {
     titulo: 'Operación',
     entradas: [
-      { clave: 'reservas', label: 'Reservas', area: 'reservas', tipo: 'enlace', href: '/dashboard/admin?tab=reservas', icono: <IconCalendar size={t} />, pista: 'Aprobar, rechazar y seguir reservas' },
+      { clave: 'reservas', label: 'Reservas', area: 'reservas', tipo: 'seccion', icono: <IconCalendar size={t} />, pista: 'Aprobar, rechazar y seguir reservas' },
       { clave: 'operaciones', label: 'Entregas y devoluciones', area: 'operaciones', tipo: 'seccion', icono: <IconRoute size={t} />, pista: 'Servicios, mensajeros, fotos e inspección' },
       { clave: 'contratos', label: 'Contratos', area: 'contratos', tipo: 'seccion', icono: <IconShield size={t} />, pista: 'Los seis documentos de cada reserva y sus firmas' },
       { clave: 'soporte', label: 'Soporte', area: 'soporte', tipo: 'seccion', icono: <IconChat size={t} />, pista: 'Conversaciones escaladas a una persona' },
@@ -68,11 +77,11 @@ export const GRUPOS_PANEL: GrupoPanel[] = [
   {
     titulo: 'Catálogo',
     entradas: [
-      { clave: 'vehiculos', label: 'Vehículos', area: 'vehiculos', tipo: 'enlace', href: '/dashboard/admin?tab=vehiculos', icono: <IconCar size={t} />, pista: 'Flota, documentos, fotos y disponibilidad' },
+      { clave: 'vehiculos', label: 'Vehículos', area: 'vehiculos', tipo: 'seccion', icono: <IconCar size={t} />, pista: 'Flota, documentos, fotos y disponibilidad' },
       { clave: 'buses', label: 'Buses', area: 'buses', tipo: 'seccion', icono: <IconBus size={t} />, pista: 'Flota de buses, tarifas y cotizaciones' },
-      { clave: 'usuarios', label: 'Personas', area: 'usuarios', tipo: 'enlace', href: '/dashboard/admin?tab=usuarios', icono: <IconUsers size={t} />, pista: 'Clientes, propietarios y equipo' },
+      { clave: 'usuarios', label: 'Personas', area: 'usuarios', tipo: 'seccion', icono: <IconUsers size={t} />, pista: 'Clientes, propietarios y equipo' },
       { clave: 'leads', label: 'Leads', area: 'leads', tipo: 'seccion', icono: <IconStar size={t} />, pista: 'Propietarios interesados en publicar' },
-      { clave: 'mercado', label: 'Mercado', area: 'mercado', tipo: 'enlace', href: '/dashboard/admin?tab=mercado', icono: <IconCompass size={t} />, pista: 'Precios de la competencia' },
+      { clave: 'mercado', label: 'Mercado', area: 'mercado', tipo: 'seccion', icono: <IconCompass size={t} />, pista: 'Precios de la competencia' },
     ],
   },
   {
@@ -87,7 +96,7 @@ export const GRUPOS_PANEL: GrupoPanel[] = [
   {
     titulo: 'Sistema',
     entradas: [
-      { clave: 'config', label: 'Configuración', area: 'config', tipo: 'enlace', href: '/dashboard/admin?tab=config', icono: <IconKey size={t} />, pista: 'Comisión, pico y placa, WhatsApp, empresa' },
+      { clave: 'config', label: 'Configuración', area: 'config', tipo: 'seccion', icono: <IconKey size={t} />, pista: 'Comisión, pico y placa, WhatsApp, empresa' },
       { clave: 'nfc', label: 'Tarjetas NFC', area: 'nfc', tipo: 'seccion', icono: <IconNfc size={t} />, pista: 'Tarjetas de contacto del equipo' },
       { clave: 'auditoria', label: 'Bitácora', area: 'auditoria', tipo: 'seccion', icono: <IconHistory size={t} />, pista: 'Quién hizo qué y cuándo' },
     ],

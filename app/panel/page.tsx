@@ -1,6 +1,6 @@
 'use client';
 // ═══════════════════════════════════════════════════════════════════════════
-// /panel — el panel unificado del equipo (etapa 1: armazón + vista HOY)
+// /panel — el panel unificado del equipo
 // ═══════════════════════════════════════════════════════════════════════════
 //
 // QUÉ ES. Un solo panel organizado por ÁREA DE TRABAJO: una barra lateral con seis
@@ -8,10 +8,18 @@
 // de doce pestañas planas en una aplicación y seis módulos en otra pestaña del
 // navegador. El mapa completo vive en components/panel/navegacion.tsx.
 //
-// QUÉ NO ES (todavía). Esta etapa NO migra secciones ni apaga nada: /dashboard/admin
-// y /control siguen existiendo y funcionando exactamente igual. Las entradas de tipo
-// `enlace` llevan a esas pantallas tal cual están hoy. Lo que sí está montado aquí
-// son los módulos que ya eran componentes independientes.
+// QUÉ NO ES (todavía). Esto no apaga nada: /dashboard/admin y /control siguen
+// existiendo y funcionando exactamente igual. Las entradas que aún son `enlace` (los
+// cuatro módulos de /control) llevan a esas pantallas tal cual están hoy.
+//
+// UNA SOLA COPIA. Reservas, Vehículos, Personas, Mercado y Configuración no se
+// reescribieron para este panel: son los MISMOS componentes que monta /dashboard/admin
+// (components/panel/{Personas,Vehiculos,Reservas,Mercado}Seccion.tsx y
+// components/PicoPlacaConfig.tsx). Arreglar algo en uno lo arregla en los dos.
+//
+// LA URL SIGUE A LA NAVEGACIÓN. Moverse por el panel reescribe ?seccion=… con
+// `history.pushState` (shallow routing, sin recargar), así que un enlace a una sección
+// se puede compartir y el botón «atrás» del navegador funciona.
 //
 // COLORES. Los de la marca, de app/globals.css (navy, acento naranja, ink/surface/
 // border). No hay paleta propia ni logo nuevo: lo que se rediseña es el orden.
@@ -41,13 +49,23 @@ import LeadsPropietariosPanel from '@/components/LeadsPropietariosPanel';
 import NfcCardsPanel from '@/components/NfcCardsPanel';
 import AuditoriaPanel from '@/components/AuditoriaPanel';
 import BusesPanel from '@/components/buses/BusesPanel';
+import PicoPlacaConfig from '@/components/PicoPlacaConfig';
+import { DatosAdminProvider } from '@/components/panel/DatosAdmin';
+import PersonasSeccion from '@/components/panel/PersonasSeccion';
+import VehiculosSeccion from '@/components/panel/VehiculosSeccion';
+import ReservasSeccion from '@/components/panel/ReservasSeccion';
+import MercadoSeccion from '@/components/panel/MercadoSeccion';
 
 // `useSearchParams` exige un límite <Suspense> (mismo patrón que app/control/page.tsx
 // y app/pago/page.tsx) — se usa para los enlaces profundos ?seccion=…&reserva=…&conv=…
 export default function PanelPage() {
   return (
     <Suspense fallback={<div className="flex-1 grid place-items-center text-sm text-ink/40">Cargando…</div>}>
-      <PanelApp />
+      {/* Las listas de usuarios, vehículos y reservas se piden UNA vez por pantalla y
+          las comparten las secciones que las necesitan (ver components/panel/DatosAdmin.tsx). */}
+      <DatosAdminProvider>
+        <PanelApp />
+      </DatosAdminProvider>
     </Suspense>
   );
 }
@@ -60,6 +78,9 @@ function PanelApp() {
   const [nivel, setNivel] = useState<AdminNivel>('secretaria');
   const [permisos, setPermisos] = useState<PermisosExtra>({});
   const [nombre, setNombre] = useState('');
+  // Id de MI cuenta: la sección Personas lo usa para no dejar que alguien se edite a sí
+  // mismo y la de Vehículos para saber si el calendario que abre es propio o ajeno.
+  const [miId, setMiId] = useState<number | null>(null);
 
   const [seccion, setSeccion] = useState<string>(() => {
     const s = searchParams.get('seccion');
@@ -67,14 +88,8 @@ function PanelApp() {
   });
   // Enlaces profundos de la vista HOY: abrir los contratos de UNA reserva, o UNA
   // conversación de soporte. Se consumen al montar la sección correspondiente.
-  const [reservaFoco, setReservaFoco] = useState<number | null>(() => {
-    const n = Number(searchParams.get('reserva'));
-    return Number.isInteger(n) && n > 0 ? n : null;
-  });
-  const [convFoco, setConvFoco] = useState<number | null>(() => {
-    const n = Number(searchParams.get('conv'));
-    return Number.isInteger(n) && n > 0 ? n : null;
-  });
+  const [reservaFoco, setReservaFoco] = useState<number | null>(() => enteroPositivo(searchParams.get('reserva')));
+  const [convFoco, setConvFoco] = useState<number | null>(() => enteroPositivo(searchParams.get('conv')));
 
   const [masAbierto, setMasAbierto] = useState(false);
 
@@ -87,6 +102,7 @@ function PanelApp() {
         setNivel(normalizarNivel(d.user.admin_nivel));
         setPermisos(parsePermisosExtra(d.user.permisos_extra));
         setNombre(String(d.user.nombre || ''));
+        setMiId(d.user.id ?? null);
       })
       .catch(() => { /* el layout de servidor ya cerró la puerta a quien no es admin */ });
     return () => { vivo = false; };
@@ -110,19 +126,40 @@ function PanelApp() {
   // la vista se corrige sola sin un render intermedio con contenido prohibido.
   const seccionActiva: string | null = seccionesVisibles.includes(seccion) ? seccion : (seccionesVisibles[0] ?? null);
 
+  // Ir a una sección y DEJARLO ESCRITO EN LA URL. Se usa `history.pushState`, que en
+  // App Router es navegación superficial oficial (no recarga la ruta ni vuelve al
+  // servidor, y `useSearchParams` queda sincronizado). Sin esto no se podía compartir
+  // el enlace a una sección ni servía el botón «atrás».
   const irASeccion = useCallback((destino: DestinoInterno) => {
     setSeccion(destino.seccion);
     setReservaFoco(destino.reserva ?? null);
     setConvFoco(destino.conv ?? null);
     setMasAbierto(false);
+    const p = new URLSearchParams();
+    p.set('seccion', destino.seccion);
+    if (destino.reserva) p.set('reserva', String(destino.reserva));
+    if (destino.conv) p.set('conv', String(destino.conv));
+    window.history.pushState(null, '', `/panel?${p.toString()}`);
   }, []);
 
   const abrirEntrada = useCallback((e: EntradaPanel) => {
     if (e.tipo !== 'seccion') return;
-    setSeccion(e.clave);
-    setReservaFoco(null);
-    setConvFoco(null);
-    setMasAbierto(false);
+    irASeccion({ seccion: e.clave });
+  }, [irASeccion]);
+
+  // Atrás / adelante del navegador: la sección sale de la URL a la que se volvió. El
+  // estado es la fuente de verdad de lo que se pinta, así que acá se re-sincroniza.
+  useEffect(() => {
+    const alVolver = () => {
+      const p = new URLSearchParams(window.location.search);
+      const s = p.get('seccion');
+      setSeccion(s && SECCIONES_PANEL.includes(s) ? s : 'hoy');
+      setReservaFoco(enteroPositivo(p.get('reserva')));
+      setConvFoco(enteroPositivo(p.get('conv')));
+      setMasAbierto(false);
+    };
+    window.addEventListener('popstate', alVolver);
+    return () => window.removeEventListener('popstate', alVolver);
   }, []);
 
   const tituloActual = seccionActiva ? (entradaPorClave(seccionActiva)?.label ?? '') : '';
@@ -177,13 +214,18 @@ function PanelApp() {
         {/* ── Contenido ── */}
         <main className="flex-1 min-w-0 overflow-y-auto px-3 md:px-6 py-4 md:py-6 pb-28 md:pb-10">
           {seccionActiva === 'hoy' && <BandejaHoy nombre={nombre} onIrASeccion={irASeccion} />}
+          {seccionActiva === 'reservas' && <ReservasSeccion />}
           {seccionActiva === 'operaciones' && <OperacionesPanel />}
           {seccionActiva === 'contratos' && <ContratosSeccion reservaInicial={reservaFoco} />}
           {seccionActiva === 'soporte' && <SoportePanel focusConvId={convFoco} />}
           {seccionActiva === 'contabilidad' && <ContabilidadPanel />}
           {seccionActiva === 'calculadora' && <CalculadoraPanel />}
           {seccionActiva === 'buses' && <BusesPanel />}
+          {seccionActiva === 'vehiculos' && <VehiculosSeccion miId={miId} vehiculoInicial={searchParams.get('vehiculo')} />}
+          {seccionActiva === 'usuarios' && <PersonasSeccion miNivel={nivel} miId={miId} />}
+          {seccionActiva === 'mercado' && <MercadoSeccion />}
           {seccionActiva === 'leads' && <LeadsPropietariosPanel />}
+          {seccionActiva === 'config' && <PicoPlacaConfig />}
           {seccionActiva === 'nfc' && <NfcCardsPanel />}
           {seccionActiva === 'auditoria' && <AuditoriaPanel />}
           {seccionActiva === null && (
@@ -251,6 +293,12 @@ function PanelApp() {
       )}
     </div>
   );
+}
+
+/** `?reserva=12` → 12; cualquier otra cosa (vacío, 0, texto) → null. */
+function enteroPositivo(valor: string | null): number | null {
+  const n = Number(valor);
+  return Number.isInteger(n) && n > 0 ? n : null;
 }
 
 // ── Piezas de la navegación ─────────────────────────────────────────────────
