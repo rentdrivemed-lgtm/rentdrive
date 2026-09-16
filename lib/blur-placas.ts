@@ -80,12 +80,23 @@ export type ResultadoDeteccion = {
   moderacionEvaluada: boolean;
   /**
    * true cuando el sistema SABE que puede haber quedado una placa sin tapar bien y no tiene
-   * forma automática de arreglarlo: la IA reporta una placa del vehículo protagonista que
-   * ningún píxel confirma y de la que ella misma no está segura (`confidence: "low"`), o el
-   * tapado calculado era tan grande que hubo que recortarlo. En esos casos NO se estampa una
-   * banda gigante "por si acaso" (ver el comentario de arquitectura de
-   * `detectarYDifuminarPlaca`): se deja constancia para que la foto pase por revisión
-   * manual antes de publicarse. Los call sites lo tratan igual que `moderacionEvaluada:false`.
+   * forma automática de arreglarlo. Hoy se pone en cinco situaciones, todas medidas sobre
+   * fotos reales (ver los `motivosRevision.push(...)` de `detectarYDifuminarPlaca`):
+   *  1. la IA reporta una placa de la que ella misma no está segura (`confidence: "low"`) y
+   *     ningún píxel amarillo la confirma;
+   *  2. la IA ubica una placa que dice AMARILLA en un sitio donde no hay un solo píxel
+   *     amarillo, y ningún otro sello terminó cubriendo esa zona;
+   *  3. el INVENTARIO DE VEHÍCULOS deja algún vehículo del encuadre con su placa sin ubicar
+   *     ni descartar (ver `EstadoPlacaVehiculo`) — es el caso que cierra el hueco de la
+   *     varianza del modelo con las placas chicas del fondo;
+   *  4. las dos listas que devuelve la IA se contradicen (dice haber reportado más placas de
+   *     las que devolvió, o reporta placas y no enumera ningún vehículo);
+   *  5. el tapado calculado era tan grande que hubo que recortarlo, o había más placas que
+   *     sellos disponibles.
+   * En ninguno de esos casos se estampa una banda gigante "por si acaso" (ver el comentario de
+   * arquitectura de `detectarYDifuminarPlaca`): se deja constancia para que la foto pase por
+   * revisión manual antes de publicarse. Los call sites lo tratan igual que
+   * `moderacionEvaluada:false`.
    */
   revisionManual: boolean;
   motivoRevision?: string;
@@ -175,6 +186,9 @@ const PROMPT_DETECCION = `You are the privacy filter of a car-rental marketplace
 READING THE COORDINATES — the image has a measuring RULER printed on it
 A white margin was added on the TOP and on the LEFT of the photo, with a ruler marked from 0 to 100, and magenta guide lines are drawn across the photo every 10 units. USE THEM. To locate something, look at which magenta vertical line it sits next to (that is the horizontal coordinate: 0 at the left edge of the photo, 100 at the right edge) and which magenta horizontal line it sits next to (that is the vertical coordinate: 0 at the top edge of the photo, 100 at the bottom edge). Do NOT estimate these numbers by eye — READ them off the printed ruler and the guide lines. The photo area itself is {{W}} x {{H}} pixels; the white margins are NOT part of it and are not counted in the 0-100 scale.
 
+SWEEP THE WHOLE PHOTO BEFORE ANSWERING
+Almost every plate this system has let through was NOT on the car being advertised: it was a small plate on some other vehicle in the background — a car parked down the street, a van half hidden behind a tree, a taxi at the corner. So do not just look at the main car. Go over the photo ZONE BY ZONE (left / centre / right, crossed with top / middle / bottom: six zones) and, in your reasoning, name every vehicle you find in each zone, however small, far or partly hidden, and say where its plate is. Only after that sweep, write the JSON.
+
 WHAT COUNTS AS A PLATE
 - Any vehicle registration plate physically mounted on any vehicle in the frame, front or rear.
 - Include the plates of OTHER vehicles (parked cars, taxis, buses, vans, motorcycles, anything in the background), not only the car being advertised. A third party's plate is personal data too and must be covered.
@@ -195,11 +209,26 @@ FOR EVERY PLATE, reading the numbers off the ruler:
 - confidence: "high" only if you clearly see the plate panel AND you are sure of the box; "medium" if you see the plate but the box is approximate; "low" if you are not even sure it is a plate.
 - legible: true if you can read at least part of the characters.
 
+VEHICLE INVENTORY — as important as the plate list
+After the plates, account for EVERY vehicle your sweep found: the advertised car AND every other vehicle, including the ones far in the background, behind a fence, behind a tree or only half visible. For each vehicle:
+- where: a few words — what it is and roughly where it sits on the ruler.
+- box: the vehicle's own bounding box on the 0-100 ruler (x_pct, y_pct, w_pct, h_pct), the same way you give a plate's box but around the WHOLE vehicle. Read it off the ruler.
+- is_subject: true only for the car being advertised (the main subject of the photo).
+- plate_status: EXACTLY one of
+   "reported"     — this vehicle's plate is one of the entries in the plates list above.
+   "covered"      — its plate is already covered by this system's sticker: an opaque dark-navy rectangle with a thick orange border and a two-arrow icon in the middle, sitting exactly where the plate would be. If you see that, the plate is handled; say "covered" and do not say "unsure".
+   "not_facing"   — neither its front nor its rear faces the camera (you only see its side or its roof), so no plate panel can be seen at all.
+   "out_of_frame" — a plate-bearing end does face the camera, but the plate itself falls entirely outside the photo, or is COMPLETELY hidden behind something (a wall, another vehicle, a person). If even a sliver of the plate panel shows — for instance a plate cut in half by a tree trunk or by railings — it is NOT out_of_frame: report it as a plate, or say "unsure".
+   "no_plate"     — the plate area faces the camera, you see it clearly and in full, and there is plainly NO plate mounted on it (empty bracket or bare bumper).
+   "unsure"       — anything else: you suspect there is a plate there but cannot locate it, it is too small or too blurry to be sure, or it is only partly visible.
+"unsure" is for a vehicle whose plate area you CANNOT rule out — not for every vehicle you cannot read a plate on. If what you can see of a vehicle plainly contains no plate panel at all (only its roof, only its side, only a corner of it at the edge of the photo, only the part of it that sticks out from behind another car), then answer "not_facing" or "out_of_frame": those are the honest answers and they let a perfectly good photo be published. Use "unsure" whenever you are not certain about the PLATE. It is the SAFE answer: the system then holds the photo for a human to look at instead of publishing it. Do NOT answer "no_plate" merely because you cannot make a plate out — "no_plate" is only for a plate area you can see clearly and completely.
+ONLY LIST THINGS THAT ARE CLEARLY VEHICLES. This list is about vehicles you can actually recognise as a car, van, bus, truck, motorcycle or similar. If some dark shape behind a fence, under a tarpaulin or deep inside a garage might be a vehicle but you cannot tell, LEAVE IT OUT — something you cannot even identify as a vehicle cannot be showing a readable plate either, and listing it as "unsure" would hold back a perfectly fine photo for no reason. Apart from that, never leave a vehicle out and never invent one. If the photo has no vehicle at all (an interior shot, an engine bay, a close-up of a wheel or a document), return an empty list.
+
 SEPARATELY, content moderation. Photos here are normal photos of a car (exterior, interior, engine bay), sometimes with a person near or inside the car (the owner showing the car, a normal selfie with the vehicle, someone in the driver's seat) — all of that is completely normal and fine. Flag the photo ONLY if it clearly and unambiguously shows sexual or explicit content that has no place in a car listing (nudity, sexually explicit poses or acts, pornography). Be conservative: a clothed person in any normal pose is NEVER inappropriate, and a false positive blocks a legitimate listing. When in doubt, do NOT flag it.
 
-Think briefly first (which vehicles are in the frame, where each plate is on the ruler, and whether the content is appropriate), THEN respond with ONLY valid JSON, no markdown, as the very last part of your answer:
-{"plates":[{"x_pct":number,"y_pct":number,"w_pct":number,"h_pct":number,"guides":"string","anchor":"string","belongs_to":"subject_vehicle"|"other_vehicle","colour":"yellow"|"white"|"other","confidence":"high"|"medium"|"low","legible":boolean}],"inappropriate_content":boolean,"inappropriate_reason":"short sentence only when inappropriate_content is true"}
-If no plate is visible anywhere in the photo, return "plates": [].`;
+Think first, in prose: do the zone-by-zone sweep naming every vehicle, then say where each plate sits on the ruler, then judge whether the content is appropriate. THEN respond with ONLY valid JSON, no markdown, as the very last part of your answer:
+{"plates":[{"x_pct":number,"y_pct":number,"w_pct":number,"h_pct":number,"guides":"string","anchor":"string","belongs_to":"subject_vehicle"|"other_vehicle","colour":"yellow"|"white"|"other","confidence":"high"|"medium"|"low","legible":boolean}],"vehicles":[{"where":"string","box":{"x_pct":number,"y_pct":number,"w_pct":number,"h_pct":number},"is_subject":boolean,"plate_status":"reported"|"covered"|"not_facing"|"out_of_frame"|"no_plate"|"unsure"}],"inappropriate_content":boolean,"inappropriate_reason":"short sentence only when inappropriate_content is true"}
+If no plate is visible anywhere in the photo, return "plates": []. Both "plates" and "vehicles" must always be present.`;
 
 /** Caja en porcentajes de la imagen (0–100) — mismo formato que devuelven la IA y el detector de color. */
 type CajaPct = { x_pct: number; y_pct: number; w_pct: number; h_pct: number };
@@ -224,8 +253,89 @@ type PlacaIA = {
   anchor: string;
 };
 
+/**
+ * Estado de la placa de UN vehículo del encuadre, según el INVENTARIO que la IA devuelve
+ * además de la lista de placas.
+ *
+ * POR QUÉ EXISTE ESTE INVENTARIO (el último hueco por el que salía una placa al catálogo)
+ * ------------------------------------------------------------------------------------
+ * Pidiéndole solo "la lista de placas", el modelo NO es fiable con las placas chicas del fondo.
+ * Medido sobre la foto del banco que tiene una placa BLANCA de 57x37 px visibles (a 82% / 37.4%
+ * del lienzo, partida por el tronco de un árbol): en una tanda de seis corridas de la MISMA
+ * foto la reportó en cuatro y en dos no, y en las doce corridas que se hicieron para verificar
+ * este cambio no la reportó NINGUNA vez. O sea que no es solo varianza: con una placa así de
+ * chica el modelo falla más de lo que acierta. Y una placa blanca es además invisible para el
+ * detector determinístico de color (busca amarillo), así que ahí no había ninguna red debajo.
+ * El sistema tampoco tenía forma de NOTARLO, porque "no reportó esa placa" y "no hay esa placa"
+ * llegaban exactamente igual: una lista de placas sin esa entrada.
+ *
+ * El inventario rompe ese empate sin gastar una segunda llamada: ENUMERAR los vehículos del
+ * encuadre es una tarea mucho más fácil y estable que localizar un panel de 57 px, y para cada
+ * vehículo el modelo tiene que decir qué pasó con su placa. Cuando no puede dar cuenta de una
+ * (`unsure`), la foto se RETIENE para revisión manual en vez de publicarse. Retener no bloquea
+ * a nadie desde que existe la vía manual (app/api/admin/tapar-placa), y es el criterio que el
+ * dueño aprobó: vale más una foto retenida que una placa publicada.
+ *
+ *  - `reportada`    : su placa está en la lista de placas (se tapa por el camino normal).
+ *  - `tapada`       : ya tiene encima el sello de este sistema (foto reprocesada).
+ *  - `sin_frente`   : no se ve ni el frente ni la cola del vehículo, así que no hay panel que tapar.
+ *  - `fuera`        : el panel mira a la cámara pero queda fuera del encuadre o totalmente oculto.
+ *  - `sin_placa`    : el panel se ve entero y NO tiene placa montada.
+ *  - `incierta`     : cualquier otra cosa. Es la respuesta segura y la que fuerza revisión manual.
+ *  - `desconocida`  : el modelo devolvió un valor que no es ninguno de los anteriores; se trata
+ *                     igual que `incierta` (no se inventa un estado benigno).
+ */
+type EstadoPlacaVehiculo = 'reportada' | 'tapada' | 'sin_frente' | 'fuera' | 'sin_placa' | 'incierta' | 'desconocida';
+
+type VehiculoIA = {
+  donde: string;
+  /**
+   * Caja del VEHÍCULO entero (no de su placa) en la escala de la regla. Sirve para una sola
+   * cosa, pero importante: saber si alguno de los sellos que el sistema SÍ estampó cayó sobre
+   * ESTE vehículo. Sin eso, el inventario retiene de más — caso real medido en la foto del
+   * banco con tres placas: la IA reportó UNA sola placa (la del carro publicado) y marcó como
+   * `incierta` la del carro estacionado detrás de la reja... que el detector determinístico de
+   * color ya había tapado por su cuenta (99% del panel cubierto). Retener esa foto no aporta
+   * nada y sí llena la cola del admin.
+   *
+   * Es opcional: si el modelo no la devuelve o la devuelve fuera de rango, el vehículo
+   * simplemente no se puede "rescatar" por geometría y, si su placa quedó sin explicar, la
+   * foto se retiene (fail-closed).
+   */
+  caja?: CajaPct;
+  deSujeto: boolean;
+  estado: EstadoPlacaVehiculo;
+};
+
+/**
+ * ¿El estado que la IA le puso a este vehículo EXPLICA qué pasó con su placa, o deja una placa
+ * posiblemente visible sin resolver?
+ *
+ * `sin_placa` (el panel se ve entero y no hay placa montada) se acepta solo para el VEHÍCULO
+ * PROTAGONISTA, y es una decisión medida, no un capricho: el carro que se publica ocupa media
+ * foto y ahí sí se distingue un soporte vacío de un panel que no se alcanza a ver. En un carro
+ * del fondo, que en la imagen que la IA mira (la API reescala a ~1.15 MPx) puede ser una mancha
+ * de 30 px, "no tiene placa" y "no le veo la placa" son indistinguibles — y esa segunda es
+ * exactamente la que hay que retener. Sin esta asimetría, `sin_placa` sería la puerta por la
+ * que el modelo se escapa de declarar `incierta` y volveríamos al hueco que esto cierra.
+ */
+function estadoExplicaLaPlaca(v: VehiculoIA): boolean {
+  switch (v.estado) {
+    case 'reportada':
+    case 'tapada':
+    case 'sin_frente':
+    case 'fuera':
+      return true;
+    case 'sin_placa':
+      return v.deSujeto;
+    default:
+      return false;
+  }
+}
+
 type PlacaDeteccion = {
   placas: PlacaIA[];
+  vehiculos: VehiculoIA[];
   contenidoInapropiado: boolean;
   motivoInapropiado?: string;
 };
@@ -362,16 +472,61 @@ function leerPlacas(bruto: unknown, imgW: number, imgH: number): PlacaIA[] {
   return placas;
 }
 
+/** Traduce el `plate_status` del JSON al estado interno; lo que no reconoce cae en `desconocida`. */
+function leerEstadoVehiculo(crudo: unknown): EstadoPlacaVehiculo {
+  switch (String(crudo ?? '').toLowerCase()) {
+    case 'reported': return 'reportada';
+    case 'covered': return 'tapada';
+    case 'not_facing': return 'sin_frente';
+    case 'out_of_frame': return 'fuera';
+    case 'no_plate': return 'sin_placa';
+    case 'unsure': return 'incierta';
+    default: return 'desconocida';
+  }
+}
+
+/** Convierte el inventario de vehículos del JSON crudo en la lista tipada. */
+function leerVehiculos(bruto: unknown): VehiculoIA[] {
+  const lista = (bruto as { vehicles?: unknown })?.vehicles;
+  if (!Array.isArray(lista)) return [];
+  const vehiculos: VehiculoIA[] = [];
+  for (const crudo of lista) {
+    if (!crudo || typeof crudo !== 'object') {
+      // Una entrada basura NO se ignora: se cuenta como un vehículo del que no sabemos nada,
+      // que es justo lo que debe forzar revisión manual.
+      vehiculos.push({ donde: '(entrada ilegible)', deSujeto: false, estado: 'desconocida' });
+      continue;
+    }
+    const v = crudo as Record<string, unknown>;
+    const cajaCruda = v.box && typeof v.box === 'object' ? (v.box as Record<string, unknown>) : null;
+    const caja = cajaCruda
+      ? {
+          x_pct: Number(cajaCruda.x_pct), y_pct: Number(cajaCruda.y_pct),
+          w_pct: Number(cajaCruda.w_pct), h_pct: Number(cajaCruda.h_pct),
+        }
+      : null;
+    vehiculos.push({
+      donde: typeof v.where === 'string' ? v.where.slice(0, 120) : '',
+      caja: caja && rangoValido(caja) ? caja : undefined,
+      deSujeto: v.is_subject === true,
+      estado: leerEstadoVehiculo(v.plate_status),
+    });
+  }
+  return vehiculos;
+}
+
 async function llamarClaudeDeteccionPlaca(base64: string, imgW: number, imgH: number): Promise<LlamadaClaudeResultado> {
   let text = '';
   let stopReason: string | null | undefined;
   try {
     const resp = await client.messages.create({
       model: 'claude-opus-4-8',
-      // Se pide razonar en prosa antes del JSON final (ver prompt más arriba) y ahora la
-      // respuesta puede traer VARIAS placas con sus descripciones, así que hace falta más
-      // margen que el 2048 anterior para que el JSON no se trunque antes de cerrar.
-      max_tokens: 3000,
+      // Se pide razonar en prosa antes del JSON final (ver prompt más arriba): un barrido por
+      // zonas nombrando cada vehículo, y después VARIAS placas con sus descripciones más el
+      // inventario de vehículos. Hace falta margen para que el JSON no se trunque antes de
+      // cerrar (era 2048 cuando se pedía una sola región, 3000 con varias placas). Subir el
+      // techo no cuesta dinero: solo se pagan los tokens que el modelo llega a escribir.
+      max_tokens: 4000,
       messages: [{
         role: 'user',
         content: [
@@ -389,6 +544,14 @@ async function llamarClaudeDeteccionPlaca(base64: string, imgW: number, imgH: nu
 
     text = resp.content[0].type === 'text' ? resp.content[0].text.trim() : '';
     stopReason = resp.stop_reason;
+    // Consumo real de ESTA llamada. Es el único gasto recurrente de todo el subsistema (una
+    // llamada por foto subida), y el prompt pide razonamiento en prosa antes del JSON, así que
+    // el costo depende de cuánto escriba el modelo y no solo del tamaño de la foto. Dejarlo en
+    // el log permite ver en producción si una foto rara dispara el gasto, sin tener que
+    // reconstruirlo desde la factura.
+    console.warn(
+      `[blur-placas][PLACA-TOKENS] entrada ${resp.usage.input_tokens} · salida ${resp.usage.output_tokens} (stop: ${resp.stop_reason})`,
+    );
   } catch (err) {
     return { ok: false, motivo: 'api_error', error: err };
   }
@@ -433,11 +596,20 @@ async function llamarClaudeDeteccionPlaca(base64: string, imgW: number, imgH: nu
       if (!Array.isArray(bruto.plates)) {
         return { ok: false, motivo: 'json_invalido', error: new Error('la respuesta no trae el arreglo "plates"'), stopReason, textoRespuesta: text };
       }
+      // `vehicles` ausente se trata igual de estricto, y por el mismo motivo: el inventario de
+      // vehículos es la red que atrapa la placa chica que el modelo no listó (ver
+      // `EstadoPlacaVehiculo`). Sin él, una respuesta incompleta se leería como "no hay nada
+      // que revisar" y volveríamos al hueco que este cambio cierra. Cae en el reintento y, si
+      // la segunda respuesta tampoco lo trae, en `resolverSinIA` — que retiene la foto.
+      if (!Array.isArray(bruto.vehicles)) {
+        return { ok: false, motivo: 'json_invalido', error: new Error('la respuesta no trae el arreglo "vehicles"'), stopReason, textoRespuesta: text };
+      }
       const contenidoInapropiado = bruto.inappropriate_content === true;
       return {
         ok: true,
         deteccion: {
           placas: leerPlacas(bruto, imgW, imgH),
+          vehiculos: leerVehiculos(bruto),
           contenidoInapropiado,
           motivoInapropiado: contenidoInapropiado
             ? (typeof bruto.inappropriate_reason === 'string' && bruto.inappropriate_reason
@@ -973,9 +1145,11 @@ async function resolverSinIA(
  * ARQUITECTURA (IA decide QUÉ y CUÁNTAS, los píxeles deciden DÓNDE)
  * ----------------------------------------------------------------
  * 1. A Claude vision se le manda la foto CON UNA REGLA DE COORDENADAS IMPRESA
- *    (`conReglaDeCoordenadas`) y responde la lista de placas visibles —las del carro que se
- *    publica y las de CUALQUIER otro vehículo del encuadre— con su caja, de quién es, qué tan
- *    seguro está y si se lee; más la moderación de contenido.
+ *    (`conReglaDeCoordenadas`) y responde DOS listas: las placas visibles —las del carro que
+ *    se publica y las de CUALQUIER otro vehículo del encuadre— con su caja, de quién es, qué
+ *    tan seguro está y si se lee; y el INVENTARIO DE VEHÍCULOS del encuadre, donde para cada
+ *    vehículo tiene que decir qué pasó con su placa (ver `EstadoPlacaVehiculo`). Más la
+ *    moderación de contenido. Todo en la MISMA llamada.
  * 2. `detectarPlacasPorColor` (lib/detectar-placa-color.ts, determinístico, sin red) mide
  *    DÓNDE están los rectángulos amarillos reales en los píxeles.
  * 3. Se reconcilian placa por placa: si un candidato amarillo concuerda con la caja de la IA,
@@ -1011,8 +1185,33 @@ async function resolverSinIA(
  * "por si acaso": marca la foto para revisión manual (`revisionManual`), que es la única de
  * las dos opciones que no arruina la foto Y deja la placa expuesta a la vez.
  *
+ * QUÉ AGREGA EL INVENTARIO DE VEHÍCULOS (el último hueco, medido)
+ * --------------------------------------------------------------
+ * Con lo anterior quedaba UNA vía por la que una placa podía salir publicada: que la IA
+ * simplemente NO LISTARA una placa chica del fondo. Medido sobre la foto del banco que tiene
+ * una placa BLANCA de 57x37 px a 82%/37.4% del lienzo, partida por el tronco de un árbol: en
+ * una tanda de seis corridas la reportó en cuatro y en dos no; en las doce corridas de
+ * verificación de este cambio, en ninguna. Una placa blanca además es invisible para el
+ * detector de color (que busca amarillo), así que ahí no había red debajo: esa foto salía
+ * publicada con la placa de un tercero a la vista.
+ *
+ * La red que lo cierra no es detectar mejor, es NOTARLO: enumerar los vehículos del encuadre
+ * es una tarea mucho más estable para el modelo que localizar un panel de 57 px, y si para
+ * algún vehículo no puede decir dónde está su placa (ni descartarla), la foto se RETIENE
+ * (`revisionManual`) en vez de publicarse. Sobre el banco de pruebas eso llevó esa foto de
+ * "placa publicada 5 de 5 corridas" a "retenida 5 de 5", sin un solo sello nuevo sobre la
+ * foto. Retener no bloquea a nadie desde que existe la vía manual
+ * (app/api/admin/tapar-placa): es el criterio que el dueño aprobó — vale más una foto
+ * retenida que una placa publicada.
+ *
  * Costo por foto: 1 llamada a la API en el caso normal (2 como máximo si la primera falla por
- * un problema técnico), igual que la versión anterior.
+ * un problema técnico), igual que la versión anterior. El inventario y el barrido por zonas se
+ * piden en esa MISMA llamada; lo que sube es el tamaño del prompt y el de la respuesta.
+ * Medido sobre el banco (log `[PLACA-TOKENS]`, contra la versión anterior de este archivo):
+ * entrada 6699 -> 7985 tokens (el prompt más largo; la foto pesa igual) y salida 469 -> ~900
+ * tokens en una foto con varios vehículos, 109 -> ~530 en una foto simple. Es del orden de un
+ * 35-45% más caro por foto, y compra la única señal que distingue "no hay placa" de "no vi la
+ * placa".
  */
 export async function detectarYDifuminarPlaca(
   bufferOriginal: Buffer,
@@ -1078,7 +1277,7 @@ export async function detectarYDifuminarPlaca(
     return resolverSinIA(buffer, candidatos, imgW, imgH);
   }
 
-  const { placas, contenidoInapropiado, motivoInapropiado } = llamada.deteccion;
+  const { placas, vehiculos, contenidoInapropiado, motivoInapropiado } = llamada.deteccion;
   // Telemetría de lo que REPORTÓ la IA, antes de reconciliar. Es el dato que hace falta para
   // diagnosticar en producción si un sello quedó mal puesto: sin esto solo se ve el rectángulo
   // final y no se puede distinguir "la IA se equivocó de lugar" de "la reconciliación eligió
@@ -1086,6 +1285,10 @@ export async function detectarYDifuminarPlaca(
   console.warn(
     `[blur-placas][PLACA-IA] La IA reporta ${placas.length} placa(s) en una foto de ${imgW}x${imgH}.`,
     placas.map(p => ({ ...p.caja, deSujeto: p.deSujeto, color: p.color, confianza: p.confianza, legible: p.legible, anchor: p.anchor })),
+  );
+  console.warn(
+    `[blur-placas][PLACA-VEHICULOS] Inventario: ${vehiculos.length} vehículo(s) en el encuadre.`,
+    vehiculos.map(v => ({ estado: v.estado, deSujeto: v.deSujeto, donde: v.donde, caja: v.caja })),
   );
   if (contenidoInapropiado) {
     console.warn('[blur-placas] Foto marcada por la IA como contenido inapropiado:', motivoInapropiado);
@@ -1095,6 +1298,13 @@ export async function detectarYDifuminarPlaca(
   const zonas: Zona[] = [];
   const motivosRevision: string[] = [];
   const candidatosUsados = new Set<CandidatoPlaca>();
+  /**
+   * Placas AMARILLAS que la IA ubicó donde no hay amarillo. No se tapan a ciegas (ver el
+   * comentario del caso (2) más abajo): se deja la decisión para el final, cuando el barrido
+   * de "amarillos que la IA no reclamó" ya corrió y se puede comprobar si alguno de esos
+   * sellos cayó dentro de la ventana de esta placa.
+   */
+  const pendientes: { placa: PlacaIA; ventana: CajaPct }[] = [];
 
   for (const placa of placas) {
     const ventana = ventanaDeBusqueda(placa.caja, imgW, imgH);
@@ -1222,25 +1432,59 @@ export async function detectarYDifuminarPlaca(
         `[blur-placas][PLACA-IA-DESCARTADA] La IA reporta con confianza BAJA una placa ${placa.deSujeto ? 'del vehículo' : 'de un tercero'} que ningún píxel amarillo confirma — no se tapa.`,
         { caja: placa.caja, anchor: placa.anchor },
       );
-      // Retener la foto para revisión humana en los dos casos en que "no tapamos nada" duele
-      // de verdad: la placa del propio carro que se publica, y cualquier placa que la IA diga
-      // que se alcanza a LEER (una placa legible es un dato personal expuesto, sea de quien
-      // sea). Un panel de fondo ilegible no manda la foto a revisión: hacerlo llenaría la cola
-      // del admin de fotos perfectamente publicables.
-      if (placa.deSujeto) {
-        motivosRevision.push('La IA cree ver la placa del vehículo pero no está segura de dónde, y el detector de color no la encuentra.');
-      } else if (placa.legible) {
-        motivosRevision.push('La IA cree ver la placa legible de otro vehículo pero no está segura de dónde, y el detector de color no la encuentra.');
-      }
+      // Retener la foto para revisión humana SIEMPRE que se llegue hasta acá, sin mirar de
+      // quién es la placa ni si se lee.
+      //
+      // Antes se retenía solo si la placa era del vehículo publicado o si la IA decía que se
+      // alcanzaba a LEER, con el argumento de no llenar la cola del admin con panelitos
+      // ilegibles del fondo. Ese argumento no se sostiene con lo medido: `legible` es una
+      // opinión del modelo sobre una miniatura (la API reescala la foto a ~1.15 MPx antes de
+      // que él la vea, así que una placa de 57 px del original le llega en 20), la foto
+      // publicada es mucho más nítida que lo que él miró, y justamente en las placas chicas es
+      // donde su respuesta cambia de una corrida a otra. Publicar apoyándose en ese campo es
+      // apostar a que la placa "no se lee" con la evidencia más débil que hay. Acá el sistema
+      // ya sabe dos cosas: que la IA cree ver una placa, y que no puede ubicarla — eso es
+      // exactamente el caso para el que existe la vía manual.
+      motivosRevision.push(
+        placa.deSujeto
+          ? 'La IA cree ver la placa del vehículo pero no está segura de dónde, y el detector de color no la encuentra.'
+          : 'La IA cree ver la placa de otro vehículo pero no está segura de dónde, y el detector de color no la encuentra.',
+      );
       continue;
     }
 
-    // Placa que la IA sí ve con seguridad pero que no es amarilla (placa blanca de servicio
-    // público, placa extranjera) o está tan quemada/en sombra que la máscara no la agarra. Se
-    // tapa la caja de la IA con un margen por eje: la mitad del lado de la caja para cubrir un
-    // panel algo más grande de lo que el modelo dibujó, y como PISO el error residual de la
-    // regla (`ERROR_IA_FRACCION_LADO` de cada lado de la imagen), que es lo que domina cuando
-    // la placa es chica y está lejos.
+    // Acá llegan las placas que la IA ve con seguridad (confianza media/alta) y que ningún
+    // píxel confirmó. Hay dos situaciones muy distintas, y hasta ahora se trataban igual:
+    //
+    //  (1) La IA dice que el panel es BLANCO (servicio público: taxis, busetas, camiones) u
+    //      OTRO (placa extranjera, o no sabe de qué color es). El detector de color no puede
+    //      confirmar ninguna de esas NUNCA: no hay amarillo debajo por definición. La caja de
+    //      la IA es la única información que existe, y se tapa con ella (más abajo).
+    //
+    //  (2) La IA dice que el panel es AMARILLO y aun así no hay UN SOLO rectángulo amarillo
+    //      aceptable en toda la ventana de búsqueda. Eso ya no es "la máscara no la agarró":
+    //      es que la caja está en otra parte. Caso real medido en la foto trasera del banco de
+    //      pruebas: el modelo puso la placa del Nissan del borde derecho en y=61 cuando está en
+    //      y=46, el amarillo real quedó a 2.27 tolerancias (tope 2.0), y el sistema estampó un
+    //      sello de 485x445 px SOBRE EL ANDÉN mientras la placa la terminaba tapando —de
+    //      casualidad— el barrido final de "amarillos que la IA no reclamó". Un sello gigante
+    //      en el pavimento es justo el defecto que esta reescritura vino a eliminar. Así que
+    //      acá no se tapa a ciegas: se anota la placa como PENDIENTE y se resuelve al final,
+    //      cuando ya se sabe si el barrido de amarillos sueltos la cubrió. Si no la cubrió, la
+    //      foto se retiene para revisión manual en vez de ensuciarse con un sello al azar.
+    if (placa.color === 'amarilla') {
+      console.warn(
+        `[blur-placas][PLACA-AMARILLA-SIN-AMARILLO] La IA reporta con confianza ${placa.confianza} una placa AMARILLA ${placa.deSujeto ? 'del vehículo' : 'de un tercero'} y no hay ningún rectángulo amarillo aceptable en su ventana — no se tapa a ciegas; queda pendiente de que el barrido de amarillos sueltos la cubra.`,
+        { caja: placa.caja, anchor: placa.anchor },
+      );
+      pendientes.push({ placa, ventana });
+      continue;
+    }
+
+    // Placa blanca / de color desconocido: se tapa la caja de la IA con un margen por eje — la
+    // mitad del lado de la caja para cubrir un panel algo más grande de lo que el modelo
+    // dibujó, y como PISO el error residual de la regla (`ERROR_IA_FRACCION_LADO` de cada lado
+    // de la imagen), que es lo que domina cuando la placa es chica y está lejos.
     const cajaW = (placa.caja.w_pct / 100) * imgW;
     const cajaH = (placa.caja.h_pct / 100) * imgH;
     const padX = Math.max(cajaW * MARGEN_IA_FRACCION_CAJA, imgW * ERROR_IA_FRACCION_LADO);
@@ -1268,6 +1512,94 @@ export async function detectarYDifuminarPlaca(
     // fue una mancha local y este candidato global es otro pedazo del mismo panel amarillo).
     if (zonas.some(z => solapeRelativo(rect, z.rect) > 0.5)) continue;
     zonas.push({ rect, origen: 'color', detalle: 'rectángulo amarillo con forma de placa que la IA no reportó' });
+  }
+
+  // ── Placas amarillas que quedaron pendientes ──────────────────────────────────────────
+  // Ya corrió todo lo que puede tapar algo. Para cada placa amarilla que la IA ubicó donde no
+  // había amarillo, se mira si ALGÚN sello terminó cayendo dentro de su ventana de búsqueda
+  // (que es la misma vecindad con la que se buscó el amarillo, no "la foto entera"): eso pasa
+  // cuando el amarillo real estaba ahí cerca pero un poco más lejos del tope, y el barrido de
+  // amarillos sueltos lo tapó por su cuenta. Si nada la cubrió, la foto se retiene.
+  for (const { placa, ventana } of pendientes) {
+    const cubierta = zonas.some(z => dentroDe(
+      { x_pct: (z.rect.left / imgW) * 100, y_pct: (z.rect.top / imgH) * 100, w_pct: (z.rect.width / imgW) * 100, h_pct: (z.rect.height / imgH) * 100 },
+      ventana,
+    ));
+    if (cubierta) {
+      console.warn(
+        '[blur-placas][PLACA-AMARILLA-RESUELTA] La placa amarilla que la IA había ubicado mal quedó cubierta por un sello del barrido de amarillos sueltos — no hace falta retener la foto.',
+        { caja: placa.caja, anchor: placa.anchor },
+      );
+      continue;
+    }
+    motivosRevision.push(
+      placa.deSujeto
+        ? 'La IA ubica la placa amarilla del vehículo en un sitio donde no hay ni un píxel amarillo, y ningún otro sello la cubre.'
+        : 'La IA ubica la placa amarilla de otro vehículo en un sitio donde no hay ni un píxel amarillo, y ningún otro sello la cubre.',
+    );
+  }
+
+  // ── Inventario de vehículos: ¿quedó alguna placa sin explicación? ──────────────────────
+  // Es la red que atrapa el hueco de la varianza (ver `EstadoPlacaVehiculo`): la IA puede no
+  // listar una placa chica del fondo, pero enumerar los vehículos del encuadre sí lo hace de
+  // forma estable, y para cada uno tiene que decir qué pasó con su placa.
+  //
+  // Antes de retener por un vehículo, se comprueba si alguno de los sellos ya estampados cayó
+  // ENCIMA de ese vehículo: pasa cuando el detector de color tapó una placa que la IA nunca
+  // llegó a listar (y que por eso su vehículo quedó como `incierta`). En ese caso la placa está
+  // tapada y retener la foto no aportaría nada.
+  const sinExplicar = vehiculos.filter(v => {
+    if (estadoExplicaLaPlaca(v)) return false;
+    if (!v.caja) return true;
+    const margenX = v.caja.w_pct * 0.15;
+    const margenY = v.caja.h_pct * 0.15;
+    const ampliada: CajaPct = {
+      x_pct: Math.max(0, v.caja.x_pct - margenX),
+      y_pct: Math.max(0, v.caja.y_pct - margenY),
+      w_pct: v.caja.w_pct + 2 * margenX,
+      h_pct: v.caja.h_pct + 2 * margenY,
+    };
+    const tapado = zonas.some(z => dentroDe(
+      { x_pct: (z.rect.left / imgW) * 100, y_pct: (z.rect.top / imgH) * 100, w_pct: (z.rect.width / imgW) * 100, h_pct: (z.rect.height / imgH) * 100 },
+      ampliada,
+    ));
+    if (tapado) {
+      console.warn(
+        '[blur-placas][PLACA-VEHICULO-RESUELTO] La IA no supo dar cuenta de la placa de este vehículo, pero uno de los sellos estampados cae sobre él — no hace falta retener la foto.',
+        { estado: v.estado, donde: v.donde, caja: v.caja },
+      );
+    }
+    return !tapado;
+  });
+  if (sinExplicar.length > 0) {
+    console.warn(
+      `[blur-placas][PLACA-VEHICULO-SIN-EXPLICAR] ${sinExplicar.length} vehículo(s) del encuadre con una placa de la que la IA no da cuenta — la foto va a revisión manual.`,
+      sinExplicar.map(v => ({ estado: v.estado, deSujeto: v.deSujeto, donde: v.donde })),
+    );
+    motivosRevision.push(
+      sinExplicar.length === 1
+        ? 'Hay un vehículo en la foto cuya placa la IA no pudo ubicar ni descartar.'
+        : `Hay ${sinExplicar.length} vehículos en la foto cuya placa la IA no pudo ubicar ni descartar.`,
+    );
+  }
+  // Coherencia entre las dos listas. Un inventario VACÍO con placas en la lista es una
+  // contradicción: si hay placas, hay vehículos. Se retiene porque no se puede saber qué más
+  // quedó sin mirar.
+  if (vehiculos.length === 0 && placas.length > 0) {
+    console.warn(
+      `[blur-placas][PLACA-INVENTARIO-INCOHERENTE] La IA devolvió ${placas.length} placa(s) y un inventario de vehículos VACÍO — la foto va a revisión manual.`,
+    );
+    motivosRevision.push('La IA reportó placas pero no enumeró ningún vehículo en la foto.');
+  }
+  // Y por el otro lado: si más vehículos dicen "mi placa está reportada" que placas hay en la
+  // lista, alguna placa se perdió entre el razonamiento y el JSON. No se puede saber CUÁL, así
+  // que la foto se retiene.
+  const dicenReportada = vehiculos.filter(v => v.estado === 'reportada').length;
+  if (dicenReportada > placas.length) {
+    console.warn(
+      `[blur-placas][PLACA-INVENTARIO-INCOHERENTE] ${dicenReportada} vehículo(s) dicen tener su placa en la lista, pero la lista trae ${placas.length} — la foto va a revisión manual.`,
+    );
+    motivosRevision.push('La IA dice haber reportado más placas de las que devolvió.');
   }
 
   if (zonas.length > MAX_ZONAS_TAPADAS) {
