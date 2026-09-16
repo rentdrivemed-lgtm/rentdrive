@@ -138,12 +138,18 @@ export async function POST(req: NextRequest) {
         // revisada y aprobada para siempre sin que nadie la haya mirado. En vez de eso, la
         // mandamos por el mismo camino que una foto marcada por la IA como inapropiada — a la
         // cola de revisión manual del admin (contenido_revision=1 en el vehículo que la use).
-        contenidoSospechoso  = resultado.contenidoInapropiado || !resultado.moderacionEvaluada;
+        // `revisionManual` entra por el MISMO camino fail-closed: lo pone
+        // detectarYDifuminarPlaca cuando sabe que pudo quedar una placa sin tapar bien y no
+        // tiene forma automática de arreglarlo (ver lib/blur-placas.ts). Antes de esta
+        // versión ese caso se "resolvía" estampando una banda enorme sobre la foto, que
+        // arruinaba el anuncio y además no garantizaba tapar la placa; ahora la foto se
+        // publica intacta pero marcada, para que un humano la mire.
+        contenidoSospechoso  = resultado.contenidoInapropiado || !resultado.moderacionEvaluada || resultado.revisionManual;
         motivoSospechoso     = resultado.contenidoInapropiado
           ? resultado.motivoInapropiado
           : (!resultado.moderacionEvaluada
               ? 'No se pudo evaluar automáticamente el contenido de esta foto (fallo de moderación) — pendiente de revisión manual.'
-              : undefined);
+              : (resultado.revisionManual ? resultado.motivoRevision : undefined));
         seEjecutoModeracion  = true;
       }
 

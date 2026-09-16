@@ -86,24 +86,25 @@ function esFotoDeReprocesoPrevio(url: string): boolean {
 }
 
 /**
- * ¿El tapado que produjo esta corrida es de los IMPRECISOS Y GRANDES (la banda de respaldo
- * de lib/blur-placas.ts, centrada en la pista sesgada de la IA)? Ver `ResultadoDeteccion.via`.
+ * ¿El tapado que produjo esta corrida NO está apoyado en ningún píxel medido, o sea que sale
+ * solo de la caja que devolvió la IA? Ver `ResultadoDeteccion.via`.
  *
- * SOLO `banda_respaldo` cuenta como impreciso, y eso es deliberado: `color_con_banda`
- * significa que el detector de color SÍ encontró un rectángulo amarillo real (aunque débil o
- * angosto, y por eso se le sumó la banda) — y ese es EXACTAMENTE el escenario que este
- * endpoint existe para arreglar: una foto que salió de una corrida anterior con un jirón de
- * placa asomando al lado del sello viejo. Tratar `color_con_banda` como impreciso descartaba
- * ese tapado y devolvía `sin_cambios` con la placa todavía legible.
+ * SOLO `ia` cuenta como impreciso, y eso es deliberado: `color_y_ia` significa que al menos
+ * una de las zonas tapadas es un rectángulo amarillo REAL medido sobre los píxeles — y ese es
+ * EXACTAMENTE el escenario que este endpoint existe para arreglar: una foto que salió de una
+ * corrida anterior con una placa (la del propio carro o la de un tercero) todavía a la vista
+ * al lado del sello viejo. Tratar `color_y_ia` como impreciso descartaba ese tapado y
+ * devolvía `sin_cambios` con la placa todavía legible.
  *
- * CONVERGENCIA (por qué esto no apila bandas para siempre): una vez que la pasada que sí se
- * aplicó selló ese jirón amarillo, la foto resultante ya no tiene ningún amarillo que el
- * detector de color pueda encontrar, así que una pasada posterior solo puede caer en
- * `banda_respaldo` — y esa sí se descarta aquí. O sea: a lo sumo UNA corrida extra por foto,
- * y solo cuando de verdad quedaba placa visible.
+ * CONVERGENCIA (por qué esto no apila sellos para siempre): una vez que la pasada que sí se
+ * aplicó selló ese amarillo, la foto resultante ya no tiene ningún amarillo que el detector de
+ * color pueda encontrar, y además el prompt le pide explícitamente a la IA que NO reporte las
+ * placas que ya están cubiertas por el sello navy con borde naranja de este mismo sistema, así
+ * que una pasada posterior solo puede caer en `ia` — y esa sí se descarta aquí. O sea: a lo
+ * sumo UNA corrida extra por foto, y solo cuando de verdad quedaba placa visible.
  */
 function tapadoImpreciso(via: ResultadoDeteccion['via']): boolean {
-  return via === 'banda_respaldo';
+  return via === 'ia';
 }
 
 type MediaType = 'image/jpeg' | 'image/png' | 'image/webp';
@@ -246,19 +247,25 @@ async function reprocesarVehiculo(db: Database.Database, vehiculo: VehiculoRow):
           error: 'No se pudo evaluar el contenido automáticamente (fallo de moderación de la IA) — la placa no se reprocesó en esta corrida y la foto quedó marcada a revisión manual.',
         });
       } else {
+        // `revisionManual` va por el MISMO camino fail-closed que la moderación: lo pone
+        // detectarYDifuminarPlaca cuando sabe que pudo quedar una placa sin tapar bien y no
+        // tiene forma automática de arreglarlo (ver lib/blur-placas.ts). A diferencia de
+        // `!moderacionEvaluada`, acá el resultado SÍ se aplica (lo que se pudo tapar se
+        // tapa), pero el vehículo entra igual a `contenido_revision` para que un humano mire
+        // esa foto — antes ese caso se "resolvía" estampando una banda enorme.
         moderacionPorUrl.set(url, {
-          contenidoInapropiado: resultado.contenidoInapropiado,
-          motivoInapropiado: resultado.motivoInapropiado,
+          contenidoInapropiado: resultado.contenidoInapropiado || resultado.revisionManual,
+          motivoInapropiado: resultado.contenidoInapropiado ? resultado.motivoInapropiado : resultado.motivoRevision,
         });
         if (!resultado.difuminada) {
           resultados.push({ url, estado: 'sin_cambios' });
         } else if (esFotoDeReprocesoPrevio(url) && tapadoImpreciso(resultado.via)) {
           // Ver la nota de IDEMPOTENCIA arriba: foto que ya salió de una corrida previa +
-          // tapado nuevo impreciso (banda SOLA, sin ningún amarillo real detrás) = apilar
-          // bandas sobre bandas. Se descarta. Un `color_con_banda` NO cae aquí: ahí sí hubo
-          // un rectángulo amarillo medido (placa que la corrida previa dejó asomando).
+          // tapado nuevo que no se apoya en ningún píxel medido (solo la caja de la IA) =
+          // apilar sellos sobre sellos. Se descarta. Un `color_y_ia` NO cae aquí: ahí sí
+          // hubo un rectángulo amarillo medido (placa que la corrida previa dejó asomando).
           console.warn(
-            `[reprocesar-placas] Foto ya reprocesada antes (${url}) y el tapado nuevo sería una banda de respaldo (via=${resultado.via}) — se descarta para no apilar bandas; la foto queda como está.`,
+            `[reprocesar-placas] Foto ya reprocesada antes (${url}) y el tapado nuevo saldría solo de la caja de la IA (via=${resultado.via}) — se descarta para no apilar sellos; la foto queda como está.`,
           );
           resultados.push({ url, estado: 'sin_cambios' });
         } else {
