@@ -107,40 +107,27 @@ export async function PUT(req: NextRequest) {
     }
   }
 
-  // ── Cédula obligatoria para el PROPIETARIO ────────────────────────────────
-  // Su cédula (frente + dorso) es lo que permite verificar que la tarjeta de
-  // propiedad de sus vehículos esté a su nombre, así que no se le acepta guardar
-  // un perfil que quede sin ella. Se evalúa sobre el ESTADO RESULTANTE (lo
-  // guardado + lo que trae este request), no sobre el body: así un cliente no se
-  // salta la regla simplemente omitiendo los campos.
+  // ── Documentos del PROPIETARIO: se piden, no se exigen para guardar ────────
+  // ANTES esto rechazaba el guardado del perfil si faltaba la cédula (frente y
+  // dorso). El dueño lo pidió al revés: "necesito que me permitas avanzar con el
+  // registro de los propietarios y no lo limites, en caso de que no tenga uno de
+  // los documentos permite continuar y subir despues".
   //
-  // El `rol` se lee de la BD, no del JWT (que puede estar viejo). Aplica solo a
-  // propietarios: arrendatarios y admins no pasan por acá con este requisito —
-  // al arrendatario el documento se le exige en el checkout (POST /api/reservas).
+  // Y tenía razón por una razón concreta: al rechazar el guardado se perdía TODO
+  // lo demás que la persona había llenado —dirección, celular, datos bancarios—
+  // por un documento que quizá ni tenía a mano en ese momento. El formulario
+  // castigaba el avance parcial, que es justo como se llena un perfil real.
   //
-  // Decisión de producto (propietarios que YA existen sin dorso): el corte es el
-  // GUARDADO DEL PERFIL, no publicar ni alquilar. Nada de lo que ya tienen en
-  // marcha se cae, y el arreglo está en el mismo formulario que están enviando.
-  // Si se quisiera apretar más, el punto natural sería POST /api/vehiculos.
-  if (actual.rol === 'propietario') {
-    const resultante = (campo: (typeof CAMPOS_URL)[number]) =>
-      (campo in body ? (body[campo] == null ? '' : String(body[campo])) : (actual[campo] || '')).trim();
-    const tipoDocResultante = 'tipo_documento' in body
-      ? String(body.tipo_documento ?? '').trim()
-      : (actual.tipo_documento || '');
-    // El pasaporte no tiene dorso (solo la página con la foto): mismo criterio que
-    // `soloUnLado` en components/DocUploadDoble.tsx.
-    const faltaFrente = !resultante('cedula_url');
-    const faltaDorso = tipoDocResultante !== 'pasaporte' && !resultante('cedula_url_dorso');
-    if (faltaFrente || faltaDorso) {
-      return NextResponse.json({
-        error: tipoDocResultante === 'pasaporte'
-          ? 'Sube la foto de tu pasaporte: es obligatoria para verificar que la tarjeta de propiedad esté a tu nombre.'
-          : 'Sube tu cédula por el frente Y por el dorso: es obligatoria para verificar que la tarjeta de propiedad esté a tu nombre.',
-        codigo: 'cedula_incompleta',
-      }, { status: 400 });
-    }
-  }
+  // Dónde SÍ se exige, que es donde importa de verdad y ya está implementado:
+  //   · publicar un vehículo y que salga a la vitrina depende de los documentos
+  //     del VEHÍCULO (documentos_estado, ver PUT /api/vehiculos/[id]);
+  //   · cobrarle una liquidación necesita sus datos bancarios;
+  //   · la cédula es lo que permite verificar que la tarjeta de propiedad esté a
+  //     su nombre, así que se le pide de forma visible en su panel hasta que la
+  //     suba — pero no le bloquea el resto de su trabajo.
+  //
+  // O sea: se avisa, se recuerda, y se bloquea solo el paso que de verdad
+  // depende del documento. Guardar el perfil no es ese paso.
 
   const sets: string[] = [];
   const valores: unknown[] = [];

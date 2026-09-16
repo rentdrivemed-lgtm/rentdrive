@@ -779,25 +779,14 @@ function DashboardPropietarioInner() {
     if (errDoc) { setPerfilMsg(errDoc); return; }
     const errCel = validarCelular(perfil.celular_indicativo, perfil.celular);
     if (errCel) { setPerfilMsg(errCel); return; }
-    // Cédula del propietario: frente SIEMPRE, y dorso salvo que su documento
-    // registrado sea un pasaporte (que no tiene dorso). Misma regla que aplica el
-    // servidor en PUT /api/auth/me — esto es solo el feedback inmediato. Se exige
-    // al guardar el perfil (igual que ya se exigían los datos bancarios) y NO al
-    // publicar/alquilar: un propietario que hoy no tiene el dorso cargado sigue
-    // operando normal, y lo resuelve subiendo la foto en este mismo formulario.
-    const faltanCedula = ladosFaltantes(perfil.cedula_url, perfil.cedula_url_dorso, perfil.tipo_documento === 'pasaporte');
-    if (faltanCedula.length > 0) {
-      setPerfilMsg(
-        perfil.tipo_documento === 'pasaporte'
-          ? 'Sube la foto de tu pasaporte: es obligatoria para verificar que la tarjeta de propiedad esté a tu nombre.'
-          : 'Sube tu cédula por el frente Y por el dorso: es obligatoria para verificar que la tarjeta de propiedad esté a tu nombre.'
-      );
-      return;
-    }
-    if (!perfil.banco.trim() || !perfil.numero_cuenta.trim() || !perfil.certificado_bancario_url) {
-      setPerfilMsg('Los datos bancarios son obligatorios para procesar pagos.');
-      return;
-    }
+    // Documentos y datos bancarios: se PIDEN, no bloquean el guardado.
+    // Antes, si faltaba la cédula o los datos bancarios, el perfil entero se
+    // rechazaba y la persona perdía lo que ya había escrito. Se llena un perfil por
+    // partes, con lo que se tiene a mano; castigar el avance parcial hacía que no se
+    // avanzara nada. Lo que falte queda señalado en el panel hasta que se suba, y el
+    // bloqueo real vive donde el documento importa de verdad: los documentos DEL
+    // VEHÍCULO para salir a la vitrina, y los datos bancarios para poder cobrar.
+
     setGuardandoPerfil(true); setPerfilMsg('');
     try {
       const res = await fetch('/api/auth/me', {
@@ -805,7 +794,20 @@ function DashboardPropietarioInner() {
         body: JSON.stringify(perfil),
       });
       if (res.ok) {
-        setPerfilMsg('✓ Perfil actualizado correctamente.');
+        // Se guardó. Si quedó algo pendiente se NOMBRA aquí mismo, para que la
+        // persona sepa qué le falta sin que eso le haya impedido guardar lo demás.
+        const pendientes: string[] = [];
+        const faltaCedula = ladosFaltantes(perfil.cedula_url, perfil.cedula_url_dorso, perfil.tipo_documento === 'pasaporte');
+        if (faltaCedula.length > 0) {
+          pendientes.push(perfil.tipo_documento === 'pasaporte'
+            ? 'la foto de tu pasaporte'
+            : faltaCedula.length === 2 ? 'tu cédula (frente y dorso)' : `tu cédula (${faltaCedula[0]})`);
+        }
+        if (!perfil.banco.trim() || !perfil.numero_cuenta.trim()) pendientes.push('tus datos bancarios');
+        if (!perfil.certificado_bancario_url) pendientes.push('el certificado bancario');
+        setPerfilMsg(pendientes.length === 0
+          ? '✓ Perfil actualizado correctamente.'
+          : `✓ Guardado. Te falta subir ${pendientes.join(', ')} — puedes hacerlo cuando lo tengas a mano. La cédula es la que permite verificar que la tarjeta de propiedad esté a tu nombre, y los datos bancarios son los que usamos para pagarte.`);
         setUser(u => u ? { ...u, ...perfil } : u);
       } else {
         const d = await res.json().catch(() => ({}));
@@ -2310,7 +2312,10 @@ function DashboardPropietarioInner() {
               {guardandoPerfil ? 'Guardando…' : 'Guardar perfil'}
             </button>
             {perfilMsg && (
-              <p className={`text-xs mt-2 ${perfilMsg.startsWith('✓') ? 'text-success' : 'text-danger'}`}>{perfilMsg}</p>
+              <p className={`text-xs mt-2 ${
+                perfilMsg.startsWith('✓ Guardado. Te falta') ? 'text-warning'
+                  : perfilMsg.startsWith('✓') ? 'text-success' : 'text-danger'
+              }`}>{perfilMsg}</p>
             )}
           </div>
         </div>
