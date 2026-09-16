@@ -127,12 +127,13 @@ export async function uploadFile(filename: string, contentType: string, data: Ar
       {
         folder,
         resource_type: esPdfSubida ? 'raw' : 'image',
-        // Las imágenes van SIN extensión (Cloudinary la añade según el formato que entrega).
-        // Los PDF la CONSERVAN: son `raw`, y sin extensión la URL entregada no termina en
-        // `.pdf`, que era justo lo que hacía que la app no los reconociera como PDF y los
-        // pintara como imagen rota. Los 8 archivos ya subidos siguen sin extensión y se
-        // detectan por el segmento `/raw/upload/` (ver lib/documento-tipo.ts).
-        public_id: esPdfSubida ? filename : filename.replace(/\.[^.]+$/, ''),
+        // SIN extensión, también para los PDF. Se intentó conservarla para que la URL
+        // terminara en `.pdf`, y hubo que revertirlo: esta cuenta de Cloudinary tiene
+        // restringida la entrega de archivos reconocidos como PDF, así que el mismo
+        // archivo servía 200 sin extensión y pasaba a 401 con ella. Comprobado subiendo
+        // uno de prueba contra producción. La app reconoce los PDF por el segmento
+        // `/raw/upload/` (ver lib/documento-tipo.ts), que no depende del nombre.
+        public_id: filename.replace(/\.[^.]+$/, ''),
       },
       (err, res) => { if (err || !res) reject(err ?? new Error('Upload failed')); else resolve(res); }
     ).end(buffer);
