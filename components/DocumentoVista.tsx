@@ -23,6 +23,7 @@ import { useState } from 'react';
 import VisorFotos from '@/components/VisorFotos';
 import { IconExport } from '@/components/Icons';
 import { urlDescarga } from '@/lib/cloudinary-descarga';
+import { esPdfUrl } from '@/lib/documento-tipo';
 
 type Props = {
   label: string;
@@ -36,9 +37,10 @@ type Props = {
   className?: string;
 };
 
-function esPdf(url: string): boolean {
-  return url.split('?')[0].toLowerCase().endsWith('.pdf');
-}
+// El criterio vive en lib/documento-tipo.ts: los PDF de este proyecto se suben como
+// `raw` y hasta hace poco llegaban SIN extensión, así que mirar solo `.pdf` daba
+// falso siempre y el documento se pintaba como <img> roto.
+const esPdf = esPdfUrl;
 
 export default function DocumentoVista({ label, url, nota, titulo, vacio, className }: Props) {
   const [visor, setVisor] = useState(false);

@@ -19,6 +19,7 @@
 // servicio logístico (ver PUT /api/reservas/[id]). Es el mismo endpoint y el mismo
 // cuerpo que usa la acción rápida de la vista HOY: una sola vía de aprobación.
 import { useEffect, useState } from 'react';
+import { esPdfUrl } from '@/lib/documento-tipo';
 import CalendarioReservas, { type ReservaCalendario } from '@/components/CalendarioReservas';
 import ReservaMostradorModal from '@/components/ReservaMostradorModal';
 import BotonPaqueteDocumentos from '@/components/BotonPaqueteDocumentos';
@@ -456,7 +457,7 @@ export default function ReservasSeccion() {
                   <div key={d.label} className="bg-surface rounded-2xl p-3 border border-border">
                     <p className="text-[11px] font-semibold text-ink/50 uppercase tracking-wide mb-2">{d.label}</p>
                     {d.url ? (
-                      d.url.toLowerCase().endsWith('.pdf') ? (
+                      esPdfUrl(d.url) ? (
                         <a href={d.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 text-sm text-accent hover:underline">📄 Ver PDF</a>
                       ) : (
                         <a href={d.url} target="_blank" rel="noopener noreferrer" className="block">

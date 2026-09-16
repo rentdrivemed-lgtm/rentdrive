@@ -1,4 +1,5 @@
 import sharp from 'sharp';
+import { esPdfUrl } from '@/lib/documento-tipo';
 import { getAnthropic } from './anthropic';
 import { normalizarOrientacion } from './blur-placas';
 import { descargarAcotado } from './descarga-remota';
@@ -110,7 +111,9 @@ export async function fetchAsBase64(url: string, opts?: { ladoMaxPx?: number }):
     maxBytes: MAX_DESCARGA_BYTES,
   });
 
-  const esPdf = ct === 'application/pdf' || (!ct && url.toLowerCase().split('?')[0].endsWith('.pdf'));
+  // `esPdfUrl` mira TAMBIÉN el segmento `/raw/upload/`: los PDF subidos antes de que se
+  // conservara la extensión no terminan en `.pdf` y, sin esa señal, se trataban como imagen.
+  const esPdf = ct === 'application/pdf' || (!ct && esPdfUrl(url));
   if (esPdf) {
     if (buf.subarray(0, 5).toString('ascii') !== '%PDF-') {
       throw new Error('El archivo se declara como PDF pero no tiene una cabecera PDF válida (posible descarga corrupta)');

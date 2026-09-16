@@ -17,6 +17,7 @@
 // comprometidos: si no se pudieron cargar (403 del área `reservas`), el calendario queda
 // en SOLO LECTURA en vez de dejar editar a ciegas.
 import { useEffect, useRef, useState } from 'react';
+import { esPdfUrl } from '@/lib/documento-tipo';
 import CalendarioDisponibilidad from '@/components/CalendarioDisponibilidad';
 import PolizaVehiculoAdmin from '@/components/PolizaVehiculoAdmin';
 import VisorFotos, { type FotoVisor } from '@/components/VisorFotos';
@@ -1193,7 +1194,7 @@ export default function VehiculosSeccion({ miId, vehiculoInicial }: {
                       );
                     }
                     if (!data || !('url' in data) || !data.url) return null;
-                    const isPdf = data.url.toLowerCase().endsWith('.pdf');
+                    const isPdf = esPdfUrl(data.url);
                     const rev = docRevisiones[key] || { estado: 'pendiente', nota: '' };
                     const isReviewing = revisandoDoc?.key === key;
                     const isLoading = docAccionando === key;

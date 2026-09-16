@@ -119,11 +119,21 @@ export type UploadOpts = {
 
 export async function uploadFile(filename: string, contentType: string, data: ArrayBuffer | Buffer, opts?: UploadOpts): Promise<UploadResult> {
   const buffer = data instanceof ArrayBuffer ? Buffer.from(data) : data;
-  const folder = opts?.folder || (contentType === 'application/pdf' ? 'docs' : filename.startsWith('doc-') ? 'docs' : 'uploads');
+  const esPdfSubida = contentType === 'application/pdf';
+  const folder = opts?.folder || (esPdfSubida ? 'docs' : filename.startsWith('doc-') ? 'docs' : 'uploads');
 
   const result = await new Promise<{ secure_url: string; public_id: string }>((resolve, reject) => {
     cloudinary.uploader.upload_stream(
-      { folder, resource_type: contentType === 'application/pdf' ? 'raw' : 'image', public_id: filename.replace(/\.[^.]+$/, '') },
+      {
+        folder,
+        resource_type: esPdfSubida ? 'raw' : 'image',
+        // Las imágenes van SIN extensión (Cloudinary la añade según el formato que entrega).
+        // Los PDF la CONSERVAN: son `raw`, y sin extensión la URL entregada no termina en
+        // `.pdf`, que era justo lo que hacía que la app no los reconociera como PDF y los
+        // pintara como imagen rota. Los 8 archivos ya subidos siguen sin extensión y se
+        // detectan por el segmento `/raw/upload/` (ver lib/documento-tipo.ts).
+        public_id: esPdfSubida ? filename : filename.replace(/\.[^.]+$/, ''),
+      },
       (err, res) => { if (err || !res) reject(err ?? new Error('Upload failed')); else resolve(res); }
     ).end(buffer);
   });

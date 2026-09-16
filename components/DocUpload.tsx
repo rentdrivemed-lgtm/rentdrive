@@ -1,5 +1,6 @@
 'use client';
 import { useRef, useState } from 'react';
+import { esPdfUrl } from '@/lib/documento-tipo';
 import RecortarImagen from '@/components/RecortarImagen';
 import { IconPhoto } from '@/components/Icons';
 
@@ -83,7 +84,7 @@ export default function DocUpload({ label, value, onChange, required, soloImagen
     if (camaraRef.current) camaraRef.current.value = '';
   };
 
-  const isPdf = value?.toLowerCase().endsWith('.pdf');
+  const isPdf = esPdfUrl(value);
   const fileName = value ? value.split('/').pop() : '';
 
   return (
