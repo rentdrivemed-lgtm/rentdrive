@@ -972,6 +972,13 @@ function initDb(db: Database.Database) {
   try { db.exec("ALTER TABLE cotizaciones ADD COLUMN vehiculo_id INTEGER REFERENCES vehiculos(id)"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE cotizaciones ADD COLUMN fecha_inicio TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE cotizaciones ADD COLUMN fecha_fin TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  // ── Contratos digitales (fase 2: la firma) ─────────────────────────────────
+  // Va al FINAL y con `CREATE TABLE IF NOT EXISTS` en un `exec` propio —y no dentro
+  // del bloque grande de arriba— para que una base ya existente lo reciba igual y
+  // para no chocar con otras migraciones en curso sobre este mismo archivo.
+  // Reflejo en Postgres: supabase/schema.sql, bloque «contratos digitales».
+  crearTablasContratos(db);
+
   migrarCotizacionesReservaOpcional(db);
   migrarUsuariosEstadoArchivada(db);
   migrarPicoPlacaActivar(db);
@@ -1341,4 +1348,186 @@ function parsePicoPlacaSeguro(valor: string | undefined): { activo?: boolean; di
   } catch {
     return null;
   }
+}
+
+// ── Contratos digitales: documento congelado + sus bloques de firma ─────────
+//
+// Fase 2 del módulo de contratos (la fase 1 solo generaba texto al vuelo, sin
+// guardar nada). Ver lib/contratos-firma.ts para el detalle de cómo se usa.
+//
+// Dos ideas que explican la forma de estas dos tablas:
+//
+//  1. UN CONTRATO FIRMADO ES INMUTABLE. `contratos.texto` guarda el documento
+//     palabra por palabra tal como se firmó, y `datos_json` el snapshot del que
+//     salió — mismo criterio que `actas_servicio`. Si después cambia la dirección
+//     del cliente o el precio del vehículo, el documento firmado sigue diciendo lo
+//     que decía. No hay edición ni regeneración en sitio: para cambiarlo se anula
+//     (estado 'anulado', la fila NO se borra) y se emite otro con `version` +1.
+//
+//  2. UN DOCUMENTO TIENE VARIAS FIRMAS, DE PERSONAS DISTINTAS Y EN MOMENTOS
+//     DISTINTOS. Por eso las firmas viven en su propia tabla y no en columnas de
+//     `contratos` (que es como están hoy las cuentas de cobro, donde SOLO firma el
+//     propietario). El caso que lo obliga es el acta de entrega y devolución: sus
+//     firmas de devolución se recogen días después, en otro lugar.
+//
+// `contrato_firmas.firma_hash` es el sello de integridad (HMAC-SHA256 con
+// FIRMA_SECRET) y cubre el TEXTO ÍNTEGRO del documento: alterar una cláusula en la
+// base después de firmada hace que el sello deje de verificar.
+function crearTablasContratos(db: Database.Database) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS contratos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      reserva_id INTEGER NOT NULL REFERENCES reservas(id),
+      vehiculo_id INTEGER NOT NULL REFERENCES vehiculos(id),
+      -- Partes congeladas: quién era el propietario y quién el cliente EN EL MOMENTO
+      -- de emitir. Se guardan aquí (y no se recalculan desde la reserva) para que un
+      -- cambio de dueño del vehículo no reescriba quién firmó.
+      propietario_id INTEGER NOT NULL REFERENCES usuarios(id),
+      cliente_id INTEGER NOT NULL REFERENCES usuarios(id),
+      tipo TEXT NOT NULL CHECK(tipo IN ('agencia','otrosi-agencia','arrendamiento','otrosi-arrendamiento','acta-entrega','pagare')),
+      -- Consecutivo propio del archivo (CAR-000012, CAR-000012-R2…). Es distinto del
+      -- número que el texto del documento cita en sus cláusulas.
+      numero TEXT NOT NULL DEFAULT '',
+      -- 1 = original; 2, 3… = reemisión tras anular la anterior, que se conserva.
+      version INTEGER NOT NULL DEFAULT 1,
+      estado TEXT NOT NULL DEFAULT 'pendiente' CHECK(estado IN ('pendiente','firmado','anulado')),
+      texto TEXT NOT NULL,
+      datos_json TEXT NOT NULL DEFAULT '{}',
+      -- Campos que quedaron en blanco al emitir, con su origen. Los subsanables
+      -- bloquean la firma; los estructurales se le muestran al firmante.
+      faltantes_json TEXT NOT NULL DEFAULT '[]',
+      generado_por INTEGER REFERENCES usuarios(id),
+      generado_por_nombre TEXT DEFAULT '',
+      -- Fecha en que se completó el ÚLTIMO bloque de firma. '' mientras falte alguno.
+      firmado_en TEXT DEFAULT '',
+      anulado_en TEXT DEFAULT '',
+      anulado_por INTEGER REFERENCES usuarios(id),
+      anulado_por_nombre TEXT DEFAULT '',
+      motivo_anulacion TEXT DEFAULT '',
+      -- ── Vía por la que se firmó (fase 4: el mostrador) ────────────────────
+      -- '' = todavía sin decidir · 'digital' = firma electrónica por bloques ·
+      -- 'papel' = se imprimió, se firmó a mano y se subió el escaneado.
+      -- Las dos vías son EXCLUYENTES: en cuanto se pone el primer trazo digital la
+      -- columna queda en 'digital' y el escaneado se rechaza, y al revés. Ver
+      -- lib/contratos-papel.ts.
+      via_firma TEXT NOT NULL DEFAULT '' CHECK(via_firma IN ('','digital','papel')),
+      -- Metadatos del escaneado (los BYTES viven en contrato_escaneos, para que un
+      -- SELECT * FROM contratos de un listado no arrastre varios MB por fila).
+      papel_subido_en TEXT DEFAULT '',
+      papel_subido_por INTEGER REFERENCES usuarios(id),
+      papel_subido_por_nombre TEXT DEFAULT '',
+      papel_nombre_archivo TEXT DEFAULT '',
+      papel_mime TEXT DEFAULT '',
+      papel_bytes INTEGER NOT NULL DEFAULT 0,
+      -- SHA-256 de los bytes del escaneado (hex).
+      papel_sha256 TEXT DEFAULT '',
+      -- Sello HMAC-SHA256 ('cp1:<hex>') del acto de firma en papel: cubre el texto
+      -- íntegro del documento Y la huella del escaneado. Ver lib/contratos-papel.ts.
+      papel_sello TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now', 'localtime')),
+      UNIQUE(reserva_id, tipo, version)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_contratos_reserva ON contratos(reserva_id);
+    CREATE INDEX IF NOT EXISTS idx_contratos_cliente ON contratos(cliente_id);
+    CREATE INDEX IF NOT EXISTS idx_contratos_propietario ON contratos(propietario_id);
+
+    CREATE TABLE IF NOT EXISTS contrato_firmas (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contrato_id INTEGER NOT NULL REFERENCES contratos(id),
+      -- Identificador del bloque dentro del documento ('arrendatario',
+      -- 'devolucion-agente'…). Ver lib/contratos-bloques.ts.
+      bloque TEXT NOT NULL,
+      etiqueta TEXT NOT NULL DEFAULT '',
+      rol TEXT NOT NULL CHECK(rol IN ('agente','cliente','propietario','codeudor')),
+      momento TEXT NOT NULL DEFAULT 'suscripcion' CHECK(momento IN ('suscripcion','entrega','devolucion')),
+      orden INTEGER NOT NULL DEFAULT 1,
+      -- Quién DEBE firmar. NULL cuando no es una cuenta concreta: EL AGENTE (lo firma
+      -- cualquier admin con el permiso 'contratos_firmar_agente') y los codeudores.
+      usuario_esperado_id INTEGER REFERENCES usuarios(id),
+      nombre_esperado TEXT DEFAULT '',
+      documento_esperado TEXT DEFAULT '',
+      -- '' = bloque pendiente. Un bloque firmado NO se puede volver a firmar.
+      firmada_en TEXT NOT NULL DEFAULT '',
+      firmada_por_id INTEGER REFERENCES usuarios(id),
+      firma_nombre_confirmado TEXT DEFAULT '',
+      -- PNG en data URI (trazo en pantalla o imagen cargada y normalizada).
+      firma_imagen TEXT DEFAULT '',
+      firma_metodo TEXT DEFAULT '',
+      firma_ip TEXT DEFAULT '',
+      firma_user_agent TEXT DEFAULT '',
+      -- Sello HMAC-SHA256 ('cf1:<hex>') sobre el texto íntegro del documento y el
+      -- acto de firma. Ver lib/contratos-firma.ts → calcularSelloFirma.
+      firma_hash TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now', 'localtime')),
+      UNIQUE(contrato_id, bloque)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_contrato_firmas_contrato ON contrato_firmas(contrato_id);
+
+    -- ── El escaneado del contrato firmado A MANO (fase 4: el mostrador) ──────
+    -- El dueño lo pidió así: «debe permitir descargar para imprimir, que se firme y
+    -- que se escanee para ser guardado dentro de la misma base de datos». Por eso el
+    -- archivo se guarda AQUÍ y no en Cloudinary: es el original probatorio de un
+    -- contrato, y una dirección de CDN puede caducar, cambiar o ser sustituida sin
+    -- que el sello se entere. Guardando los bytes, el sello cubre el archivo mismo.
+    --
+    -- Tabla aparte (1 a 1) a propósito: la tabla contratos se lee con SELECT * en los
+    -- listados, y un escaneado de varios MB por fila haría que listar los documentos
+    -- de una reserva cargara decenas de MB en memoria.
+    --
+    -- INMUTABLE, igual que una firma: una vez registrado no se reemplaza (UNIQUE por
+    -- contrato e inserción única). Si el escaneado quedó mal, se anula el documento y
+    -- se emite otro — que es el único camino que admite este módulo para cambiar algo.
+    CREATE TABLE IF NOT EXISTS contrato_escaneos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contrato_id INTEGER NOT NULL REFERENCES contratos(id),
+      -- Contenido del archivo en base64 (PDF o imagen). El tipo se reconoce por los
+      -- BYTES, nunca por lo que declare el cliente (ver lib/contratos-papel.ts).
+      contenido_base64 TEXT NOT NULL,
+      mime TEXT NOT NULL DEFAULT '',
+      bytes INTEGER NOT NULL DEFAULT 0,
+      sha256 TEXT NOT NULL DEFAULT '',
+      nombre_archivo TEXT DEFAULT '',
+      subido_por INTEGER REFERENCES usuarios(id),
+      subido_por_nombre TEXT DEFAULT '',
+      subido_ip TEXT DEFAULT '',
+      subido_user_agent TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now', 'localtime')),
+      UNIQUE(contrato_id)
+    );
+  `);
+
+  // Bases que ya recibieron la fase 2 (la tabla `contratos` sin las columnas del
+  // mostrador): mismo patrón defensivo que el resto del archivo. Reflejo en Postgres:
+  // supabase/schema.sql, bloque «contratos digitales».
+  //
+  // ⚠️ El CHECK de `via_firma` NO viaja en el ALTER: SQLite no admite añadir una
+  // restricción a una tabla existente y reconstruirla por esto sería desproporcionado.
+  // Quien escribe esa columna es siempre lib/contratos-papel.ts / lib/contratos-firma.ts,
+  // con valores cerrados; las bases nuevas sí nacen con el CHECK.
+  for (const col of [
+    "via_firma TEXT NOT NULL DEFAULT ''",
+    "papel_subido_en TEXT DEFAULT ''",
+    'papel_subido_por INTEGER REFERENCES usuarios(id)',
+    "papel_subido_por_nombre TEXT DEFAULT ''",
+    "papel_nombre_archivo TEXT DEFAULT ''",
+    "papel_mime TEXT DEFAULT ''",
+    'papel_bytes INTEGER NOT NULL DEFAULT 0',
+    "papel_sha256 TEXT DEFAULT ''",
+    "papel_sello TEXT DEFAULT ''",
+  ]) {
+    try { db.exec(`ALTER TABLE contratos ADD COLUMN ${col}`); } catch { /* ya existe */ }
+  }
+
+  // Contratos que ya tenían firmas electrónicas ANTES de que existiera `via_firma`: se
+  // les marca la vía que efectivamente usaron, para que la exclusión con el mostrador
+  // funcione también con ellos. Idempotente (solo toca los que están en '').
+  try {
+    db.exec(`
+      UPDATE contratos SET via_firma = 'digital'
+      WHERE via_firma = ''
+        AND EXISTS (SELECT 1 FROM contrato_firmas f WHERE f.contrato_id = contratos.id AND f.firmada_en <> '')
+    `);
+  } catch { /* la tabla de firmas todavía no existe */ }
 }

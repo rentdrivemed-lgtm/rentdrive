@@ -10,6 +10,7 @@ export const dynamic = 'force-dynamic';
 const CLAVES = [
   'admin_whatsapp', 'pico_placa', 'comision_plataforma_pct', 'empresa_nombre', 'empresa_nit',
   'referido_habilitado', 'referido_recompensa_referrer', 'referido_recompensa_referido',
+  'iva_activo', 'iva_pct',
 ] as const;
 
 // Cada clave de config pertenece a UN grupo, y cada grupo exige SU PROPIO permiso.
@@ -26,7 +27,23 @@ const CAMPO_PERMISO: Record<(typeof CLAVES)[number], 'config_editar_operativo' |
   referido_habilitado: 'config_editar_financiero',
   referido_recompensa_referrer: 'config_editar_financiero',
   referido_recompensa_referido: 'config_editar_financiero',
+  // El IVA decide cuánto se le cobra al cliente y qué dice el contrato: financiero.
+  iva_activo: 'config_editar_financiero',
+  iva_pct: 'config_editar_financiero',
 };
+
+// Validación en el SERVIDOR de la tarifa de IVA. La tarifa se guarda en PORCENTAJE
+// ENTERO ('19'), no en fracción (ver lib/contratos-calculo.ts), y sale impresa en
+// letras dentro de un contrato («a la tarifa del diecinueve por ciento (19%)»): un
+// 19,5 o un 300 no se podrían escribir. La validación del panel no basta —esta ruta
+// se puede llamar directo— y el resto de claves no tiene validador porque son texto
+// libre o ya lo valida quien las consume.
+function ivaPctInvalido(valor: string): boolean {
+  const v = valor.trim();
+  if (v === '') return false; // vaciar la clave = volver al valor por defecto
+  const n = Number(v);
+  return !Number.isFinite(n) || !Number.isInteger(n) || n < 0 || n > 100;
+}
 
 // LECTURA COMÚN A CUALQUIER ADMIN — decidido a propósito, NO es un descuido.
 // Este GET no se gatea con el área "config" porque lo consumen tres pantallas que no
@@ -75,6 +92,10 @@ export async function PUT(req: NextRequest) {
     if (!puede(nivel, permiso, extra)) {
       return NextResponse.json({ error: 'No tienes permiso para esta sección.' }, { status: 403 });
     }
+  }
+
+  if (typeof body.iva_pct === 'string' && ivaPctInvalido(body.iva_pct)) {
+    return NextResponse.json({ error: 'La tarifa de IVA debe ser un número entero entre 0 y 100 (ej. 19).' }, { status: 400 });
   }
 
   const cambiadas: string[] = [];

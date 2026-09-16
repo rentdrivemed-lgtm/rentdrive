@@ -9,6 +9,13 @@
 //     `todo_riesgo` de los vehículos que todavía la conservan.
 //   · Cliente → su cédula y su licencia del perfil, más los documentos que subió
 //     en cada reserva (documento de identidad y licencia, frente y dorso).
+//   · CONTRATOS DIGITALES, según el papel que la persona tenga en cada uno (fase 3
+//     del módulo de contratos): al PROPIETARIO, su contrato de agencia comercial y
+//     los otrosí que son sus órdenes de servicio; al CLIENTE, su contrato de
+//     arrendamiento, sus otrosí, el pagaré con su carta de instrucciones y las actas
+//     de entrega y devolución. Cada uno va como PDF generado en el momento desde el
+//     texto congelado (lib/contrato-pdf.ts), y si se firmó en el mostrador va también
+//     el ejemplar escaneado tal como se subió.
 //
 // No hace falta decidir de antemano "es propietario" o "es cliente": se arma con lo
 // que la persona TENGA. Un propietario que además alquiló un carro alguna vez sale
@@ -33,6 +40,10 @@ import { descargarAcotado } from './descarga-remota';
 import { esUrlFotoSegura } from './fotos-servicio';
 import { crearZip, type EntradaZip } from './zip';
 import { leerPoliza, CLAVE_POLIZA, POLIZA_LABEL } from './poliza-vehiculo';
+import { leerContrato, leerFirmas, tituloDocumento } from './contratos-firma';
+import { leerEscaneo, extensionEscaneo, escaneoEsImagen } from './contratos-papel';
+import { contratoPDFBuffer } from './contrato-pdf';
+import { TIPOS_DOCUMENTO, type TipoDocumento } from './contratos-datos';
 
 // ── Topes ───────────────────────────────────────────────────────────────────
 //
@@ -56,6 +67,16 @@ export const MAX_BYTES_ARCHIVO = 15 * 1024 * 1024;
  * y lo que sobra se anota en el índice en vez de tumbar el proceso.
  */
 export const MAX_BYTES_TOTAL = 40 * 1024 * 1024;
+/**
+ * Máximo de contratos que se generan en un paquete.
+ *
+ * Cada PDF se arma ENTERO en memoria (jsPDF) antes de entrar al zip, así que este
+ * número, y no el de archivos, es el que acota el pico de la generación. Una persona
+ * con muchas reservas tiene seis documentos por reserva; 20 cubre varias operaciones
+ * completas y lo que sobre queda anotado en el índice, como cualquier otro excedente.
+ */
+export const MAX_CONTRATOS = 20;
+
 /** Descargas simultáneas. Suficiente para que no tarde y poco para no saturar la salida. */
 const LOTE = 4;
 const TIMEOUT_DESCARGA_MS = 15_000;
@@ -109,6 +130,22 @@ export type DocumentoPaquete = {
   url: string;
 };
 
+/**
+ * Un contrato digital que le corresponde a esta persona. NO trae ni el texto ni el
+ * PDF: el documento se genera al armar el paquete, no al listarlo (igual que los
+ * documentos de URL, que aquí solo se enumeran y se bajan después).
+ */
+export type ContratoPaquete = {
+  /** Ruta dentro del zip SIN extensión. */
+  ruta: string;
+  etiqueta: string;
+  contratoId: number;
+  /** El papel que tiene ESTA persona en ESTE documento. */
+  papel: 'propietario' | 'cliente';
+  /** ¿Se firmó en el mostrador? Entonces también va su escaneado. */
+  tieneEscaneado: boolean;
+};
+
 export type ListaPaquete = {
   persona: PersonaPaquete;
   documentos: DocumentoPaquete[];
@@ -117,6 +154,10 @@ export type ListaPaquete = {
   reservas: number;
   /** Documentos detectados que NO entraron por el tope de `MAX_ARCHIVOS`. */
   excedentes: DocumentoPaquete[];
+  /** Contratos digitales de la persona, ya repartidos por su papel en cada uno. */
+  contratos: ContratoPaquete[];
+  /** Contratos detectados que NO entraron por el tope de `MAX_CONTRATOS`. */
+  contratosExcedentes: ContratoPaquete[];
 };
 
 export type OmisionPaquete = { ruta: string; etiqueta: string; motivo: string };
@@ -331,6 +372,12 @@ export function listarDocumentosPersona(db: Database.Database, personaId: number
   const vistas = new Set<string>();
   const unicos = docs.filter(d => (vistas.has(d.url) ? false : (vistas.add(d.url), true)));
 
+  // ── Contratos digitales ──
+  // Tienen su PROPIO tope (`MAX_CONTRATOS`) y no consumen el de los archivos de URL:
+  // son de otra naturaleza (no se descargan de ningún lado, se generan) y lo que acota
+  // su costo es la memoria de jsPDF, no las conexiones de salida.
+  const contratos = listarContratosPersona(db, persona.id, raiz);
+
   return {
     persona: {
       id: persona.id, nombre: persona.nombre, correo: persona.correo, rol: persona.rol,
@@ -340,7 +387,86 @@ export function listarDocumentosPersona(db: Database.Database, personaId: number
     excedentes: unicos.slice(MAX_ARCHIVOS),
     vehiculos: vehiculos.length,
     reservas: reservas.length,
+    contratos: contratos.slice(0, MAX_CONTRATOS),
+    contratosExcedentes: contratos.slice(MAX_CONTRATOS),
   };
+}
+
+// ── Contratos digitales: qué le toca a cada quien ───────────────────────────
+//
+// El reparto lo confirmó el dueño y es por PAPEL, no por rol de la cuenta: quien es
+// propietario del vehículo de la operación se lleva la mitad de la agencia comercial;
+// quien fue el arrendatario, la del arrendamiento. Una persona que sea las dos cosas
+// —alquiló un carro ajeno y además tiene el suyo publicado— recibe las DOS mitades,
+// con el mismo criterio que ya usa el resto de este módulo: el paquete se arma con lo
+// que la persona TENGA, sin que nadie tenga que acordarse de pedir las dos.
+//
+// El papel se decide contra `contratos.propietario_id` / `contratos.cliente_id`, que
+// son las columnas CONGELADAS al emitir. Si el vehículo cambió de dueño después, el que
+// firmó sigue recibiendo lo que firmó y el dueño nuevo no hereda un contrato ajeno.
+
+/** Documentos que le corresponden al PROPIETARIO del vehículo (EL EMPRESARIO). */
+const TIPOS_PROPIETARIO: readonly TipoDocumento[] = ['agencia', 'otrosi-agencia'];
+/** Documentos que le corresponden al CLIENTE (EL ARRENDATARIO / EL OTORGANTE). */
+const TIPOS_CLIENTE: readonly TipoDocumento[] = ['arrendamiento', 'otrosi-arrendamiento', 'pagare', 'acta-entrega'];
+
+/** Nombre corto y legible de cada documento, para el archivo dentro del zip. */
+const NOMBRE_ARCHIVO_CONTRATO: Record<TipoDocumento, string> = {
+  'agencia': 'contrato-de-agencia-comercial',
+  'otrosi-agencia': 'otrosi-orden-de-servicio',
+  'arrendamiento': 'contrato-de-arrendamiento',
+  'otrosi-arrendamiento': 'otrosi-del-arrendamiento',
+  'acta-entrega': 'acta-de-entrega-y-devolucion',
+  'pagare': 'pagare-y-carta-de-instrucciones',
+};
+
+type FilaContratoPaquete = {
+  id: number; reserva_id: number; tipo: TipoDocumento; numero: string; version: number;
+  estado: string; via_firma: string; firmado_en: string; propietario_id: number; cliente_id: number;
+};
+
+/**
+ * Los contratos digitales de una persona, ya repartidos por su papel en cada uno.
+ *
+ * Los ANULADOS entran también: son parte de lo que esa persona firmó y el PDF los marca
+ * como tales en grande (mismo criterio que las cuentas de cobro anuladas de
+ * contabilidad, que tampoco se borran). Van al final del orden para que, si se llega al
+ * tope, lo primero que se conserve sea lo vigente.
+ */
+export function listarContratosPersona(db: Database.Database, personaId: number, raiz: string): ContratoPaquete[] {
+  const filas = db.prepare(`
+    SELECT id, reserva_id, tipo, numero, version, estado, via_firma, firmado_en, propietario_id, cliente_id
+    FROM contratos
+    WHERE (propietario_id = ? AND tipo IN (${TIPOS_PROPIETARIO.map(() => '?').join(',')}))
+       OR (cliente_id = ? AND tipo IN (${TIPOS_CLIENTE.map(() => '?').join(',')}))
+    ORDER BY CASE estado WHEN 'anulado' THEN 1 ELSE 0 END, reserva_id, id
+  `).all(personaId, ...TIPOS_PROPIETARIO, personaId, ...TIPOS_CLIENTE) as FilaContratoPaquete[];
+
+  return filas.flatMap(f => {
+    // Blindaje contra un `tipo` que no esté en el catálogo (una fila escrita a mano en
+    // la base): sin esto, `NOMBRE_ARCHIVO_CONTRATO[tipo]` sería `undefined` y la ruta
+    // del zip quedaría con un "undefined" dentro.
+    if (!(TIPOS_DOCUMENTO as readonly string[]).includes(f.tipo)) return [];
+    const esPropietario = Number(f.propietario_id) === personaId && TIPOS_PROPIETARIO.includes(f.tipo);
+    const papel: 'propietario' | 'cliente' = esPropietario ? 'propietario' : 'cliente';
+    const carpeta = `${raiz}/${papel === 'propietario' ? 'Contratos-como-propietario' : 'Contratos-como-cliente'}`;
+    const reserva = `reserva-${String(f.reserva_id).padStart(4, '0')}`;
+    const numero = segmentoLegible(f.numero || `id${f.id}`, 24) || `id${f.id}`;
+    const anulado = f.estado === 'anulado';
+    const estadoTexto = anulado
+      ? 'ANULADO'
+      : f.estado === 'firmado'
+        ? (f.via_firma === 'papel' ? `firmado en papel el ${String(f.firmado_en || '').slice(0, 10)}` : `firmado el ${String(f.firmado_en || '').slice(0, 10)}`)
+        : 'pendiente de firma';
+    return [{
+      ruta: `${carpeta}/${reserva}-${NOMBRE_ARCHIVO_CONTRATO[f.tipo]}-${numero}${anulado ? '-anulado' : ''}`,
+      etiqueta: `${tituloDocumento(f.tipo)} ${f.numero}${f.version > 1 ? ` (versión ${f.version})` : ''}`
+        + ` — reserva #${f.reserva_id} — ${estadoTexto}`,
+      contratoId: f.id,
+      papel,
+      tieneEscaneado: f.via_firma === 'papel',
+    }];
+  });
 }
 
 // ── Descarga y armado ───────────────────────────────────────────────────────
@@ -413,6 +539,57 @@ async function traerDocumento(url: string, ruta: string): Promise<{ buffer: Buff
   }
 }
 
+/**
+ * Genera el PDF de UN contrato (y, si se firmó en el mostrador, su escaneado) para
+ * meterlos al zip.
+ *
+ * Nunca lanza: un documento que no se pueda generar se devuelve como `{ error }` y el
+ * paquete sigue, igual que un archivo caído. Un contrato roto no puede dejar a una
+ * persona sin su carpeta entera.
+ *
+ * ⚠️ Memoria: `doc.output('arraybuffer')` ya devuelve una copia propia del documento y
+ * `Buffer.from(ArrayBuffer)` NO copia otra vez (envuelve el mismo bloque). El escaneado
+ * sí se copia al decodificar el base64, y por eso se lee SOLO cuando hace falta y se
+ * deja salir de alcance en cuanto entra al zip.
+ */
+async function generarContratoParaPaquete(
+  db: Database.Database, cont: ContratoPaquete,
+): Promise<{ archivos: Array<{ ruta: string; etiqueta: string; datos: Buffer }> } | { error: string }> {
+  try {
+    const contrato = leerContrato(db, cont.contratoId);
+    if (!contrato) return { error: 'el documento ya no está en el sistema' };
+
+    // El escaneado solo se lee cuando se va a incrustar (es una imagen): si es un PDF
+    // se adjunta aparte y no hace falta traerlo dos veces a memoria.
+    const escaneoParaPdf = cont.tieneEscaneado && escaneoEsImagen(contrato.papel_mime)
+      ? leerEscaneo(db, cont.contratoId)
+      : null;
+
+    const pdf = await contratoPDFBuffer(
+      { contrato, firmas: leerFirmas(db, cont.contratoId), escaneo: escaneoParaPdf },
+      { generadoPara: 'el paquete de documentos de la persona' },
+    );
+    const archivos: Array<{ ruta: string; etiqueta: string; datos: Buffer }> = [
+      { ruta: `${cont.ruta}.pdf`, etiqueta: cont.etiqueta, datos: Buffer.from(pdf) },
+    ];
+
+    if (cont.tieneEscaneado) {
+      const escaneo = escaneoParaPdf ?? leerEscaneo(db, cont.contratoId);
+      if (escaneo) {
+        archivos.push({
+          ruta: `${cont.ruta}-firmado-a-mano.${extensionEscaneo(escaneo.mime)}`,
+          etiqueta: `${cont.etiqueta} — ejemplar firmado a mano (escaneado)`,
+          datos: Buffer.from(escaneo.contenido_base64, 'base64'),
+        });
+      }
+    }
+    return { archivos };
+  } catch (e) {
+    console.error(`[paquete-documentos] no se pudo generar el contrato ${cont.contratoId}:`, e instanceof Error ? e.message : e);
+    return { error: 'no se pudo generar el PDF de este documento' };
+  }
+}
+
 function lineasIndice(titulo: string, filas: string[]): string[] {
   if (filas.length === 0) return [];
   return ['', titulo, ...filas.map(f => `  ${f}`)];
@@ -426,7 +603,7 @@ function lineasIndice(titulo: string, filas: string[]): string[] {
  */
 export async function construirPaquete(
   lista: ListaPaquete,
-  contexto: { generadoPor: string; fechaHora: string; fechaISO: string },
+  contexto: { generadoPor: string; fechaHora: string; fechaISO: string; db: Database.Database },
 ): Promise<ResultadoPaquete> {
   const entradas: EntradaZip[] = [];
   const omitidos: OmisionPaquete[] = [];
@@ -482,6 +659,51 @@ export async function construirPaquete(
     omitidos.push({ ruta: doc.ruta, etiqueta: doc.etiqueta, motivo: `el paquete admite como máximo ${MAX_ARCHIVOS} archivos` });
   }
 
+  // ── Contratos digitales ──
+  //
+  // Van DESPUÉS de las descargas y de uno en uno a propósito: cada PDF se arma entero en
+  // memoria (jsPDF) y generar cuatro en paralelo multiplicaría el pico por cuatro en el
+  // único contenedor que sirve el sitio. Comparten el presupuesto de tiempo y el tope de
+  // peso con el resto del paquete, y un documento que falle se anota y no tumba nada,
+  // igual que un archivo caído.
+  let contratosIncluidos = 0;
+  for (const cont of lista.contratos) {
+    if (Date.now() > limite) {
+      cortadoPorTiempo = true;
+      omitidos.push({ ruta: cont.ruta, etiqueta: cont.etiqueta, motivo: 'no dio tiempo de generarlo, vuelve a pedir el paquete' });
+      continue;
+    }
+    if (bytesTotal >= MAX_BYTES_TOTAL) {
+      cortadoPorPeso = true;
+      omitidos.push({ ruta: cont.ruta, etiqueta: cont.etiqueta, motivo: 'el paquete ya llegó a su tamaño máximo' });
+      continue;
+    }
+
+    const generado = await generarContratoParaPaquete(contexto.db, cont);
+    if ('error' in generado) {
+      omitidos.push({ ruta: cont.ruta, etiqueta: cont.etiqueta, motivo: generado.error });
+      continue;
+    }
+    for (const archivo of generado.archivos) {
+      if (bytesTotal + archivo.datos.length > MAX_BYTES_TOTAL) {
+        cortadoPorPeso = true;
+        omitidos.push({ ruta: archivo.ruta, etiqueta: archivo.etiqueta, motivo: 'el paquete ya llegó a su tamaño máximo' });
+        continue;
+      }
+      let nombre = archivo.ruta;
+      for (let n = 2; nombresUsados.has(nombre); n++) nombre = archivo.ruta.replace(/(\.[^.]+)$/, `-${n}$1`);
+      nombresUsados.add(nombre);
+      entradas.push({ nombre, datos: archivo.datos });
+      incluidos.push({ ruta: nombre, etiqueta: archivo.etiqueta, bytes: archivo.datos.length });
+      bytesTotal += archivo.datos.length;
+    }
+    contratosIncluidos++;
+  }
+
+  for (const cont of lista.contratosExcedentes) {
+    omitidos.push({ ruta: cont.ruta, etiqueta: cont.etiqueta, motivo: `el paquete admite como máximo ${MAX_CONTRATOS} contratos` });
+  }
+
   const kb = (n: number) => `${Math.max(1, Math.round(n / 1024))} KB`;
   const texto = [
     'PAQUETE DE DOCUMENTOS — DrivePass',
@@ -495,6 +717,7 @@ export async function construirPaquete(
     '',
     `Vehículos a su nombre: ${lista.vehiculos}`,
     `Reservas como cliente: ${lista.reservas}`,
+    `Contratos incluidos:   ${contratosIncluidos} de ${lista.contratos.length + lista.contratosExcedentes.length}`,
     `Archivos incluidos:    ${incluidos.length}`,
     `Archivos omitidos:     ${omitidos.length}`,
     `Peso total:            ${kb(bytesTotal)}`,
@@ -514,6 +737,12 @@ export async function construirPaquete(
     '',
     'Nota: la carátula de la póliza todo riesgo la expide y la carga DrivePass',
     '(no el propietario); aparece por vehículo cuando ya se cargó en el sistema.',
+    '',
+    'Contratos: cada PDF se genera desde el texto que quedó congelado al firmarlo, con',
+    'las firmas en su sitio y una constancia de verificación al final. Los documentos',
+    'anulados se incluyen marcados como tales: no están vigentes, se conservan como',
+    'constancia de lo que decían. Los que se firmaron en el mostrador traen además el',
+    'ejemplar escaneado tal como se subió.',
     '',
   ].join('\n');
 

@@ -5,7 +5,7 @@
 // de la plataforma) — la liquidación es un comprobante interno, no una factura DIAN,
 // porque la mayoría de propietarios son personas naturales sin RUT de facturación.
 import type Database from 'better-sqlite3';
-import { createHash, createHmac, timingSafeEqual } from 'crypto';
+import { createHash } from 'crypto';
 import { getConfig } from './operaciones';
 import { emitirFacturaDataico, dataicoHabilitado } from './dataico';
 import { enviarCorreo } from './email';
@@ -18,6 +18,7 @@ import {
   type ConceptoLinea, type TipoConcepto, type TotalesLiquidacion,
 } from './liquidacion-calculo';
 import { registrarAuditoriaEstricta } from './permisos';
+import { igualesEnTiempoConstante, sellarHmac } from './firma-sello';
 
 type DB = Database.Database;
 
@@ -618,23 +619,15 @@ function notificarLiquidacionEditada(
 
 const FIRMA_HASH_PREFIJO_V2 = 'v2:';
 
-// Secreto del MAC. Mismo criterio exacto que `JWT_SECRET` en lib/auth.ts: obligatorio en
-// producción (si falta, truena explícito en el primer uso real en vez de sellar en
-// silencio con un valor conocido), con un valor de desarrollo para que el entorno local
-// siga funcionando sin configurar nada.
+// El secreto del MAC (`FIRMA_SECRET`) y la comparación en tiempo constante viven en
+// lib/firma-sello.ts desde que hay un segundo documento firmable en la plataforma (los
+// contratos digitales, lib/contratos-firma.ts): las dos familias tienen que usar el
+// MISMO secreto. La BASE CANÓNICA sí sigue siendo propia de cada documento y se calcula
+// aquí abajo.
 //
 // ⚠️ DESPLIEGUE: hay que crear `FIRMA_SECRET` en Railway ANTES de desplegar esto. Sin la
 // variable, en producción no se podrá firmar ninguna cuenta de cobro nueva (error 500
 // explícito). Las firmas v1 que ya existen se siguen verificando y pagando sin el secreto.
-const FIRMA_SECRET_DEV = 'rentdrive-dev-firma-secret';
-function firmaSecreto(): string {
-  const s = (process.env.FIRMA_SECRET || '').trim();
-  if (s) return s;
-  if (process.env.NODE_ENV === 'production') {
-    throw new Error('FIRMA_SECRET no está configurado. Es obligatorio en producción para sellar las cuentas de cobro firmadas.');
-  }
-  return FIRMA_SECRET_DEV;
-}
 
 // Campos que entran en el sello. Se pide la fila entera de `remisiones` (o de
 // `remisiones_anuladas`, que copia las mismas columnas) para que verificar sea siempre
@@ -710,7 +703,7 @@ function baseCanonicaV2(r: RemisionSellable): string {
 }
 
 function hashRemisionV2(r: RemisionSellable): string {
-  return FIRMA_HASH_PREFIJO_V2 + createHmac('sha256', firmaSecreto()).update(baseCanonicaV2(r)).digest('hex');
+  return FIRMA_HASH_PREFIJO_V2 + sellarHmac(baseCanonicaV2(r));
 }
 
 // Sella una remisión que se acaba de firmar. Siempre emite v2.
@@ -725,14 +718,6 @@ export type VerificacionFirma = {
   alg: 'v1' | 'v2' | 'ninguno';
   motivo: string;
 };
-
-// Comparación en tiempo constante (los dos hex tienen el mismo largo o ni se comparan).
-function igualesEnTiempoConstante(a: string, b: string): boolean {
-  const ba = Buffer.from(a, 'utf8');
-  const bb = Buffer.from(b, 'utf8');
-  if (ba.length !== bb.length) return false;
-  return timingSafeEqual(ba, bb);
-}
 
 /**
  * Verifica el sello de integridad de una cuenta de cobro FIRMADA (o de su copia anulada).

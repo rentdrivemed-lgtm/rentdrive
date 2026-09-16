@@ -228,6 +228,7 @@ export default function ContabilidadPanel() {
   const [config, setConfig] = useState({
     comision_plataforma_pct: '', empresa_nombre: '', empresa_nit: '',
     referido_habilitado: '', referido_recompensa_referrer: '', referido_recompensa_referido: '',
+    iva_activo: '', iva_pct: '',
   });
   const [cargandoConfig, setCargandoConfig] = useState(false);
   const [guardandoConfig, setGuardandoConfig] = useState(false);
@@ -361,6 +362,8 @@ export default function ContabilidadPanel() {
           referido_habilitado: d.config?.referido_habilitado || '',
           referido_recompensa_referrer: d.config?.referido_recompensa_referrer || '',
           referido_recompensa_referido: d.config?.referido_recompensa_referido || '',
+          iva_activo: d.config?.iva_activo || '',
+          iva_pct: d.config?.iva_pct || '',
         });
       }
     } catch { /* silencioso — se puede reintentar cambiando de pestaña */ }
@@ -753,6 +756,13 @@ export default function ContabilidadPanel() {
       }
       if (config.referido_recompensa_referido && (!Number.isFinite(rInv) || rInv < 0)) {
         setConfigMsg('La recompensa para el invitado debe ser un número mayor o igual a 0.');
+        return;
+      }
+      // La tarifa va en PORCENTAJE ENTERO (19 = 19%), no en fracción: sale impresa
+      // en letras dentro del contrato y un decimal no se podría escribir.
+      const ivaPct = Number(config.iva_pct);
+      if (config.iva_pct && (!Number.isFinite(ivaPct) || !Number.isInteger(ivaPct) || ivaPct < 0 || ivaPct > 100)) {
+        setConfigMsg('La tarifa de IVA debe ser un número entero entre 0 y 100 (ej. 19).');
         return;
       }
       const res = await fetch('/api/config', {
@@ -2267,6 +2277,23 @@ export default function ContabilidadPanel() {
               <label className="text-[11px] text-ink/50 block mb-1">NIT</label>
               <input value={config.empresa_nit} onChange={e => setConfig(c => ({ ...c, empresa_nit: e.target.value }))}
                 placeholder="900.000.000-0" className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink" />
+            </div>
+            <div className="border-t border-border pt-4">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] text-ink/50">IVA sobre el alquiler</label>
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input type="checkbox" checked={config.iva_activo === 'true'}
+                    onChange={e => setConfig(c => ({ ...c, iva_activo: e.target.checked ? 'true' : 'false' }))} />
+                  <span className="text-ink/70">Cobrar IVA</span>
+                </label>
+              </div>
+              <input value={config.iva_pct} inputMode="numeric" disabled={config.iva_activo !== 'true'}
+                onChange={e => setConfig(c => ({ ...c, iva_pct: e.target.value.replace(/[^0-9]/g, '') }))}
+                placeholder="19" className="w-full mt-2 bg-surface border border-border rounded-xl px-3 py-2 text-sm text-ink disabled:opacity-50" />
+              <p className="text-[11px] text-ink/40 mt-1">
+                Tarifa en porcentaje entero (19 = 19%). Con el IVA apagado, el contrato y el otrosí dicen expresamente
+                que el canon no se adiciona con el impuesto — no queda ninguna línea de &quot;IVA $0&quot;.
+              </p>
             </div>
             <div className="flex items-center gap-3">
               <button onClick={guardarConfig} disabled={guardandoConfig || cargandoConfig}
