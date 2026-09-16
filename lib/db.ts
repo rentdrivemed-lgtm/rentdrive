@@ -638,6 +638,17 @@ function initDb(db: Database.Database) {
       usuario_id             INTEGER REFERENCES usuarios(id),
       contenido_inapropiado  INTEGER DEFAULT 0,
       motivo                 TEXT DEFAULT '',
+      -- Tapado MANUAL de placa (app/api/admin/tapar-placa): cuando la detección
+      -- automática falla, un admin marca los rectángulos a mano sobre la foto y el
+      -- servidor estampa el sello de marca. placa_origen_url es la foto ORIGINAL
+      -- (la que estaba publicada antes del primer tapado manual): se conserva en
+      -- Cloudinary y cada tapado nuevo se deriva de ELLA, nunca de la ya tapada —
+      -- si no, los sellos se apilarían uno sobre otro.
+      placa_origen_url       TEXT DEFAULT '',
+      placa_manual           INTEGER DEFAULT 0,
+      placa_manual_usuario_id INTEGER REFERENCES usuarios(id),
+      placa_manual_at        TEXT DEFAULT '',
+      placa_manual_zonas     TEXT DEFAULT '',
       created_at             TEXT DEFAULT (datetime('now', 'localtime'))
     );
 
@@ -841,6 +852,12 @@ function initDb(db: Database.Database) {
   try { db.exec("ALTER TABLE fotos_moderacion ADD COLUMN url_normalizada TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE fotos_moderacion ADD COLUMN usuario_id INTEGER REFERENCES usuarios(id)"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE fotos_moderacion ADD COLUMN contenido_inapropiado INTEGER DEFAULT 0"); } catch { /* ya existe */ }
+  // Tapado manual de placa (ver el CREATE TABLE de arriba y app/api/admin/tapar-placa).
+  try { db.exec("ALTER TABLE fotos_moderacion ADD COLUMN placa_origen_url TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE fotos_moderacion ADD COLUMN placa_manual INTEGER DEFAULT 0"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE fotos_moderacion ADD COLUMN placa_manual_usuario_id INTEGER REFERENCES usuarios(id)"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE fotos_moderacion ADD COLUMN placa_manual_at TEXT DEFAULT ''"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE fotos_moderacion ADD COLUMN placa_manual_zonas TEXT DEFAULT ''"); } catch { /* ya existe */ }
   migrarFotosModeracionNormalizada(db);
 
   try { db.exec("ALTER TABLE usuarios ADD COLUMN celular TEXT DEFAULT ''"); } catch { /* ya existe */ }

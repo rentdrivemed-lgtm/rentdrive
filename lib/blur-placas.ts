@@ -1,6 +1,10 @@
 import Anthropic from '@anthropic-ai/sdk';
 import sharp from 'sharp';
 import { analizarAmarillo, zonasAmarillasEn, type CandidatoPlaca, type MascaraAmarilla } from './detectar-placa-color';
+// El prefijo del motivo de retención vive en el módulo PURO lib/tapar-placa.ts porque también
+// lo lee la vía manual (app/api/admin/tapar-placa) para distinguir "puede haber una placa a la
+// vista" de "la IA vio contenido inapropiado" — las dos cosas caen hoy en la misma columna.
+import { PREFIJO_REVISION_PLACA } from './tapar-placa';
 
 const client = new Anthropic();
 
@@ -226,8 +230,14 @@ type PlacaDeteccion = {
   motivoInapropiado?: string;
 };
 
-/** Rectángulo final a tapar, en píxeles enteros de la imagen. */
-type Rectangulo = { left: number; top: number; width: number; height: number };
+/**
+ * Rectángulo final a tapar, en píxeles enteros de la imagen.
+ *
+ * Se exporta para el camino MANUAL (lib/tapar-placa-imagen.ts): cuando la detección
+ * automática se rinde y marca la foto para revisión (`revisionManual`), un admin marca las
+ * placas a mano y el servidor estampa el MISMO sello con `taparZonas` de aquí abajo.
+ */
+export type Rectangulo = { left: number; top: number; width: number; height: number };
 
 /**
  * Resultado de UNA llamada a Claude para detección de placas/moderación, ya con el
@@ -910,7 +920,7 @@ async function generarRectanguloMarca(width: number, height: number): Promise<Bu
  * Compone los rectángulos de marca (100% opacos) sobre la imagen, todos en la MISMA llamada
  * a `sharp().composite([...])`.
  */
-async function taparZonas(buffer: Buffer, rectangulos: Rectangulo[]): Promise<Buffer> {
+export async function taparZonas(buffer: Buffer, rectangulos: Rectangulo[]): Promise<Buffer> {
   const capas = await Promise.all(
     rectangulos.map(async (r) => ({
       input: await generarRectanguloMarca(r.width, r.height),
@@ -1271,7 +1281,7 @@ export async function detectarYDifuminarPlaca(
 
   const revisionManual = motivosRevision.length > 0;
   const motivoRevision = revisionManual
-    ? `Foto pendiente de revisión manual de placas: ${[...new Set(motivosRevision)].join(' ')}`
+    ? `${PREFIJO_REVISION_PLACA} ${[...new Set(motivosRevision)].join(' ')}`
     : undefined;
 
   if (zonas.length === 0) {

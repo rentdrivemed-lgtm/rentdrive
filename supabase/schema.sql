@@ -589,8 +589,22 @@ CREATE TABLE IF NOT EXISTS fotos_moderacion (
   usuario_id            INTEGER REFERENCES usuarios(id),
   contenido_inapropiado INTEGER DEFAULT 0,
   motivo                TEXT DEFAULT '',
+  -- Tapado MANUAL de placa (app/api/admin/tapar-placa). `placa_origen_url` es la foto
+  -- ORIGINAL (la publicada antes del primer tapado manual): se conserva en Cloudinary y
+  -- cada tapado nuevo se deriva de ELLA, nunca de la ya tapada, para no apilar sellos.
+  placa_origen_url        TEXT DEFAULT '',
+  placa_manual            INTEGER DEFAULT 0,
+  placa_manual_usuario_id INTEGER REFERENCES usuarios(id),
+  placa_manual_at         TEXT DEFAULT '',
+  placa_manual_zonas      TEXT DEFAULT '',
   created_at            TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
 );
+-- Bases ya desplegadas (paridad con los ALTER idempotentes de lib/db.ts):
+ALTER TABLE fotos_moderacion ADD COLUMN IF NOT EXISTS placa_origen_url        TEXT DEFAULT '';
+ALTER TABLE fotos_moderacion ADD COLUMN IF NOT EXISTS placa_manual            INTEGER DEFAULT 0;
+ALTER TABLE fotos_moderacion ADD COLUMN IF NOT EXISTS placa_manual_usuario_id INTEGER REFERENCES usuarios(id);
+ALTER TABLE fotos_moderacion ADD COLUMN IF NOT EXISTS placa_manual_at         TEXT DEFAULT '';
+ALTER TABLE fotos_moderacion ADD COLUMN IF NOT EXISTS placa_manual_zonas      TEXT DEFAULT '';
 -- Nota: `vehiculos.contenido_revision` (INTEGER/boolean, default 0) y
 -- `vehiculos.contenido_revision_motivo` (TEXT, default '') son columnas nuevas de
 -- esta misma feature (moderación de contenido) que pertenecen a la tabla `vehiculos`.
