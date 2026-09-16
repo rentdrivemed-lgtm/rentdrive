@@ -1,15 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import sharp from 'sharp';
-import { detectarPlacasPorColor, type CandidatoPlaca } from './detectar-placa-color';
+import { analizarAmarillo, zonasAmarillasEn, type CandidatoPlaca, type MascaraAmarilla } from './detectar-placa-color';
 
 const client = new Anthropic();
-
-type PlacaDeteccion = {
-  plate_visible: boolean;
-  region?: { x_pct: number; y_pct: number; w_pct: number; h_pct: number };
-  inappropriate_content: boolean;
-  inappropriate_reason?: string;
-};
 
 /**
  * Normaliza la orientación EXIF de una imagen "horneando" la rotación en los
@@ -54,6 +47,7 @@ export async function normalizarOrientacion(
   }
 }
 
+
 export type ResultadoDeteccion = {
   buffer: Buffer;
   difuminada: boolean;
@@ -81,52 +75,162 @@ export type ResultadoDeteccion = {
    */
   moderacionEvaluada: boolean;
   /**
-   * Por qué camino se resolvió la UBICACIÓN de la placa en esta foto. Sirve para telemetría
-   * y, sobre todo, para que un consumidor pueda distinguir un tapado PRECISO (el rectángulo
-   * amarillo real, vía detector de color) de uno IMPRECISO Y GRANDE (la banda de respaldo,
-   * centrada en una pista sesgada). Lo usa app/api/admin/reprocesar-placas para no volver a
-   * estampar una banda enorme sobre una foto que ya salió de una corrida anterior.
-   *  - `color`            : candidato(s) de color que concuerdan con la pista de la IA.
-   *  - `color_con_banda`  : ídem, pero se sumó además la banda — porque los candidatos tapados
- *                         eran débiles, o porque la ventana tenía más candidatos de los que
- *                         se pueden tapar y alguno de los descartados tenía forma de placa.
-   *  - `color_sin_pista`  : la IA no reportó placa; se tapó un candidato de color claro.
-   *  - `color_sin_ia`     : la IA no pudo opinar; se tapó un candidato de color claro.
-   *  - `banda_respaldo`   : solo la banda (el color no encontró nada que concuerde).
-   *  - `ninguna`          : no se tapó nada (`difuminada` es false).
+   * true cuando el sistema SABE que puede haber quedado una placa sin tapar bien y no tiene
+   * forma automática de arreglarlo: la IA reporta una placa del vehículo protagonista que
+   * ningún píxel confirma y de la que ella misma no está segura (`confidence: "low"`), o el
+   * tapado calculado era tan grande que hubo que recortarlo. En esos casos NO se estampa una
+   * banda gigante "por si acaso" (ver el comentario de arquitectura de
+   * `detectarYDifuminarPlaca`): se deja constancia para que la foto pase por revisión
+   * manual antes de publicarse. Los call sites lo tratan igual que `moderacionEvaluada:false`.
    */
-  via: 'color' | 'color_con_banda' | 'color_sin_pista' | 'color_sin_ia' | 'banda_respaldo' | 'ninguna';
+  revisionManual: boolean;
+  motivoRevision?: string;
+  /**
+   * Por qué camino se resolvió la UBICACIÓN de las placas de esta foto. Sirve para telemetría
+   * y, sobre todo, para que un consumidor pueda distinguir un tapado MEDIDO SOBRE LOS PÍXELES
+   * (el rectángulo amarillo real, vía detector de color) de uno que solo se apoya en la caja
+   * que devolvió la IA. Lo usa app/api/admin/reprocesar-placas para no volver a estampar
+   * sellos sobre una foto que ya salió de una corrida anterior.
+   *  - `color`         : todas las zonas tapadas son rectángulos amarillos medidos en los píxeles.
+   *  - `color_y_ia`    : algunas medidas por color y otras solo por la caja de la IA.
+   *  - `ia`            : todas las zonas salen solo de la caja de la IA (nada confirmado por píxeles).
+   *  - `color_sin_ia`  : la IA no pudo opinar; se taparon candidatos de color claros.
+   *  - `ninguna`       : no se tapó nada (`difuminada` es false).
+   */
+  via: 'color' | 'color_y_ia' | 'ia' | 'color_sin_ia' | 'ninguna';
 };
 
-const PROMPT_DETECCION = `You are inspecting a photo of a car (this is one photo out of a set: front, back, sides, interior) to find and locate its license plate (Colombian plate, e.g. "ABC123" — yellow background with black bold characters for private cars).
-
-IMPORTANT: search actively for the plate at ANY angle the photo happens to show — do NOT assume the car is facing front. Colombian plates can appear:
-- On the FRONT of the car, usually mounted below the grille/logo, above or on the front bumper.
-- On the BACK of the car, usually mounted above or below the tail lights, on the trunk/bumper area.
-- At a 3/4 or side angle, partially foreshortened, smaller, or at a slant — still look for it.
-- Sometimes partially obscured, reflective, small in the frame, or off-center — still try to find it if any part of it is legible or even just visible.
-
-EXCEPTION — full/pure side-profile photos: if the photo shows a full lateral profile of the car (the entire side of the vehicle, doors/wheels/side panels) and NEITHER the front bumper/grille NOR the rear bumper/trunk is actually visible in the frame, then the plate is physically NOT in the shot in most such photos — set plate_visible to false in that case. Only set it to true for a side-profile-looking photo if you can genuinely see a sliver of the front or rear of the car at a 3/4 angle (even a small corner of the bumper/grille/tail lights) AND the plate itself is visible on that sliver — do not infer a plate's location just because "a car should have one somewhere".
-
-CONFIDENCE: this rule exists ONLY to stop you from pointing at a BACKGROUND object (a building, sign, billboard, window, graffiti, storefront, or anything not physically attached to the car) and mistaking it for a plate — never mark plate_visible true just because "there should be a plate somewhere in this scene". It is NOT a reason to discard a plate that is genuinely mounted on the car's own bodywork just because it is small, blurry, partially cut off, reflective, or seen at a steep angle — for that case, keep applying the "search actively at ANY angle" instruction above: if you can tell that what you're looking at is a real plate panel on the vehicle itself (even if you can only make out a sliver of it, or can't read every character), set plate_visible to true with your best-estimate region rather than requiring full legibility. Only set plate_visible to false here when you cannot tell it is the vehicle's actual plate panel at all (i.e. it's ambiguous or looks like a background object) — not merely because the plate itself is hard to see clearly.
-
-SELF-CHECK before answering: re-examine the region you are about to return and confirm it sits physically ON the vehicle's own bodywork (bumper/grille/trunk/tailgate), not on the background (building, street, another object) — if the region would fall outside the car's body, set plate_visible to false instead.
-
-SEPARATELY, also check the photo for content moderation: this platform is a car rental marketplace (DrivePass, Medellín) and photos here are supposed to be regular photos of a car (exterior, interior, engine bay, etc.), sometimes with a person standing near/in the car (owner showing off the car, a normal selfie with the vehicle, someone sitting in the driver's seat, etc. — all of that is completely normal and fine). Only flag it as inappropriate if the photo clearly, unambiguously shows sexual or explicit content that has no place on a car rental listing — e.g. nudity, sexually explicit poses/acts, or pornographic material. Be conservative: a normal photo of a person (clothed, in any normal pose) near/in/around the car is NEVER inappropriate, even if they're not the main subject. When in doubt, do NOT flag it — false positives here are costly (they block a legitimate car listing), so only flag content that is obviously, unambiguously explicit.
-
-Think step by step first (reason briefly about which side of the car is shown and where the plate would be, and separately whether the content is appropriate), THEN respond with ONLY valid JSON, no markdown, as the very last part of your answer:
-{"plate_visible":boolean,"region":{"x_pct":number,"y_pct":number,"w_pct":number,"h_pct":number},"inappropriate_content":boolean,"inappropriate_reason":string}
-Rules:
-- x_pct, y_pct = top-left corner of the plate bounding box, as % of image width/height (0–100)
-- w_pct, h_pct = plate bounding box size, as % of image width/height
-- If genuinely no plate is visible anywhere in the photo (e.g. interior shot, extreme close-up of a body panel), set plate_visible to false and omit region
-- If a plate IS visible, return a TIGHT bounding box around the plate's actual edges, with only a small ~5% padding on every side to account for imprecision in your own estimate — do NOT return a box much larger than the plate itself (e.g. do not include large parts of the bumper/grille around it). The code that consumes this region adds its own additional safety margin afterward, so your box should track the plate closely, not be generous
-- Do not skip the back of the car just because it's not the "obvious" angle — the plate is just as often on the back as on the front
-- inappropriate_content: true ONLY for clearly explicit/sexual content as described above; false for every normal car/interior/person photo (this should be false the vast majority of the time)
-- inappropriate_reason: a short (one sentence) explanation ONLY if inappropriate_content is true; omit or leave empty otherwise`;
+// ---------------------------------------------------------------------------------------
+// REGLA DE COORDENADAS IMPRESA SOBRE LA IMAGEN
+// ---------------------------------------------------------------------------------------
 
 /**
- * Resultado de UNA llamada a Claude para detección de placa/moderación, ya con el
+ * Margen (fracción del lado corto) que se agrega arriba y a la izquierda para dibujar la
+ * regla, con un piso en píxeles para que los números sigan siendo legibles en fotos chicas.
+ */
+const REGLA_MARGEN_FRACCION = 0.07;
+const REGLA_MARGEN_MIN_PX = 56;
+
+/**
+ * Devuelve una copia de la foto con una REGLA (0–100) impresa en un margen blanco añadido
+ * arriba y a la izquierda, más líneas guía magenta tenues cada 10 unidades sobre la propia
+ * foto. Esta copia es SOLO para mandársela a la IA; el sello se estampa siempre sobre la
+ * imagen limpia.
+ *
+ * POR QUÉ EXISTE (medido, no intuición): pidiéndole a Claude la caja de la placa como
+ * porcentajes "a ojo", su coordenada VERTICAL viene sistemáticamente corrida — es el sesgo
+ * de 13.6–27.6 puntos porcentuales que documentaba la versión anterior de este archivo y que
+ * volvió a reproducirse al reescribirlo (foto trasera 3/4 del Tucson: placa real en y≈46%, la
+ * IA respondió y≈60%; foto de frente del mismo carro: placa del furgón del fondo en y≈37%, la
+ * IA respondió y≈21% con un prompt que le pedía no irse hacia abajo — o sea que el error no
+ * tiene ni siquiera un signo estable, solo es grande). Con la regla impresa el modelo deja de
+ * estimar números y los LEE de la imagen: en esas mismas fotos el error del centro bajó de
+ * 14–16 puntos porcentuales a 2–4.
+ *
+ * Ese cambio es lo que permite que el respaldo "no hay confirmación de píxeles" sea una caja
+ * acotada alrededor de la placa y ya no la banda gigante que tapaba media foto.
+ */
+async function conReglaDeCoordenadas(buffer: Buffer, imgW: number, imgH: number): Promise<Buffer> {
+  const margen = Math.max(REGLA_MARGEN_MIN_PX, Math.round(Math.min(imgW, imgH) * REGLA_MARGEN_FRACCION));
+  const lienzoW = imgW + margen;
+  const lienzoH = imgH + margen;
+  const fuente = Math.round(margen * 0.42);
+
+  const partes: string[] = [];
+  for (let p = 0; p <= 100; p += 5) {
+    const grande = p % 10 === 0;
+    const x = margen + (p / 100) * imgW;
+    const y = margen + (p / 100) * imgH;
+    const largo = margen * (grande ? 0.45 : 0.22);
+    partes.push(`<line x1="${x.toFixed(1)}" y1="${(margen - largo).toFixed(1)}" x2="${x.toFixed(1)}" y2="${margen}" stroke="#000" stroke-width="${grande ? 3 : 2}"/>`);
+    partes.push(`<line x1="${(margen - largo).toFixed(1)}" y1="${y.toFixed(1)}" x2="${margen}" y2="${y.toFixed(1)}" stroke="#000" stroke-width="${grande ? 3 : 2}"/>`);
+    if (grande) {
+      partes.push(`<text x="${x.toFixed(1)}" y="${(margen - largo - 4).toFixed(1)}" fill="#000" font-size="${fuente}" font-family="sans-serif" text-anchor="middle">${p}</text>`);
+      partes.push(`<text x="${(margen - largo - 4).toFixed(1)}" y="${(y + fuente * 0.35).toFixed(1)}" fill="#000" font-size="${fuente}" font-family="sans-serif" text-anchor="end">${p}</text>`);
+      if (p > 0 && p < 100) {
+        partes.push(`<line x1="${x.toFixed(1)}" y1="${margen}" x2="${x.toFixed(1)}" y2="${lienzoH}" stroke="#FF00FF" stroke-opacity="0.35" stroke-width="2"/>`);
+        partes.push(`<line x1="${margen}" y1="${y.toFixed(1)}" x2="${lienzoW}" y2="${y.toFixed(1)}" stroke="#FF00FF" stroke-opacity="0.35" stroke-width="2"/>`);
+      }
+    }
+  }
+
+  const svg = Buffer.from(
+    `<svg width="${lienzoW}" height="${lienzoH}" xmlns="http://www.w3.org/2000/svg">${partes.join('')}</svg>`,
+  );
+  return sharp({ create: { width: lienzoW, height: lienzoH, channels: 3, background: '#FFFFFF' } })
+    .composite([
+      { input: await sharp(buffer).jpeg({ quality: 90 }).toBuffer(), left: margen, top: margen },
+      { input: svg, left: 0, top: 0 },
+    ])
+    .jpeg({ quality: 85 })
+    .toBuffer();
+}
+
+const PROMPT_DETECCION = `You are the privacy filter of a car-rental marketplace (DrivePass, Medellín, Colombia). Your job is to find EVERY licence plate visible in this photo, so the system can cover each one with an opaque sticker before publishing the photo.
+
+READING THE COORDINATES — the image has a measuring RULER printed on it
+A white margin was added on the TOP and on the LEFT of the photo, with a ruler marked from 0 to 100, and magenta guide lines are drawn across the photo every 10 units. USE THEM. To locate something, look at which magenta vertical line it sits next to (that is the horizontal coordinate: 0 at the left edge of the photo, 100 at the right edge) and which magenta horizontal line it sits next to (that is the vertical coordinate: 0 at the top edge of the photo, 100 at the bottom edge). Do NOT estimate these numbers by eye — READ them off the printed ruler and the guide lines. The photo area itself is {{W}} x {{H}} pixels; the white margins are NOT part of it and are not counted in the 0-100 scale.
+
+WHAT COUNTS AS A PLATE
+- Any vehicle registration plate physically mounted on any vehicle in the frame, front or rear.
+- Include the plates of OTHER vehicles (parked cars, taxis, buses, vans, motorcycles, anything in the background), not only the car being advertised. A third party's plate is personal data too and must be covered.
+- Colombian plates: private cars = yellow panel with black characters, roughly 2:1. Public-service vehicles = white panel. Motorcycles = smaller, roughly 1.3:1, with the characters on two lines. Foreign or other formats count as well.
+- A plate counts even if it is small, blurry, seen at a steep angle, partially occluded by a tree or by another car, or you can only make out some of its characters. Assume the published photo is much sharper than what you are seeing, so report plates you can barely read too.
+- If a plate is ALREADY covered by an opaque dark-navy rectangle with an orange border (this system's own sticker), do NOT report it — it is already handled. Report only plates whose surface is still visible.
+
+DO NOT INVENT A PLATE
+Reporting a plate that is not there is expensive: the system then covers that spot, spoiling the photo, while the real plate (if any) stays exposed. A car shot in pure side profile, a car whose bumper is out of frame, or a car with no front plate mounted (very common in Colombia) simply has no visible plate — return an empty list in that case. Never point at a fence, a wall, a sign, a reflection, a headlight or an empty patch of bumper.
+
+FOR EVERY PLATE, reading the numbers off the ruler:
+- x_pct / y_pct: the plate's LEFT edge and TOP edge on the 0-100 scale.
+- w_pct / h_pct: the plate's width and its height on that same scale (width on the horizontal ruler, height on the vertical ruler). Give a TIGHT box around the plate panel's four physical edges, with no extra padding — the code adds its own safety margin afterwards.
+- guides: which magenta guide lines the plate lies between, e.g. "between vertical 90 and 100, between horizontal 40 and 50". Fill this in BEFORE the numbers and make the numbers agree with it.
+- anchor: a few words on what the plate is mounted on and what is immediately above and below it. If you cannot describe that, your box is a guess: lower the confidence or drop the plate.
+- belongs_to: "subject_vehicle" for the car being advertised (the main subject of the photo), "other_vehicle" for any other vehicle.
+- colour: the colour of the plate PANEL itself as it appears in this photo — "yellow" for the yellow panel of a Colombian private vehicle, "white" for the white panel of a public-service vehicle (taxi, bus, van, truck), "other" if it is neither or you cannot tell. Judge the panel's own colour, not the vehicle's. This matters: the code confirms yellow plates against the actual yellow pixels, and if you call a white plate yellow it will put the sticker on whatever yellow object happens to be nearby instead of on the plate.
+- confidence: "high" only if you clearly see the plate panel AND you are sure of the box; "medium" if you see the plate but the box is approximate; "low" if you are not even sure it is a plate.
+- legible: true if you can read at least part of the characters.
+
+SEPARATELY, content moderation. Photos here are normal photos of a car (exterior, interior, engine bay), sometimes with a person near or inside the car (the owner showing the car, a normal selfie with the vehicle, someone in the driver's seat) — all of that is completely normal and fine. Flag the photo ONLY if it clearly and unambiguously shows sexual or explicit content that has no place in a car listing (nudity, sexually explicit poses or acts, pornography). Be conservative: a clothed person in any normal pose is NEVER inappropriate, and a false positive blocks a legitimate listing. When in doubt, do NOT flag it.
+
+Think briefly first (which vehicles are in the frame, where each plate is on the ruler, and whether the content is appropriate), THEN respond with ONLY valid JSON, no markdown, as the very last part of your answer:
+{"plates":[{"x_pct":number,"y_pct":number,"w_pct":number,"h_pct":number,"guides":"string","anchor":"string","belongs_to":"subject_vehicle"|"other_vehicle","colour":"yellow"|"white"|"other","confidence":"high"|"medium"|"low","legible":boolean}],"inappropriate_content":boolean,"inappropriate_reason":"short sentence only when inappropriate_content is true"}
+If no plate is visible anywhere in the photo, return "plates": [].`;
+
+/** Caja en porcentajes de la imagen (0–100) — mismo formato que devuelven la IA y el detector de color. */
+type CajaPct = { x_pct: number; y_pct: number; w_pct: number; h_pct: number };
+
+/** Una placa tal como la reporta la IA, ya validada. */
+type PlacaIA = {
+  caja: CajaPct;
+  deSujeto: boolean;
+  /**
+   * Color del PANEL de la placa según la IA. Decide si esta placa se puede confirmar contra la
+   * máscara amarilla: una placa BLANCA (servicio público — taxis, busetas, camiones, muy
+   * comunes en el fondo de una foto en Medellín) es invisible para el detector de color, así
+   * que cualquier amarillo que aparezca cerca es OTRA COSA. Caso real medido: en la foto de
+   * frente del Tucson la IA ubicó bien la placa blanca de una buseta estacionada al fondo y el
+   * sistema estampó el sello sobre el panel amarillo de la carrocería, 220 px a la derecha —
+   * ensuciando la foto y dejando la placa a la vista, que es exactamente el fallo que este
+   * arreglo existe para cerrar.
+   */
+  color: 'amarilla' | 'blanca' | 'otra';
+  confianza: 'alta' | 'media' | 'baja';
+  legible: boolean;
+  anchor: string;
+};
+
+type PlacaDeteccion = {
+  placas: PlacaIA[];
+  contenidoInapropiado: boolean;
+  motivoInapropiado?: string;
+};
+
+/** Rectángulo final a tapar, en píxeles enteros de la imagen. */
+type Rectangulo = { left: number; top: number; width: number; height: number };
+
+/**
+ * Resultado de UNA llamada a Claude para detección de placas/moderación, ya con el
  * parseo de JSON aplicado. Separado de `detectarYDifuminarPlaca` porque se invoca hasta
  * 2 veces por foto (1 llamada + 1 reintento técnico si la primera falla por API/JSON — ver
  * esa función) con exactamente la misma lógica de llamada + parseo.
@@ -137,16 +241,127 @@ type LlamadaClaudeResultado =
   | { ok: false; motivo: 'sin_json'; stopReason: string | null | undefined; textoRespuesta: string }
   | { ok: false; motivo: 'json_invalido'; error: unknown; stopReason: string | null | undefined; textoRespuesta: string };
 
-async function llamarClaudeDeteccionPlaca(base64: string): Promise<LlamadaClaudeResultado> {
+/**
+ * ¿Los 4 números de una caja están dentro del contrato que el prompt le pide a la IA
+ * (porcentajes 0–100, con tamaño estrictamente positivo)?
+ *
+ * Es una salida de MODELO, no un dato de confianza: puede venir con `null`, un string,
+ * `NaN`, un porcentaje > 100 o negativo (alucinación o unidades equivocadas). Sin este
+ * chequeo esos valores se propagaban hasta `rectanguloDesdeCaja` y de ahí a `sharp`:
+ *  - `y_pct:140, h_pct:4` en una imagen 1200x900 producía `{width:264, height:-63}` y
+ *    `generarRectanguloMarca` lanzaba ("Input buffer has corrupt header: svgload_buffer:
+ *    bad dimensions"); ese error sube sin try/catch y app/api/upload/route.ts respondía
+ *    500 al usuario.
+ *  - `y_pct:-20` era peor en silencio: tapaba una tira de 10px en el borde superior y
+ *    devolvía `difuminada:true, moderacionEvaluada:true`, o sea una placa perfectamente
+ *    visible reportada como foto ya procesada.
+ * Una caja fuera de rango no se "arregla" recortándola (no sabemos qué quiso decir el
+ * modelo): se descarta esa placa y la foto se resuelve con las demás + los candidatos de
+ * color, que sí son una ubicación medida sobre los píxeles.
+ */
+function rangoValido(r: { x_pct: number; y_pct: number; w_pct: number; h_pct: number }): boolean {
+  const { x_pct, y_pct, w_pct, h_pct } = r;
+  if (![x_pct, y_pct, w_pct, h_pct].every(n => typeof n === 'number' && Number.isFinite(n))) return false;
+  if (x_pct < 0 || x_pct > 100 || y_pct < 0 || y_pct > 100) return false;
+  if (w_pct <= 0 || w_pct > 100 || h_pct <= 0 || h_pct > 100) return false;
+  return true;
+}
+
+/**
+ * Proporción ancho:alto con la que se ACEPTA la caja que reporta la IA. Solo descarta
+ * geometrías absurdas (una franja larguísima, o una caja mucho más alta que ancha): una caja
+ * imposible no sirve ni siquiera como punto de partida.
+ *
+ * EL RANGO ES ANCHO A PROPÓSITO — se midió que el anterior (1.0–4.5) tiraba placas REALES:
+ *  - Foto del DEEPAL del catálogo (1206x2622): la IA reportó bien la placa de un carro de
+ *    terceros en el borde derecho como `{x:92,y:48,w:6,h:3}`. En píxeles eso es 72x79 →
+ *    aspecto 0.92, y el filtro la descartaba EN SILENCIO: la placa se publicó a la vista.
+ *    La causa es de resolución, no de criterio: el modelo lee las coordenadas de la regla
+ *    impresa (marcas cada 5 unidades) y en una foto vertical una unidad vertical son 26 px,
+ *    así que el alto de una placa chica se redondea hacia arriba y el aspecto sale aplastado.
+ *  - Una placa vista en 3/4 (la trasera del Tucson) tiene bounding box casi cuadrado por
+ *    perspectiva: 240x220 px, aspecto 1.09. También caía justo en el borde del filtro.
+ * Una caja con forma rara no se tapa a ciegas por ser aceptada acá: si ningún píxel amarillo
+ * la confirma, el margen que se le agrega y el techo `MAX_AREA_SELLO` acotan lo que se pinta.
+ */
+const ASPECTO_MIN = 0.5;
+const ASPECTO_MAX = 6;
+
+/**
+ * Tamaño (en unidades de la regla, o sea puntos porcentuales del lado) a partir del cual la
+ * FORMA de la caja de la IA significa algo y vale la pena filtrarla por proporción.
+ *
+ * El modelo devuelve las coordenadas en números enteros de la regla impresa, así que una placa
+ * chica sale como `w:3, h:3` — y en una foto vertical de 1206x2622 esos dos "3" son 36 px de
+ * ancho y 79 px de alto: una proporción de 0.46 que no describe la placa sino la cuadrícula
+ * con la que se midió. Medido en la foto del DEEPAL del catálogo: la IA ubicó BIEN la placa de
+ * un tercero en el borde derecho y el filtro de proporción la tiró dos corridas seguidas
+ * (aspecto 0.92 y 0.46), dejándola publicada. Por debajo de este umbral la caja se toma como
+ * lo único que de verdad aporta —un PUNTO y una escala aproximada— y la proporción se ignora;
+ * por encima, la caja es lo bastante grande como para que una proporción imposible sea señal
+ * de que el modelo señaló otra cosa (una valla, una ventana) y ahí sí se descarta.
+ */
+const LADO_MIN_PARA_FILTRAR_FORMA = 5;
+
+/** Proporción que descarta una caja de la IA SIEMPRE, por chica que sea: no es un panel. */
+const ASPECTO_ABSURDO_MIN = 0.15;
+const ASPECTO_ABSURDO_MAX = 10;
+
+/** Convierte el JSON crudo de la IA en placas validadas, descartando las cajas imposibles. */
+function leerPlacas(bruto: unknown, imgW: number, imgH: number): PlacaIA[] {
+  if (!bruto || typeof bruto !== 'object') return [];
+  const lista = (bruto as { plates?: unknown }).plates;
+  if (!Array.isArray(lista)) return [];
+
+  const placas: PlacaIA[] = [];
+  for (const cruda of lista) {
+    if (!cruda || typeof cruda !== 'object') continue;
+    const p = cruda as Record<string, unknown>;
+    const caja = {
+      x_pct: Number(p.x_pct), y_pct: Number(p.y_pct),
+      w_pct: Number(p.w_pct), h_pct: Number(p.h_pct),
+    };
+    if (!rangoValido(caja)) {
+      console.warn('[blur-placas] La IA devolvió una placa con coordenadas fuera de rango (se descarta esa placa):', p);
+      continue;
+    }
+    const aspecto = ((caja.w_pct / 100) * imgW) / ((caja.h_pct / 100) * imgH);
+    if (!Number.isFinite(aspecto) || aspecto < ASPECTO_ABSURDO_MIN || aspecto > ASPECTO_ABSURDO_MAX) {
+      console.warn(`[blur-placas] La IA devolvió una placa con forma imposible (aspecto ${aspecto.toFixed(2)}, fuera de ${ASPECTO_ABSURDO_MIN}–${ASPECTO_ABSURDO_MAX}) — se descarta esa placa:`, p);
+      continue;
+    }
+    const cajaGrande = caja.w_pct >= LADO_MIN_PARA_FILTRAR_FORMA && caja.h_pct >= LADO_MIN_PARA_FILTRAR_FORMA;
+    if (cajaGrande && (aspecto < ASPECTO_MIN || aspecto > ASPECTO_MAX)) {
+      console.warn(`[blur-placas] La IA devolvió una placa GRANDE con forma imposible (aspecto ${aspecto.toFixed(2)}, fuera de ${ASPECTO_MIN}–${ASPECTO_MAX}) — se descarta esa placa:`, p);
+      continue;
+    }
+    const confianzaCruda = String(p.confidence ?? '').toLowerCase();
+    const colorCrudo = String(p.colour ?? '').toLowerCase();
+    placas.push({
+      caja,
+      deSujeto: String(p.belongs_to ?? '') === 'subject_vehicle',
+      // Sin dato (respuesta vieja o campo ausente) se asume 'otra', que NO bloquea la
+      // confirmación por color: se conserva el comportamiento anterior en vez de dejar de
+      // confirmar placas amarillas por un campo que el modelo omitió.
+      color: colorCrudo === 'yellow' ? 'amarilla' : colorCrudo === 'white' ? 'blanca' : 'otra',
+      confianza: confianzaCruda === 'high' ? 'alta' : confianzaCruda === 'low' ? 'baja' : 'media',
+      legible: p.legible === true,
+      anchor: typeof p.anchor === 'string' ? p.anchor.slice(0, 120) : '',
+    });
+  }
+  return placas;
+}
+
+async function llamarClaudeDeteccionPlaca(base64: string, imgW: number, imgH: number): Promise<LlamadaClaudeResultado> {
   let text = '';
   let stopReason: string | null | undefined;
   try {
     const resp = await client.messages.create({
       model: 'claude-opus-4-8',
-      // Se pide razonar en prosa antes del JSON final (ver prompt más abajo),
-      // así que dejamos margen extra sobre el mínimo previo (1024) para que
-      // ese razonamiento no trunque la respuesta antes de cerrar el JSON.
-      max_tokens: 2048,
+      // Se pide razonar en prosa antes del JSON final (ver prompt más arriba) y ahora la
+      // respuesta puede traer VARIAS placas con sus descripciones, así que hace falta más
+      // margen que el 2048 anterior para que el JSON no se trunque antes de cerrar.
+      max_tokens: 3000,
       messages: [{
         role: 'user',
         content: [
@@ -156,7 +371,7 @@ async function llamarClaudeDeteccionPlaca(base64: string): Promise<LlamadaClaude
           },
           {
             type: 'text',
-            text: PROMPT_DETECCION,
+            text: PROMPT_DETECCION.replace('{{W}}', String(imgW)).replace('{{H}}', String(imgH)),
           },
         ],
       }],
@@ -172,15 +387,16 @@ async function llamarClaudeDeteccionPlaca(base64: string): Promise<LlamadaClaude
     // El modelo puede razonar en prosa antes del JSON final (se le pidió pensar
     // primero). El prompt es explícito en que el JSON final es la ÚLTIMA parte
     // de la respuesta, así que anclamos en la ÚLTIMA ocurrencia de la clave
-    // "plate_visible" (no la primera): si el razonamiento incluye un JSON de
-    // borrador descartado antes de la corrección final, la primera ocurrencia
-    // apuntaría a ese borrador con coordenadas equivocadas. Balanceamos llaves
-    // desde ahí hacia adelante en vez de un simple "primer { … último }" (que se
-    // rompería si el razonamiento previo contuviera alguna llave suelta).
+    // "plates" (no la primera): si el razonamiento incluye un JSON de borrador
+    // descartado antes de la corrección final, la primera ocurrencia apuntaría a
+    // ese borrador con coordenadas equivocadas. Balanceamos llaves desde ahí hacia
+    // adelante en vez de un simple "primer { … último }" (que se rompería si el
+    // razonamiento previo contuviera alguna llave suelta).
     // TODO: el balanceo de llaves no es JSON-aware (no ignora llaves dentro de
-    // strings); no bloqueante hoy porque la respuesta es JSON simple sin texto
-    // libre embebido en los valores, pero podría revisarse a futuro.
-    const claveIdx = text.lastIndexOf('"plate_visible"');
+    // strings); hoy los campos de texto libre que devuelve el modelo (`anchor`,
+    // `guides`, `inappropriate_reason`) son frases cortas sin llaves, pero es el
+    // punto a revisar si alguna vez aparece un JSON que no se pueda leer.
+    const claveIdx = text.lastIndexOf('"plates"');
     let jsonStr: string | null = null;
     if (claveIdx !== -1) {
       const inicio = text.lastIndexOf('{', claveIdx);
@@ -200,10 +416,28 @@ async function llamarClaudeDeteccionPlaca(base64: string): Promise<LlamadaClaude
       jsonStr = match ? match[0] : null;
     }
     if (jsonStr) {
-      const deteccion = JSON.parse(jsonStr) as PlacaDeteccion;
-      return { ok: true, deteccion };
+      const bruto = JSON.parse(jsonStr) as Record<string, unknown>;
+      // `plates` ausente NO es "sin placas": es una respuesta que no cumple el contrato, y
+      // tratarla como lista vacía publicaría la foto sin tapar nada. Se trata como JSON
+      // inválido para que corra el reintento y, si tampoco sirve, el camino sin IA.
+      if (!Array.isArray(bruto.plates)) {
+        return { ok: false, motivo: 'json_invalido', error: new Error('la respuesta no trae el arreglo "plates"'), stopReason, textoRespuesta: text };
+      }
+      const contenidoInapropiado = bruto.inappropriate_content === true;
+      return {
+        ok: true,
+        deteccion: {
+          placas: leerPlacas(bruto, imgW, imgH),
+          contenidoInapropiado,
+          motivoInapropiado: contenidoInapropiado
+            ? (typeof bruto.inappropriate_reason === 'string' && bruto.inappropriate_reason
+                ? bruto.inappropriate_reason
+                : 'Contenido marcado como inapropiado por la IA')
+            : undefined,
+        },
+      };
     }
-    // Sin JSON reconocible: no se pudo leer NI la placa NI la moderación de esta
+    // Sin JSON reconocible: no se pudo leer NI las placas NI la moderación de esta
     // respuesta puntual.
     return { ok: false, motivo: 'sin_json', stopReason, textoRespuesta: text };
   } catch (err) {
@@ -222,8 +456,6 @@ async function llamarClaudeDeteccionPlaca(base64: string): Promise<LlamadaClaude
  *    app/api/admin/reprocesar-placas/route.ts). No se trata como "apropiada por defecto".
  *  - Placa: sigue el camino determinístico de color (`resolverSinIA`), que SÍ puede
  *    taparla sin ninguna ayuda de la IA.
- * El texto anterior afirmaba lo contrario en las dos cosas ("fail-open", "ni difuminar
- * placa") y era simplemente falso.
  */
 function logFalloDefinitivo(r: Extract<LlamadaClaudeResultado, { ok: false }>) {
   const cola = 'la foto queda marcada para revisión manual (fail-closed en el call site) y la placa se resuelve solo con el detector determinístico de color';
@@ -236,81 +468,6 @@ function logFalloDefinitivo(r: Extract<LlamadaClaudeResultado, { ok: false }>) {
   }
 }
 
-/** Caja en porcentajes de la imagen (0–100) — mismo formato que devuelven la IA y el detector de color. */
-type CajaPct = { x_pct: number; y_pct: number; w_pct: number; h_pct: number };
-
-/** Rectángulo final a tapar, en píxeles enteros de la imagen. */
-type Rectangulo = { left: number; top: number; width: number; height: number };
-
-/**
- * Proporción ancho:alto plausible para la PISTA de la IA. Solo se usa para descartar
- * regiones geométricamente absurdas (una caja más alta que ancha, o una franja larguísima):
- * una pista con forma imposible no sirve ni siquiera como centro aproximado.
- */
-const ASPECTO_MIN = 1.0;
-const ASPECTO_MAX = 4.5;
-
-type EvaluacionRegion =
-  | { valida: true; caja: CajaPct; aspecto: number }
-  | { valida: false; motivo: 'no_visible' }
-  | { valida: false; motivo: 'fuera_de_rango' }
-  | { valida: false; motivo: 'aspecto_invalido'; aspecto: number };
-
-/**
- * ¿Los 4 números de la región están dentro del contrato que el prompt le pide a la IA
- * (porcentajes 0–100, con tamaño estrictamente positivo)?
- *
- * Es una salida de MODELO, no un dato de confianza: puede venir con `null`, un string,
- * `NaN`, un porcentaje > 100 o negativo (alucinación o unidades equivocadas). Sin este
- * chequeo esos valores se propagaban hasta `rectanguloDesdeCaja` y de ahí a `sharp`:
- *  - `y_pct:140, h_pct:4` en una imagen 1200x900 producía `{width:264, height:-63}` y
- *    `generarRectanguloMarca` lanzaba ("Input buffer has corrupt header: svgload_buffer:
- *    bad dimensions"); ese error sube sin try/catch y app/api/upload/route.ts respondía
- *    500 al usuario.
- *  - `y_pct:-20` era peor en silencio: tapaba una tira de 10px en el borde superior y
- *    devolvía `difuminada:true, moderacionEvaluada:true`, o sea una placa perfectamente
- *    visible reportada como foto ya procesada.
- * Una región fuera de rango no se "arregla" recortándola (no sabemos qué quiso decir el
- * modelo): se descarta como pista y la foto cae al camino de candidatos fuertes de color
- * (el mismo que `no_visible`), que sí es una ubicación medida sobre los píxeles.
- */
-function rangoValido(r: { x_pct: number; y_pct: number; w_pct: number; h_pct: number }): boolean {
-  const { x_pct, y_pct, w_pct, h_pct } = r;
-  if (![x_pct, y_pct, w_pct, h_pct].every(n => typeof n === 'number' && Number.isFinite(n))) return false;
-  if (x_pct < 0 || x_pct > 100 || y_pct < 0 || y_pct > 100) return false;
-  if (w_pct <= 0 || w_pct > 100 || h_pct <= 0 || h_pct > 100) return false;
-  return true;
-}
-
-/**
- * Evalúa la región que devolvió la IA como PISTA aproximada de dónde está la placa: la IA
- * debe haber dicho que hay placa visible y la caja debe tener forma plausible (en píxeles
- * reales de la imagen, no sobre los `%_pct` crudos, porque un % de ancho y un % de alto no
- * son la misma cantidad de píxeles salvo en imágenes cuadradas).
- *
- * IMPORTANTE: que esta región sea "válida" NO significa que esté bien UBICADA — ese es
- * justamente el bug documentado arriba de `detectarYDifuminarPlaca` (la `y` viene entre 13.6
- * y 27.6 puntos porcentuales más abajo de la placa real; ver `SESGO_ESPERADO_PCT`). Por eso
- * el resultado de esta función ya no se tapa directamente: se usa como pista para
- * elegir/centrar, no como verdad.
- */
-function evaluarRegion(deteccion: PlacaDeteccion, imgW: number, imgH: number): EvaluacionRegion {
-  if (!deteccion.plate_visible || !deteccion.region) {
-    return { valida: false, motivo: 'no_visible' };
-  }
-  const r = deteccion.region;
-  if (!rangoValido(r)) {
-    console.warn('[blur-placas] La IA devolvió una región con valores fuera de rango (se descarta como pista y se resuelve solo por color):', r);
-    return { valida: false, motivo: 'fuera_de_rango' };
-  }
-  const caja: CajaPct = { x_pct: r.x_pct, y_pct: r.y_pct, w_pct: r.w_pct, h_pct: r.h_pct };
-  const aspecto = ((caja.w_pct / 100) * imgW) / ((caja.h_pct / 100) * imgH);
-  if (!Number.isFinite(aspecto) || aspecto < ASPECTO_MIN || aspecto > ASPECTO_MAX) {
-    return { valida: false, motivo: 'aspecto_invalido', aspecto };
-  }
-  return { valida: true, caja, aspecto };
-}
-
 /** Centro de una caja en porcentajes. */
 function centro(caja: CajaPct): { cx: number; cy: number } {
   return { cx: caja.x_pct + caja.w_pct / 2, cy: caja.y_pct + caja.h_pct / 2 };
@@ -318,21 +475,23 @@ function centro(caja: CajaPct): { cx: number; cy: number } {
 
 /**
  * Convierte una caja en % a un rectángulo en píxeles enteros, recortado a los límites de la
- * imagen y expandido con un margen proporcional al TAMAÑO DE LA CAJA (no al de la imagen).
+ * imagen y expandido con un margen en PÍXELES por lado (`padX`/`padY`).
  *
- * `margen` es la fracción del ancho/alto de la caja que se agrega por lado. Para el camino
- * del detector de color se usa un margen modesto (la caja es precisa); la banda de respaldo
- * ya viene expandida por `bandaRespaldo` y por eso se compone con margen 0.
+ * El margen entra en píxeles y no en "% de la imagen" a propósito, y es el cambio que
+ * arregla el fallo que motivó esta reescritura: todo lo que se expresaba como porcentaje del
+ * lienzo cambiaba de tamaño real según la orientación de la foto (los mismos 45 puntos
+ * porcentuales de alto son 1361 px en una foto apaisada de 3024x4032... y 1814 px en la misma
+ * foto en vertical). Los llamadores calculan `padX`/`padY` a partir del tamaño estimado de la
+ * PLACA, que es la única escala con sentido físico acá.
  */
-function rectanguloDesdeCaja(caja: CajaPct, imgW: number, imgH: number, margen: number): Rectangulo {
+function rectanguloDesdeCaja(caja: CajaPct, imgW: number, imgH: number, padX: number, padY: number): Rectangulo {
   const boxLeft = (caja.x_pct / 100) * imgW;
   const boxTop  = (caja.y_pct / 100) * imgH;
   const boxW    = (caja.w_pct / 100) * imgW;
   const boxH    = (caja.h_pct / 100) * imgH;
 
-  // `Math.max(4, ...)` evita un margen ridículamente chico en cajas casi de 0px.
-  const padX = margen > 0 ? Math.max(4, Math.round(boxW * margen)) : 0;
-  const padY = margen > 0 ? Math.max(4, Math.round(boxH * margen)) : 0;
+  const px = Math.max(0, Math.round(padX));
+  const py = Math.max(0, Math.round(padY));
 
   // El origen se acota a `imgW-1`/`imgH-1` (no solo a >= 0): `rangoValido` valida cada
   // porcentaje POR SEPARADO y por lo tanto admite cajas que NO caben en la imagen (p. ej.
@@ -340,17 +499,16 @@ function rectanguloDesdeCaja(caja: CajaPct, imgW: number, imgH: number, margen: 
   // igual a `imgH` y entonces `composite` NO lanza y tampoco pinta un solo píxel: el
   // llamador devolvía `difuminada:true` sobre una foto intacta, o sea una placa legible
   // reportada como ya procesada — el peor de los dos fallos posibles aquí.
-  const left   = Math.min(imgW - 1, Math.max(0, Math.floor(boxLeft - padX)));
-  const top    = Math.min(imgH - 1, Math.max(0, Math.floor(boxTop - padY)));
-  const right  = Math.min(imgW, Math.ceil(boxLeft + boxW + padX));
-  const bottom = Math.min(imgH, Math.ceil(boxTop + boxH + padY));
-  // El `Math.max(1, ...)` final es una red de seguridad, no el filtro principal. OJO: NO es
-  // cierto que "con una caja en rango estas cantidades ya salen positivas" (lo que decía el
-  // comentario anterior), porque `rangoValido` no exige que la caja quepa en la imagen —
-  // para una caja que se sale por abajo/derecha, `right - left` o `bottom - top` pueden ser
-  // <= 0 y es el clamp de `left`/`top` de arriba + este `Math.max(1, ...)` lo que garantiza
-  // un rectángulo de al menos 1px REAL dentro del lienzo, en vez de un `composite` que no
-  // pinta nada (falso `difuminada:true`) o que lanza y convierte la subida en un 500.
+  const left   = Math.min(imgW - 1, Math.max(0, Math.floor(boxLeft - px)));
+  const top    = Math.min(imgH - 1, Math.max(0, Math.floor(boxTop - py)));
+  const right  = Math.min(imgW, Math.ceil(boxLeft + boxW + px));
+  const bottom = Math.min(imgH, Math.ceil(boxTop + boxH + py));
+  // El `Math.max(1, ...)` final es una red de seguridad, no el filtro principal: `rangoValido`
+  // no exige que la caja quepa en la imagen, así que para una caja que se sale por
+  // abajo/derecha `right - left` o `bottom - top` pueden ser <= 0, y es el clamp de
+  // `left`/`top` de arriba + este `Math.max(1, ...)` lo que garantiza un rectángulo de al
+  // menos 1px REAL dentro del lienzo, en vez de un `composite` que no pinta nada (falso
+  // `difuminada:true`) o que lanza y convierte la subida en un 500.
   const width  = Math.max(1, Math.min(imgW - left, Math.max(20, right - left)));
   const height = Math.max(1, Math.min(imgH - top,  Math.max(10, bottom - top)));
 
@@ -366,228 +524,310 @@ function rectanguloDesdeCaja(caja: CajaPct, imgW: number, imgH: number, margen: 
  */
 const MARGEN_CANDIDATO_COLOR = 0.12;
 
+function rectanguloDeCandidato(c: CandidatoPlaca, imgW: number, imgH: number): Rectangulo {
+  const w = (c.w_pct / 100) * imgW;
+  const h = (c.h_pct / 100) * imgH;
+  return rectanguloDesdeCaja(c, imgW, imgH, Math.max(4, w * MARGEN_CANDIDATO_COLOR), Math.max(4, h * MARGEN_CANDIDATO_COLOR));
+}
+
 // ---------------------------------------------------------------------------------------
-// Reconciliación entre la PISTA de la IA (buena en X, sesgada en Y) y los candidatos del
-// detector determinístico de color (precisos, pero sin saber cuál de los objetos amarillos
-// de la escena es la placa del carro que se está publicando).
+// Reconciliación entre las cajas que reporta la IA y los candidatos del detector
+// determinístico de color. TODAS las tolerancias de acá se miden en píxeles y en unidades
+// del TAMAÑO ESTIMADO DE LA PLACA, nunca en porcentaje del lienzo: un porcentaje del lienzo
+// significa cosas distintas en una foto vertical y en una horizontal, y ese fue exactamente
+// el defecto que produjo las barras gigantes en las fotos verticales del Tucson.
 // ---------------------------------------------------------------------------------------
 
 /**
- * Tolerancia horizontal (en puntos porcentuales del ancho de la imagen) entre el centro del
- * candidato amarillo y el centro de la pista de la IA. En X la IA sí acierta (lo verificado
- * sobre fotos reales: el error grande es SOLO vertical), así que esta tolerancia puede ser
- * relativamente estrecha — y es la que descarta el clásico falso positivo del taxi amarillo
- * estacionado al fondo, que casi nunca cae en la misma columna que la placa del carro.
+ * Escala de referencia de una placa, en PÍXELES: el lado LARGO del panel tal como se ve en la
+ * foto, estimado desde la caja de la IA. Se toma el mayor entre su ancho y su alto (y no
+ * "ancho o el doble del alto", como en un primer intento): una placa colombiana es ~2:1 de
+ * frente, pero en una toma 3/4 o con la cámara inclinada su bounding box llega a ser casi
+ * cuadrado, y multiplicar el alto por 2 en ese caso sobreestimaba la placa un 50% y hacía
+ * sellos innecesariamente grandes. El piso del 2% del lado corto evita tolerancias de 3 px
+ * cuando el modelo devuelve una caja diminuta.
  */
-const TOLERANCIA_X_PCT = 20;
+function escalaPlacaPx(caja: CajaPct, imgW: number, imgH: number): number {
+  const w = (caja.w_pct / 100) * imgW;
+  const h = (caja.h_pct / 100) * imgH;
+  return Math.max(w, h, 0.02 * Math.min(imgW, imgH));
+}
 
 /**
- * SESGO VERTICAL SISTEMÁTICO de la pista de la IA, en puntos porcentuales del alto de la
- * imagen: cuánto MÁS ABAJO pone Claude el centro de la placa respecto del centro real
- * (medido con el detector de color sobre los píxeles amarillos).
+ * Error residual de la caja de la IA, como fracción de CADA lado de la imagen. Se aplica por
+ * eje (no como un porcentaje único del lienzo) justamente porque el modelo lee cada
+ * coordenada de SU propia regla: un error de media marca menor de la regla horizontal son
+ * ~2.5 puntos del ancho, y de la vertical, ~2.5 puntos del alto. Medido sobre el banco de
+ * fotos reales, el error del centro quedó entre 1.6 y 5.7 puntos por eje, así que 3 puntos de
+ * margen por lado cubren el caso típico y `MAX_AREA_SELLO` acota el peor.
  *
- * Medido sobre las 4 fotos reales de producción con las que se calibró este módulo, en dos
- * corridas distintas (la pista de la IA no es determinística, varía algo entre llamadas):
- * 13.6 / 14.9 / 21.4 / 27.6 en una, y 14.6 / 15.1 / 19.4 / 26.9 en la otra. Rango observado
- * 13.6–27.6 y SIEMPRE con el mismo signo (la pista nunca apareció por encima de la placa).
- * Promedio ≈ 19 en ambas corridas.
- *
- * Se usa como CORRECCIÓN al puntuar candidatos: el centro esperado de la placa no es el
- * centro de la pista, sino ese centro desplazado 19 puntos hacia ARRIBA. Sin esta
- * corrección el puntaje era simétrico en Y (`Math.abs(cy - pcy)`) y por lo tanto premiaba
- * a cualquier objeto amarillo pegado a la pista o justo debajo de ella — el taxi/valla
- * amarilla del fondo, que cae en la franja de `VENTANA_ABAJO_PCT` con |dy| chico — y
- * castigaba a la placa real, que por definición está lejos hacia arriba (|dy| grande).
- * Con el puntaje simétrico anterior el umbral era el sesgo COMPLETO, no su mitad: la placa
- * real puntuaba |dy| = sesgo, así que con el sesgo mínimo medido (13.6) cualquier amarillo a
- * menos de 13.6 puntos por debajo de la pista le ganaba a la placa; con el peor (27.6), a
- * menos de 27.6 puntos.
+ * Es el reemplazo del término que antes vivía en `bandaRespaldo` como 45 puntos de alto: la
+ * diferencia de escala (3 contra 45) es exactamente lo que aporta la regla impresa.
  */
-const SESGO_ESPERADO_PCT = 19;
+const ERROR_IA_FRACCION_LADO = 0.03;
+
+/** Margen del sello respecto del tamaño de la propia caja, por lado. */
+const MARGEN_IA_FRACCION_CAJA = 0.5;
 
 /**
- * Ventana vertical ASIMÉTRICA (en puntos porcentuales del alto de la imagen) alrededor del
- * centro de la pista de la IA. Es asimétrica porque el sesgo de arriba es sistemático y
- * tiene signo conocido: el candidato correcto casi siempre está ARRIBA de la pista.
+ * TOLERANCIA DE UBICACIÓN de la caja de la IA, POR EJE, como fracción de cada lado de la
+ * imagen. Es la vara con la que se mide "¿este rectángulo amarillo está donde la IA dijo?".
  *
- * Hacia arriba se aceptan 45 puntos = ~1.6x el PEOR sesgo realmente medido (27.6). El
- * valor anterior era 35 con el comentario "el doble del peor sesgo observado (10–18)":
- * ese "peor sesgo" estaba desactualizado, así que 35 en realidad era 1.27x — un margen
- * demasiado apretado para el uso real de esta constante, que además es el techo de los
- * DOS caminos (`BANDA_ARRIBA_PCT` la reusa tal cual).
- * Hacia abajo se aceptan 15: el sesgo nunca se observó invertido, pero una pista bien
- * centrada sobre una placa grande puede dejar el centro del candidato algo por debajo.
+ * Va por eje y no como una distancia isotrópica en "escalas de placa" porque el modelo lee
+ * cada coordenada de SU PROPIA regla: el error en X se mide contra el ancho y el error en Y
+ * contra el alto, y en una foto vertical esos dos lados difieren en un 33%. Un radio único en
+ * píxeles trata los dos ejes como si fueran el mismo, que es la misma confusión de unidades
+ * que produjo la barra gigante.
+ *
+ * 0.08 sale de medir el error real del centro sobre el banco de fotos (placa confirmada por
+ * píxeles contra caja de la IA): 0.2, 0.6, 2.4, 3.3, 4.5 y 6.7 puntos porcentuales. Las placas
+ * grandes y de frente caen por debajo de 1; las chicas del fondo, en 4–7. Con 8 puntos de
+ * tolerancia entran todas las correctas del banco (distancia normalizada 0.71 a 1.34) y queda
+ * afuera el falso positivo que motivó este cambio: en la foto del KIA Seltos del catálogo, un
+ * matorral amarillento del borde izquierdo estaba a 3.9 tolerancias en X y 3.3 en Y de la
+ * placa (distancia normalizada 5.1) y el sistema le estampaba el sello encima mientras la
+ * placa seguía legible.
+ *
+ * OJO: esto NO es el margen del sello. El sello se dibuja del tamaño del amarillo MEDIDO (ver
+ * `rectanguloDeCandidato`); esta constante solo decide qué amarillo se acepta como la placa.
+ * El margen del tapado a ciegas sigue siendo `ERROR_IA_FRACCION_LADO`, que es mucho más chico
+ * porque ahí sí se pinta sobre la foto.
  */
-const VENTANA_ARRIBA_PCT = 45;
-const VENTANA_ABAJO_PCT = 15;
+const TOLERANCIA_IA_FRACCION_LADO = 0.08;
 
 /**
- * Tope de rectángulos de tapado que se estampan por foto (sin contar la banda de respaldo,
- * que se suma aparte cuando hace falta). Es el mismo número en los tres caminos que tapan
- * por color; antes el caso "la IA no ve placa" usaba 2 y el caso "la IA no pudo opinar" 3,
- * sin ninguna razón documentada. 3 alcanza para una escena con la placa + un par de
- * objetos amarillos y acota cuánta foto se puede llegar a tapar en el peor caso.
+ * Distancia normalizada máxima (en tolerancias, ver arriba) para aceptar que un rectángulo
+ * amarillo ES la placa que la IA reporta. La ventana de búsqueda usa este mismo número, así
+ * que un candidato que pasa el filtro de la ventana pasa también el de la distancia: son la
+ * misma condición escrita dos veces (una barata, sobre los candidatos ya calculados, y otra
+ * exacta).
+ *
+ * Hay dos valores según lo que la IA haya dicho del COLOR del panel:
+ *  - `AMARILLA`: la IA afirma que la placa es amarilla Y hay amarillo cerca; las dos cosas
+ *    apuntan al mismo sitio y se acepta con la tolerancia completa.
+ *  - `OTRA` (la IA no sabe de qué color es): el amarillo cercano bien puede ser otro objeto, y
+ *    la caja de la IA es mejor apuesta, así que se exige que el amarillo esté mucho más pegado.
+ * (Una placa `BLANCA` ni llega hasta acá: no se busca amarillo para ella — ver `PlacaIA.color`.)
  */
-const MAX_ZONAS_TAPADAS = 3;
+const DISTANCIA_MAX_AMARILLA = 2.0;
+const DISTANCIA_MAX_OTRA = 1.0;
 
 /**
- * Elige, entre los candidatos amarillos, TODOS los que concuerdan con la pista de la IA
- * (ordenados del que mejor concuerda al que peor, recortados a `MAX_ZONAS_TAPADAS`).
- *
- * POR QUÉ DEVUELVE VARIOS Y NO SOLO "EL MEJOR": el puntaje es una heurística construida
- * sobre una pista que se sabe sesgada, y equivocarse aquí no cuesta un poco, cuesta todo —
- * si se tapa un único rectángulo y era el equivocado (el taxi amarillo del fondo), la placa
- * real queda 100% legible Y ADEMÁS el camino de la banda de respaldo ya no corre, porque el
- * flujo retorna al haber "tapado algo". Es exactamente el incidente que este módulo existe
- * para cerrar. Tapar todos los candidatos plausibles de la ventana aplica el mismo criterio
- * que el archivo ya usa en el caso "la IA no ve placa": tapar de más un objeto amarillo es,
- * como mucho, un problema estético; dejar legible la placa de un cliente no.
- *
- * PUNTAJE: distancia en X con peso doble (es el eje en el que la IA sí es confiable) más
- * la distancia en Y medida contra el centro ESPERADO de la placa (`cy` de la pista menos
- * `SESGO_ESPERADO_PCT`), no contra el centro crudo de la pista.
- *
- * DEVUELVE TAMBIÉN LOS `descartados` por el recorte a `MAX_ZONAS_TAPADAS`, y eso no es
- * cosmético: si en la ventana caen más candidatos de los que se pueden tapar, la placa real
- * PUEDE ser uno de los que quedaron afuera (el puntaje es una heurística sobre una pista que
- * se sabe sesgada, no una medición de "esto es una placa"), y basta con que uno de los 3
- * elegidos pase el listón de calidad para que el llamador crea que ya tapó la placa y no
- * agregue la banda — publicando `via:'color'` sobre una foto con la placa legible. El
- * llamador inspecciona los descartados para decidir si necesita la banda, y el log imprime el
- * conteo real de la ventana (antes se logueaba `elegidos.length`, que ya viene truncado a 3 y
- * por lo tanto borraba justo el rastro que haría falta para detectar esto en producción).
+ * El candidato de color tiene que ser además de un tamaño COMPARABLE al de la caja de la IA.
+ * Sin esto, un muro amarillo o el toldo de una tienda detrás del carro podía "confirmar" la
+ * placa por estar cerca, y el sello se estampaba sobre el muro (grande) en vez de sobre la
+ * placa.
  */
-function elegirCandidatosConPista(
-  candidatos: CandidatoPlaca[],
-  pista: CajaPct,
-): { elegidos: CandidatoPlaca[]; descartados: CandidatoPlaca[] } {
-  const { cx: pcx, cy: pcy } = centro(pista);
-  const cyEsperado = pcy - SESGO_ESPERADO_PCT;
+const FACTOR_TAMANO_MIN = 0.25;
+const FACTOR_TAMANO_MAX = 3.5;
 
-  const dentro: { candidato: CandidatoPlaca; puntaje: number }[] = [];
-  for (const c of candidatos) {
-    const { cx, cy } = centro(c);
-    const dx = Math.abs(cx - pcx);
-    const dy = cy - pcy; // negativo = el candidato está ARRIBA de la pista (lo esperado)
-    if (dx > TOLERANCIA_X_PCT) continue;
-    if (dy < -VENTANA_ARRIBA_PCT || dy > VENTANA_ABAJO_PCT) continue;
-    dentro.push({ candidato: c, puntaje: dx * 2 + Math.abs(cy - cyEsperado) });
-  }
+/** ¿El centro de esta caja cae dentro de la ventana? */
+function dentroDe(caja: CajaPct, ventana: CajaPct): boolean {
+  const { cx, cy } = centro(caja);
+  return cx >= ventana.x_pct && cx <= ventana.x_pct + ventana.w_pct
+      && cy >= ventana.y_pct && cy <= ventana.y_pct + ventana.h_pct;
+}
 
-  dentro.sort((a, b) => a.puntaje - b.puntaje);
+/** Tolerancia de ubicación en PÍXELES por eje: media caja, con el piso de la regla. */
+function toleranciaPx(caja: CajaPct, imgW: number, imgH: number): { tolX: number; tolY: number } {
   return {
-    elegidos: dentro.slice(0, MAX_ZONAS_TAPADAS).map(d => d.candidato),
-    descartados: dentro.slice(MAX_ZONAS_TAPADAS).map(d => d.candidato),
+    tolX: Math.max(((caja.w_pct / 100) * imgW) / 2, TOLERANCIA_IA_FRACCION_LADO * imgW),
+    tolY: Math.max(((caja.h_pct / 100) * imgH) / 2, TOLERANCIA_IA_FRACCION_LADO * imgH),
   };
 }
 
 /**
- * Ancho mínimo que debe tener un candidato de color, como fracción del ancho de la pista de
- * la IA, para aceptar que "ya está la placa tapada" y NO estampar además la banda de
- * respaldo. Un candidato mucho más angosto que la pista suele ser un jirón de la placa (un
- * reflejo, una placa en sombra que la máscara solo atrapa a medias), y tapar el jirón deja
- * el resto legible.
+ * Distancia entre el centro del candidato y el de la caja de la IA, medida en TOLERANCIAS de
+ * cada eje (una elipse, no un círculo). 1 = justo en el borde de lo tolerable.
  */
-const FRACCION_ANCHO_PISTA_MIN = 0.5;
-
-/**
- * Filtro extra para usar un candidato de color SIN pista de la IA que lo respalde (porque la
- * IA falló técnicamente, o porque dijo que no hay placa). En ese caso nadie descarta el taxi
- * amarillo del fondo, así que se exige que el candidato se parezca de verdad a una placa:
- * relleno alto (rectángulo amarillo sólido, no una mancha irregular), proporción cercana a la
- * de una placa real y un tamaño mínimo en la foto.
- *
- * El piso de relleno (0.62) está calibrado con fotos reales: las placas reales medidas dan
- * 0.70–0.92, mientras que el emblema dorado de Chevrolet en el frente de un Tracker —que es
- * amarillo y con proporción ~3:1, y por eso pasaba los demás filtros— da 0.55 y aquí queda
- * descartado.
- */
-function esCandidatoFuerte(c: CandidatoPlaca): boolean {
-  return c.relleno >= 0.62 && c.aspecto >= 1.5 && c.aspecto <= 3.6 && c.w_pct >= 4;
+function distanciaNormalizada(c: CajaPct, caja: CajaPct, imgW: number, imgH: number): number {
+  const { tolX, tolY } = toleranciaPx(caja, imgW, imgH);
+  const a = centro(caja);
+  const b = centro(c);
+  const dx = (((b.cx - a.cx) / 100) * imgW) / Math.max(1, tolX);
+  const dy = (((b.cy - a.cy) / 100) * imgH) / Math.max(1, tolY);
+  return Math.hypot(dx, dy);
 }
 
-/**
- * ¿Este candidato alcanza, POR SÍ SOLO, para dar por tapada la placa que la IA dice que hay
- * en `pista`? Es el listón del Caso B y se usa en las DOS direcciones, que es justo lo que le
- * da sentido:
- *  - sobre los candidatos TAPADOS: si ninguno lo pasa, no se puede afirmar que se tapó la
- *    placa (se tapó un jirón o un objeto amarillo cualquiera) → hace falta la banda.
- *  - sobre los candidatos DESCARTADOS por `MAX_ZONAS_TAPADAS`: si alguno lo pasa, ese que se
- *    dejó afuera podía ser la placa → hace falta la banda igual.
- * Usar el MISMO criterio en ambos lados es deliberado: no tendría sentido aceptar "ya está
- * tapada" por un candidato que cumple X y, a la vez, ignorar un descartado que cumple X.
- */
-function esSolidoParaPista(c: CandidatoPlaca, pista: CajaPct): boolean {
-  return esCandidatoFuerte(c) && c.w_pct >= pista.w_pct * FRACCION_ANCHO_PISTA_MIN;
-}
-
-/**
- * Banda de respaldo: se usa cuando la IA dice que SÍ hay placa pero el detector de color NO
- * encontró ningún candidato (placa no amarilla, quemada por el sol, en sombra extrema,
- * comida por la compresión de un pantallazo de WhatsApp, o ya parcialmente tapada por un
- * sello de una corrida anterior).
- *
- * POR QUÉ ES TAN GRANDE — leer antes de "optimizarla": en este escenario la ÚNICA ubicación
- * disponible es la pista de la IA, y esa pista es justo la que se sabe SESGADA (la `y` cae
- * sistemáticamente por debajo de la placa real: 13.6 / 14.9 / 21.4 / 27.6 puntos en las 4
- * fotos reales de producción medidas — ver `SESGO_ESPERADO_PCT`). Tapar ahí una caja ajustada
- * es exactamente lo que falló en producción y dejó placas de clientes 100% legibles. Por eso
- * NO se tapa una caja ajustada: se tapa una banda deliberadamente generosa, expandida hacia
- * ARRIBA lo suficiente para absorber ese sesgo y un poco hacia abajo por si el sesgo se
- * invierte. Sí, tapa bastante más foto de lo necesario — es intencional: es el respaldo
- * seguro, y la telemetría `[PLACA-VIA-BANDA-RESPALDO]` permite medir qué tan seguido se cae
- * aquí.
- *
- * LOS DOS LÍMITES ESTÁN ATADOS A LA VENTANA DE RECONCILIACIÓN A PROPÓSITO (no son números
- * sueltos): esa ventana declara qué rango vertical el sistema considera plausible para la
- * placa (`VENTANA_ARRIBA_PCT` / `VENTANA_ABAJO_PCT`). Si la banda cubriera menos que eso
- * quedaría una franja ciega — un rango donde el sistema admite que puede estar la placa pero
- * el respaldo no tapa. Eso no es teórico: con la expansión anterior (22 pts hacia arriba) y
- * la pista real de producción de la foto trasera del DEEPAL (cy=79%, placa real en y
- * 54.2–56.5%), la banda arrancaba en 57% y la placa quedaba ÍNTEGRA y legible justo encima
- * del tapado — verificado mirando la imagen de salida del pipeline completo. El lado de
- * abajo tenía el mismo defecto al revés: 8 pts contra los 15 de la ventana dejaban 7 puntos
- * ciegos.
- *
- * Hacia abajo, además, el mínimo se compara contra el ALTO de la propia pista: en una foto
- * de primer plano la placa ocupa mucho alto (`h_pct` ~20) y, si el sesgo de esa foto es
- * chico, `cy + 8` cortaba antes del borde inferior de la placa.
- */
-const BANDA_ARRIBA_PCT = VENTANA_ARRIBA_PCT;
-const BANDA_ABAJO_PCT = VENTANA_ABAJO_PCT;
-// El ancho también se expande (60% del ancho de la pista por lado, con un piso del 20% del
-// ancho de la imagen): la IA acierta en X mucho mejor que en Y, pero un desvío horizontal de
-// unos pocos puntos deja asomar un pedazo de placa por el costado de la banda — probado con
-// foto real (Kia con sello previo: con la banda más angosta quedaba visible el borde amarillo
-// con "SABANETA" a la derecha del tapado).
-const BANDA_ANCHO_EXTRA_FRACCION = 0.6;
-const BANDA_ANCHO_MIN_PCT = 20;
-
-function bandaRespaldo(pista: CajaPct): CajaPct {
-  const { cx, cy } = centro(pista);
-  // El centro de la pista se acota al lienzo ANTES de expandir. `rangoValido` valida cada
-  // porcentaje por separado y por lo tanto admite pistas que no caben en la imagen (p. ej.
-  // `y_pct:95, h_pct:100` → `cy = 145`): sin este tope, `arriba = 100` y `abajo = 100`
-  // daban una banda de alto 1 apoyada en el borde inferior — un rectángulo que `composite`
-  // ni siquiera alcanza a pintar, devolviendo `difuminada:true` sobre la foto intacta. Con
-  // el tope, la banda siempre cae dentro de la imagen y mide al menos `BANDA_ABAJO_PCT` de
-  // alto. (`cx` ya estaba acotado por el `Math.min(100 - ancho, ...)` de abajo.)
-  const cyLienzo = Math.min(100, Math.max(0, cy));
-
-  const ancho = Math.max(BANDA_ANCHO_MIN_PCT, pista.w_pct * (1 + 2 * BANDA_ANCHO_EXTRA_FRACCION));
-  const x = Math.max(0, Math.min(100 - Math.min(ancho, 100), cx - ancho / 2));
-
-  const arriba = Math.max(0, cyLienzo - BANDA_ARRIBA_PCT);
-  const abajo = Math.min(100, cyLienzo + Math.max(BANDA_ABAJO_PCT, pista.h_pct * 0.75));
-
+/** La ventana (en %) donde se busca el amarillo que confirma la placa que reporta la IA. */
+function ventanaDeBusqueda(caja: CajaPct, imgW: number, imgH: number): CajaPct {
+  const { tolX, tolY } = toleranciaPx(caja, imgW, imgH);
+  const dx = ((tolX * DISTANCIA_MAX_AMARILLA) / imgW) * 100;
+  const dy = ((tolY * DISTANCIA_MAX_AMARILLA) / imgH) * 100;
+  const x = Math.max(0, caja.x_pct - dx);
+  const y = Math.max(0, caja.y_pct - dy);
   return {
     x_pct: x,
-    y_pct: arriba,
-    w_pct: Math.min(ancho, 100 - x),
-    h_pct: Math.max(1, abajo - arriba),
+    y_pct: y,
+    w_pct: Math.min(100 - x, caja.w_pct + 2 * dx),
+    h_pct: Math.min(100 - y, caja.h_pct + 2 * dy),
   };
 }
 
+/**
+ * Proporción ancho:alto de una placa colombiana vista de frente. Se usa solo como referencia
+ * para puntuar: cuanto más se aleja un rectángulo amarillo de esta proporción, menos parece una
+ * placa. NO es un filtro — una placa fotografiada en 3/4 o con la cámara inclinada llega a tener
+ * bounding box casi cuadrado, y descartarla por eso fue justamente el fallo que dejó sin tapar
+ * la placa trasera del Tucson.
+ */
+const ASPECTO_PLACA_IDEAL = 2.0;
+
+/**
+ * Peso de la penalización por proporción frente a la distancia, en el puntaje de ubicación.
+ *
+ * Con 0 (elegir siempre el amarillo más cercano al centro de la caja de la IA) el sistema se
+ * equivocaba en un caso real medido: la placa de una moto estacionada al fondo ("EMU 24H") está
+ * a 1.7 escalas del centro de la caja de la IA, mientras que una columna de ladrillo amarillento
+ * a 0.7 escalas le ganaba — el sello terminaba en el andén y la placa quedaba legible. Con 2, la
+ * penalización por proporción (la columna tiene aspecto 1.12; la placa, 2.00) da vuelta el
+ * resultado. Es deliberadamente moderado: un peso alto volvería a descartar las placas giradas.
+ */
+const PESO_ASPECTO = 2;
+
+/**
+ * Puntaje de "qué tan probable es que ESTE rectángulo amarillo sea la placa que la IA reporta
+ * en `caja`": distancia entre centros medida en escalas de placa, más una penalización
+ * logarítmica por alejarse de la proporción de una placa. Menor es mejor.
+ */
+function puntajeUbicacion(c: CandidatoPlaca, caja: CajaPct, imgW: number, imgH: number): number {
+  const distancia = distanciaNormalizada(c, caja, imgW, imgH);
+  const anchoPx = (c.w_pct / 100) * imgW;
+  const altoPx = Math.max(1, (c.h_pct / 100) * imgH);
+  const aspecto = anchoPx / altoPx;
+  const penalizacion = aspecto > 0 ? Math.abs(Math.log(aspecto / ASPECTO_PLACA_IDEAL)) : 10;
+  return distancia + PESO_ASPECTO * penalizacion;
+}
+
+/** ¿Este rectángulo amarillo tiene un tamaño compatible con la placa que la IA reporta? */
+function tamanoCompatible(c: CandidatoPlaca, caja: CajaPct, imgW: number, imgH: number): boolean {
+  const escalaC = Math.max((c.w_pct / 100) * imgW, (c.h_pct / 100) * imgH);
+  const escalaIA = escalaPlacaPx(caja, imgW, imgH);
+  return escalaC >= escalaIA * FACTOR_TAMANO_MIN && escalaC <= escalaIA * FACTOR_TAMANO_MAX;
+}
+
+/**
+ * Techo de superficie que puede ocupar UN sello, como fracción del área de la imagen. Un
+ * tapado que se pasa de acá ya no es "una placa tapada", es un borrón que arruina la foto: se
+ * recorta al techo (manteniendo el centro) y la foto se manda a revisión manual.
+ *
+ * Referencias medidas: las barras que motivaron este arreglo ocupaban 12.7% y 14.8% del
+ * lienzo; un sello sobre una placa real ronda 0.1–3.3% en el banco de fotos, y el máximo
+ * legítimo observado es el primer plano del frente de un Ford Explorer, donde la placa sola
+ * ocupa 3.2% y con su margen llega a 4.9%. Por eso el techo es 7% y no 4%: con 4% ese caso
+ * legítimo se recortaba (dejando asomar el borde de la placa) y encima mandaba la foto a
+ * revisión manual sin motivo.
+ */
+const MAX_AREA_SELLO = 0.07;
+
+/**
+ * Tope de sellos por foto. Sube de 3 a 6 respecto de la versión anterior porque ahora el
+ * objetivo declarado incluye las placas de TERCEROS (una calle de Medellín con el carro
+ * publicado + tres carros estacionados detrás son 4 placas legítimas), y el riesgo de tapar de
+ * más está acotado por `MAX_AREA_SELLO` y por lo chico que es cada sello.
+ */
+const MAX_ZONAS_TAPADAS = 6;
+
+/**
+ * Ancho mínimo de un candidato de color para taparlo SIN que la IA lo respalde, como fracción
+ * del LADO CORTO de la imagen.
+ *
+ * Antes era `c.w_pct >= 4`, o sea 4% del ANCHO, y ahí hay dos problemas medidos:
+ *  - No es invariante a la orientación: en una foto de celular vertical (3024x4032) son 121 px
+ *    y en esa misma foto apaisada, 161 px. El mismo carro, dos varas distintas.
+ *  - Era demasiado grande para una placa de TERCEROS, que es justamente la que aparece chica en
+ *    el encuadre. La placa del carro detrás de la reja en la foto de frente del Tucson mide
+ *    81 px de ancho (2.7% del ancho): tenía forma y relleno de placa y aun así quedaba fuera.
+ * Con el lado corto como referencia el piso es el mismo tape la foto como la tape, y 2.5%
+ * coincide con el piso que el propio detector ya aplica (`ANCHO_MIN_FRACCION`), así que este
+ * filtro deja de ser un segundo umbral de tamaño y queda como lo que dice ser: un filtro de
+ * FORMA (relleno + proporción).
+ */
+const ANCHO_MIN_SIN_IA_FRACCION = 0.025;
+
+/**
+ * Filtro para tapar un candidato de color que NINGUNA placa de la IA reclama (porque la IA
+ * falló técnicamente, o porque no lo vio). En ese caso nadie descarta el taxi amarillo del
+ * fondo, así que se exige que el candidato se parezca de verdad a una placa: relleno alto
+ * (rectángulo amarillo sólido, no una mancha irregular), proporción cercana a la de una placa
+ * real y un tamaño mínimo en la foto.
+ *
+ * El piso de 0.62 se mide sobre `solidez` (amarillo / suma de las cajas de cada fragmento) y
+ * no sobre `relleno` (amarillo / caja del candidato entero), y esa diferencia es la que
+ * permite tapar una placa PARTIDA por un obstáculo sin abrirle la puerta al follaje: la placa
+ * detrás de la reja da relleno 0.60 (el barrote le come el medio) pero solidez 0.93, mientras
+ * que las manchas de árboles/ladrillo de la foto trasera del Tucson dan 0.46–0.57 en ambas.
+ * Está calibrado con fotos reales: las placas medidas dan 0.66–0.93 de solidez, mientras que
+ * el emblema dorado de Chevrolet en el frente de un Tracker —que es amarillo y con proporción
+ * ~3:1, y por eso pasaba los demás filtros— da 0.55 y aquí queda descartado. El `relleno`
+ * sigue exigiéndose, pero solo como piso de cordura: un grupo cuya caja está medio vacía no es
+ * un panel. El rango de proporción 1.5–3.6 es el que descarta el REFLECTOR del paragolpes (una
+ * franja amarilla de 206x49 px, proporción 4.18, en la foto trasera del Tucson): tapar ahí
+ * ensucia el paragolpes y deja la placa a la vista, que es el peor de los dos errores.
+ */
+function esCandidatoFuerte(c: CandidatoPlaca, imgW: number, imgH: number): boolean {
+  const anchoPx = (c.w_pct / 100) * imgW;
+  return c.solidez >= 0.62
+    && c.relleno >= 0.5
+    && c.aspecto >= 1.5 && c.aspecto <= 3.6
+    && anchoPx >= ANCHO_MIN_SIN_IA_FRACCION * Math.min(imgW, imgH);
+}
+
+/** Recorta un rectángulo que se pasó de `MAX_AREA_SELLO`, conservando su centro. */
+function acotarSello(r: Rectangulo, imgW: number, imgH: number): { rect: Rectangulo; recortado: boolean } {
+  const maxArea = MAX_AREA_SELLO * imgW * imgH;
+  const area = r.width * r.height;
+  if (area <= maxArea) return { rect: r, recortado: false };
+  const factor = Math.sqrt(maxArea / area);
+  const width = Math.max(20, Math.round(r.width * factor));
+  const height = Math.max(10, Math.round(r.height * factor));
+  const left = Math.min(imgW - width, Math.max(0, Math.round(r.left + (r.width - width) / 2)));
+  const top = Math.min(imgH - height, Math.max(0, Math.round(r.top + (r.height - height) / 2)));
+  return { rect: { left, top, width, height }, recortado: true };
+}
+
+/**
+ * Fracción MÍNIMA de la caja de la IA que debe medir el sello cuando la ubicación la puso el
+ * detector de color. Red de seguridad contra el TAPADO PARCIAL: los píxeles amarillos dicen
+ * muy bien DÓNDE está la placa, pero pueden describir solo un pedazo de ella (media placa en
+ * sombra, un panel que el brillo parte en dos y la fusión no llega a unir). Si el rectángulo
+ * medido resulta mucho más chico que lo que la IA dibujó, se agranda —manteniendo el centro
+ * medido— hasta este porcentaje del tamaño de la caja de la IA.
+ *
+ * Es 0.75 y no 1.0 porque la caja de la IA tiende a ser algo generosa y no queremos que el
+ * sello crezca de más cuando el rectángulo medido ya cubre la placa entera: medido sobre el
+ * banco, los tapados correctos por color miden entre 0.9 y 1.4 veces la caja de la IA, así que
+ * 0.75 no los toca y solo actúa sobre los casos degenerados (0.44 y 0.51 veces la caja, que
+ * son justo los dos tapados parciales que aparecieron: la placa de la foto trasera del Tucson y
+ * la del carro del borde derecho del DEEPAL).
+ */
+const FRACCION_MIN_CAJA_IA = 0.75;
+
+/** Agranda un rectángulo hasta `minW` x `minH` conservando su centro, sin salirse de la imagen. */
+function alMenos(r: Rectangulo, minW: number, minH: number, imgW: number, imgH: number): Rectangulo {
+  const width = Math.min(imgW, Math.max(r.width, Math.round(minW)));
+  const height = Math.min(imgH, Math.max(r.height, Math.round(minH)));
+  const cx = r.left + r.width / 2;
+  const cy = r.top + r.height / 2;
+  const left = Math.min(imgW - width, Math.max(0, Math.round(cx - width / 2)));
+  const top = Math.min(imgH - height, Math.max(0, Math.round(cy - height / 2)));
+  return { left, top, width, height };
+}
+
+/** Fracción del área de `a` que queda dentro de `b` (0–1). */
+function solapeRelativo(a: Rectangulo, b: Rectangulo): number {
+  const w = Math.min(a.left + a.width, b.left + b.width) - Math.max(a.left, b.left);
+  const h = Math.min(a.top + a.height, b.top + b.height) - Math.max(a.top, b.top);
+  if (w <= 0 || h <= 0) return 0;
+  return (w * h) / Math.max(1, a.width * a.height);
+}
+
+/** Una zona a tapar, con el rastro de cómo se decidió. */
+type Zona = {
+  rect: Rectangulo;
+  origen: 'color' | 'ia';
+  detalle: string;
+};
 /**
  * Genera el rectángulo 100% OPACO de marca DrivePass (fondo navy `#1B3356` + borde de acento
  * naranja `#F25C2B` + el ícono del logo centrado) rasterizado como PNG a las dimensiones
@@ -685,8 +925,8 @@ async function taparZonas(buffer: Buffer, rectangulos: Rectangulo[]): Promise<Bu
  * Camino de respaldo cuando la IA NO pudo opinar (sin API key, o fallo técnico tras agotar el
  * reintento). No se deja la placa expuesta solo porque la IA no respondió: si el detector
  * determinístico de color encontró candidatos claramente con forma de placa
- * (`esCandidatoFuerte`, criterio más estricto justamente porque aquí no hay pista de la IA que
- * descarte el taxi amarillo del fondo), se tapan igual.
+ * (`esCandidatoFuerte`, criterio más estricto justamente porque aquí no hay ninguna caja de la
+ * IA que descarte el taxi amarillo del fondo), se tapan igual.
  *
  * En todos los casos devuelve `moderacionEvaluada: false` — la moderación de contenido NO se
  * pudo evaluar, así que la foto debe ir a revisión manual (fail-closed en el call site), tape
@@ -698,51 +938,71 @@ async function resolverSinIA(
   imgW: number,
   imgH: number,
 ): Promise<ResultadoDeteccion> {
-  const fuertes = candidatos.filter(esCandidatoFuerte).slice(0, MAX_ZONAS_TAPADAS);
+  const fuertes = candidatos.filter(c => esCandidatoFuerte(c, imgW, imgH)).slice(0, MAX_ZONAS_TAPADAS);
   if (fuertes.length === 0) {
     console.warn('[blur-placas][PLACA-NO-TAPADA] La IA no pudo evaluar la foto y el detector de color no encontró ninguna placa amarilla clara — foto sin tapar y marcada para revisión manual');
-    return { buffer, difuminada: false, contenidoInapropiado: false, moderacionEvaluada: false, via: 'ninguna' };
+    return { buffer, difuminada: false, contenidoInapropiado: false, moderacionEvaluada: false, revisionManual: true, motivoRevision: 'La IA no pudo evaluar la foto.', via: 'ninguna' };
   }
 
-  const rectangulos = fuertes.map(c => rectanguloDesdeCaja(c, imgW, imgH, MARGEN_CANDIDATO_COLOR));
+  const rectangulos = fuertes.map(c => rectanguloDeCandidato(c, imgW, imgH));
   console.warn(
     `[blur-placas][PLACA-VIA-COLOR-SIN-IA] La IA no pudo evaluar la foto, pero el detector de color encontró ${fuertes.length} placa(s) amarilla(s) clara(s) — se tapan igual (la foto queda además marcada para revisión manual porque no hubo moderación de contenido)`,
     rectangulos,
   );
   const resultado = await taparZonas(buffer, rectangulos);
-  return { buffer: resultado, difuminada: true, contenidoInapropiado: false, moderacionEvaluada: false, via: 'color_sin_ia' };
+  return {
+    buffer: resultado, difuminada: true, contenidoInapropiado: false, moderacionEvaluada: false,
+    revisionManual: true, motivoRevision: 'La IA no pudo evaluar la foto.', via: 'color_sin_ia',
+  };
 }
 
 /**
- * Detecta la placa de una foto de vehículo y la tapa con el sello opaco de marca DrivePass,
- * y de paso obtiene la moderación de contenido de la foto.
+ * Detecta TODAS las placas visibles de una foto de vehículo y las tapa con el sello opaco de
+ * marca DrivePass, y de paso obtiene la moderación de contenido de la foto.
  *
- * ARQUITECTURA HÍBRIDA (IA decide SI, detector de color decide DÓNDE)
- * ------------------------------------------------------------------
- * 1. Claude vision responde `plate_visible` / `inappropriate_content` y una región
- *    aproximada. Eso es lo que la IA hace bien.
- * 2. `detectarPlacasPorColor` (lib/detectar-placa-color.ts, determinístico, sin red) dice
- *    DÓNDE está la placa buscando el rectángulo amarillo real en los píxeles.
- * 3. Se reconcilian: se tapa el candidato amarillo que concuerda con la pista de la IA.
+ * ARQUITECTURA (IA decide QUÉ y CUÁNTAS, los píxeles deciden DÓNDE)
+ * ----------------------------------------------------------------
+ * 1. A Claude vision se le manda la foto CON UNA REGLA DE COORDENADAS IMPRESA
+ *    (`conReglaDeCoordenadas`) y responde la lista de placas visibles —las del carro que se
+ *    publica y las de CUALQUIER otro vehículo del encuadre— con su caja, de quién es, qué tan
+ *    seguro está y si se lee; más la moderación de contenido.
+ * 2. `detectarPlacasPorColor` (lib/detectar-placa-color.ts, determinístico, sin red) mide
+ *    DÓNDE están los rectángulos amarillos reales en los píxeles.
+ * 3. Se reconcilian placa por placa: si un candidato amarillo concuerda con la caja de la IA,
+ *    se tapa ESE (preciso, medido sobre los píxeles); si no, se tapa la caja de la IA
+ *    ampliada un poco. Y los candidatos amarillos claros que la IA no reclamó se tapan
+ *    también, por privacidad.
  *
- * POR QUÉ SE CAMBIÓ EL DISEÑO ANTERIOR (2 llamadas independientes → 1 sola llamada)
- * --------------------------------------------------------------------------------
- * El diseño anterior hacía SIEMPRE 2 llamadas independientes a Claude y tapaba las 2 regiones
- * devueltas, con la idea de que si una se equivocaba la otra cubriera el hueco. Ese diseño se
- * abandona porque la evidencia de producción demostró que NO protege contra el fallo real:
- * la coordenada vertical de Claude viene SISTEMÁTICAMENTE sesgada hacia abajo (13.6 a 27.6
- * puntos porcentuales por debajo de la placa real en las 4 fotos medidas, ver
- * `SESGO_ESPERADO_PCT` — Tracker trasera: placa en y≈51%, las DOS llamadas devolvieron
- * y=63.5%; DEEPAL frente: placa en y≈55%, las dos llamadas devolvieron 72.5% y 73.5%).
- * Como las 2 llamadas cometen el MISMO error y coinciden entre sí, el chequeo de
- * divergencia nunca se disparaba y los 2 rectángulos se estampaban en el mismo lugar
- * equivocado (el paragolpes, debajo de la placa), dejando placas de clientes reales 100%
- * legibles en fotos públicas. Duplicar una llamada sesgada no corrige un sesgo sistemático:
- * solo duplica el costo. Por eso ahora es 1 sola llamada (con su reintento técnico) y la
- * ubicación la resuelve el detector de color.
+ * QUÉ CAMBIÓ RESPECTO DE LA VERSIÓN ANTERIOR, Y POR QUÉ (incidente real)
+ * ---------------------------------------------------------------------
+ * La versión anterior pedía UNA sola región y, cuando el color no confirmaba nada, estampaba
+ * una BANDA de respaldo expresada en porcentajes del LIENZO (45 puntos de alto hacia arriba,
+ * 15 hacia abajo, ancho mínimo 20 puntos). En las fotos verticales del Hyundai Tucson (3024 x
+ * 4032) eso da una barra de 605 x 2419 px: el 13–15% de la foto, una columna opaca que arruina
+ * el anuncio. Y como esa barra se centra en una caja de la IA que se sabía sesgada, además
+ * dejaba a la vista la placa de un tercero (un Nissan estacionado al lado, con su placa
+ * perfectamente legible) porque el detector de color SÍ la había encontrado pero la
+ * reconciliación la descartaba por no concordar con la única región reportada.
+ *
+ * Los cambios de fondo son:
+ *  - La regla impresa: el error de la caja de la IA baja de 13–28 puntos porcentuales del alto
+ *    a 2–4, lo que hace innecesaria la banda.
+ *  - Todas las tolerancias y márgenes pasan a medirse en píxeles y en unidades del tamaño
+ *    estimado de la PLACA, no en porcentaje del lienzo (que cambia de significado según la
+ *    orientación de la foto).
+ *  - Se piden y se tapan TODAS las placas, no solo la del carro protagonista.
+ *  - El detector de color vuelve a armar las placas PARTIDAS por un obstáculo antes de
+ *    filtrarlas por forma (`fusionarFragmentos` en lib/detectar-placa-color.ts): sin eso, la
+ *    placa de un carro detrás de una reja no existía para el sistema.
+ *  - La IA dice de qué COLOR es cada panel, y solo las placas amarillas se confirman contra la
+ *    máscara amarilla: si no, el sello de una placa blanca de servicio público terminaba sobre
+ *    el objeto amarillo más cercano (ver `PlacaIA.color`).
+ * Y cuando el sistema no puede ubicar una placa con certeza razonable ya NO pinta una barra
+ * "por si acaso": marca la foto para revisión manual (`revisionManual`), que es la única de
+ * las dos opciones que no arruina la foto Y deja la placa expuesta a la vez.
  *
  * Costo por foto: 1 llamada a la API en el caso normal (2 como máximo si la primera falla por
- * un problema técnico), contra las 2–4 del diseño anterior.
+ * un problema técnico), igual que la versión anterior.
  */
 export async function detectarYDifuminarPlaca(
   bufferOriginal: Buffer,
@@ -760,13 +1020,19 @@ export async function detectarYDifuminarPlaca(
   const imgH = meta.height ?? 1;
 
   // Detector determinístico de placa amarilla: corre SIEMPRE (es local, sin red, ~10–90ms) y
-  // es quien decide DÓNDE tapar. Si llegara a fallar, se sigue sin candidatos (la banda de
-  // respaldo cubre el caso) en vez de tumbar toda la subida de la foto.
+  // es quien mide DÓNDE están las placas amarillas. Además de la lista de candidatos con forma
+  // de placa se guarda la MÁSCARA amarilla cruda, para poder preguntarle después "¿hay amarillo
+  // justo acá?" en la vecindad de cada placa que reporte la IA (`refinarZonaAmarilla`) sin
+  // volver a decodificar la imagen. Si llegara a fallar, se sigue sin candidatos (las cajas de
+  // la IA cubren el caso) en vez de tumbar toda la subida de la foto.
   let candidatos: CandidatoPlaca[] = [];
+  let mascaraAmarilla: MascaraAmarilla | null = null;
   try {
-    candidatos = await detectarPlacasPorColor(buffer);
+    const analisis = await analizarAmarillo(buffer);
+    candidatos = analisis.candidatos;
+    mascaraAmarilla = analisis.mascara;
   } catch (err) {
-    console.error('[blur-placas] El detector de placa por color falló — se continúa solo con la pista de la IA:', err);
+    console.error('[blur-placas] El detector de placa por color falló — se continúa solo con las cajas de la IA:', err);
   }
 
   if (!process.env.ANTHROPIC_API_KEY) {
@@ -774,161 +1040,256 @@ export async function detectarYDifuminarPlaca(
     return resolverSinIA(buffer, candidatos, imgW, imgH);
   }
 
-  // Normalizar a JPEG para base64 (menor tamaño)
-  const jpegBuf = await sharp(buffer).jpeg({ quality: 85 }).toBuffer();
-  const base64 = jpegBuf.toString('base64');
+  // La imagen que ve la IA lleva la regla de coordenadas impresa; el sello se estampa siempre
+  // sobre `buffer`, que es la foto limpia. Si por lo que sea no se pudiera dibujar la regla
+  // (SVG/librsvg), se manda la foto tal cual: la IA seguirá respondiendo y el detector de
+  // color sigue siendo quien ubica las placas amarillas.
+  let paraIA: Buffer;
+  try {
+    paraIA = await conReglaDeCoordenadas(buffer, imgW, imgH);
+  } catch (err) {
+    console.error('[blur-placas] No se pudo dibujar la regla de coordenadas — se manda la foto sin regla (la caja de la IA será menos precisa):', err);
+    paraIA = await sharp(buffer).jpeg({ quality: 85 }).toBuffer();
+  }
+  const base64 = paraIA.toString('base64');
 
   // UNA llamada a Claude, con UN reintento solo si falla por un problema técnico (error de
-  // API o respuesta sin JSON válido). Ver el comentario de arquitectura arriba para por qué
-  // ya no son 2 llamadas independientes.
-  let llamada = await llamarClaudeDeteccionPlaca(base64);
+  // API o respuesta sin JSON válido).
+  let llamada = await llamarClaudeDeteccionPlaca(base64, imgW, imgH);
   if (!llamada.ok) {
     console.warn(`[blur-placas] Intento 1/2 falló (motivo: ${llamada.motivo}) — reintentando una vez más antes de rendirse`);
-    llamada = await llamarClaudeDeteccionPlaca(base64);
+    llamada = await llamarClaudeDeteccionPlaca(base64, imgW, imgH);
   }
 
   if (!llamada.ok) {
-    // Fallo técnico tras agotar el reintento: no hay moderación de contenido, pero la placa
-    // igual se tapa si el detector de color la encontró.
+    // Fallo técnico tras agotar el reintento: no hay moderación de contenido, pero las placas
+    // igual se tapan si el detector de color las encontró.
     logFalloDefinitivo(llamada);
     return resolverSinIA(buffer, candidatos, imgW, imgH);
   }
 
-  const deteccion = llamada.deteccion;
-
-  const contenidoInapropiado = deteccion.inappropriate_content === true;
-  const motivoInapropiado = contenidoInapropiado
-    ? (deteccion.inappropriate_reason || 'Contenido marcado como inapropiado por la IA')
-    : undefined;
-
+  const { placas, contenidoInapropiado, motivoInapropiado } = llamada.deteccion;
+  // Telemetría de lo que REPORTÓ la IA, antes de reconciliar. Es el dato que hace falta para
+  // diagnosticar en producción si un sello quedó mal puesto: sin esto solo se ve el rectángulo
+  // final y no se puede distinguir "la IA se equivocó de lugar" de "la reconciliación eligió
+  // mal el amarillo". Son coordenadas y descripciones, no datos personales.
+  console.warn(
+    `[blur-placas][PLACA-IA] La IA reporta ${placas.length} placa(s) en una foto de ${imgW}x${imgH}.`,
+    placas.map(p => ({ ...p.caja, deSujeto: p.deSujeto, color: p.color, confianza: p.confianza, legible: p.legible, anchor: p.anchor })),
+  );
   if (contenidoInapropiado) {
     console.warn('[blur-placas] Foto marcada por la IA como contenido inapropiado:', motivoInapropiado);
   }
 
-  const ev = evaluarRegion(deteccion, imgW, imgH);
+  // ── Reconciliación placa por placa ────────────────────────────────────────────────────
+  const zonas: Zona[] = [];
+  const motivosRevision: string[] = [];
+  const candidatosUsados = new Set<CandidatoPlaca>();
 
-  // --- Caso A: la IA dice que NO hay placa (o devolvió una pista con forma imposible) ---
-  if (!ev.valida) {
-    const fuertes = candidatos.filter(esCandidatoFuerte).slice(0, MAX_ZONAS_TAPADAS);
-    if (fuertes.length === 0) {
-      console.warn(`[blur-placas][PLACA-NO-TAPADA] La IA no reporta placa visible (motivo: ${ev.motivo}) y el detector de color tampoco encontró una placa amarilla clara — foto publicada sin tapar`);
-      return { buffer, difuminada: false, contenidoInapropiado, motivoInapropiado, moderacionEvaluada: true, via: 'ninguna' };
+  for (const placa of placas) {
+    const ventana = ventanaDeBusqueda(placa.caja, imgW, imgH);
+
+    // (a) Todo el amarillo disponible en esa ventana, de las dos fuentes:
+    //     - los candidatos "con forma de placa" que el barrido global ya validó (los más
+    //       fiables: pasaron los filtros de forma sobre toda la foto);
+    //     - las manchas amarillas locales de la ventana, SIN filtro de forma
+    //       (`zonasAmarillasEn`), que es lo que rescata las placas giradas en tomas 3/4 cuyo
+    //       bounding box sale casi cuadrado y el barrido global descarta.
+    //     De todo eso se elige por `puntajeUbicacion` (distancia a la caja de la IA + parecido
+    //     a la proporción de una placa), no por área: el amarillo más grande de la vecindad
+    //     suele ser una columna o un muro, no la placa.
+    //
+    //     EXCEPCIÓN: una placa que la IA describe como BLANCA no se puede confirmar contra la
+    //     máscara amarilla — por definición no hay amarillo debajo, así que el amarillo más
+    //     cercano es otro objeto (ver el comentario de `PlacaIA.color`). Para esas no se busca
+    //     nada y se va derecho al camino de la caja de la IA.
+    const buscarAmarillo = placa.color !== 'blanca';
+    const globales = buscarAmarillo
+      ? candidatos.filter(c => !candidatosUsados.has(c) && dentroDe(c, ventana) && tamanoCompatible(c, placa.caja, imgW, imgH))
+      : [];
+    const locales = buscarAmarillo && mascaraAmarilla
+      ? zonasAmarillasEn(mascaraAmarilla, ventana).filter(z => tamanoCompatible(z, placa.caja, imgW, imgH))
+      : [];
+    const opciones = [...globales, ...locales];
+
+    // Se ELIGE por puntaje (distancia + parecido a una placa) pero se ACEPTA por distancia
+    // sola: la penalización por proporción sirve para desempatar entre varios amarillos, no
+    // para decidir si el ganador está donde la IA dijo. Mezclar las dos cosas en un único tope
+    // descartaba placas bien ubicadas por verse escorzadas — la del borde derecho del DEEPAL
+    // está a 3 px en X de la caja de la IA y su proporción de 0.57 le sumaba 2.5 puntos de
+    // castigo, suficiente para tirarla.
+    let medido: CandidatoPlaca | null = null;
+    let mejor = Infinity;
+    let distanciaMedido = Infinity;
+    for (const o of opciones) {
+      const p = puntajeUbicacion(o, placa.caja, imgW, imgH);
+      if (p < mejor) { mejor = p; medido = o; distanciaMedido = distanciaNormalizada(o, placa.caja, imgW, imgH); }
     }
-    // La IA dijo que no, pero hay un rectángulo amarillo con forma inequívoca de placa. Se
-    // tapa igual: una placa legible de un cliente es un problema de privacidad real, mientras
-    // que tapar de más un objeto amarillo es, como mucho, un problema estético.
-    const rectangulos = fuertes.map(c => rectanguloDesdeCaja(c, imgW, imgH, MARGEN_CANDIDATO_COLOR));
-    console.warn(
-      `[blur-placas][PLACA-VIA-COLOR-SIN-PISTA] La IA no reporta placa visible (motivo: ${ev.motivo}) pero el detector de color encontró ${fuertes.length} placa(s) amarilla(s) clara(s) — se tapan por privacidad`,
-      rectangulos,
-    );
-    const resultado = await taparZonas(buffer, rectangulos);
-    return { buffer: resultado, difuminada: true, contenidoInapropiado, motivoInapropiado, moderacionEvaluada: true, via: 'color_sin_pista' };
+    // Se guarda el mejor amarillo ANTES del corte por puntaje: si la placa termina en el
+    // camino "no se tapa nada" (confianza baja), ese amarillo es mejor que nada — ver abajo.
+    const mejorAmarillo = medido;
+    const distanciaMejorAmarillo = distanciaMedido;
+    const tope = placa.color === 'amarilla' ? DISTANCIA_MAX_AMARILLA : DISTANCIA_MAX_OTRA;
+    if (medido && distanciaMedido > tope) {
+      console.warn(
+        `[blur-placas][PLACA-AMARILLO-DESCARTADO] El mejor rectángulo amarillo de la ventana está a ${distanciaMedido.toFixed(2)} tolerancias del centro que reportó la IA (tope ${tope} para una placa ${placa.color}) — demasiado lejos. Se tapa por la caja de la IA en vez de sobre ese amarillo.`,
+        { caja: placa.caja, anchor: placa.anchor },
+      );
+      medido = null;
+    }
+
+    if (medido) {
+      // Solo se marca como "usado" si el ganador vino del barrido global: los `candidatosUsados`
+      // existen para no tapar dos veces el mismo rectángulo (y para saber cuáles quedaron sin
+      // reclamar al final), y las manchas locales no están en esa lista.
+      if (globales.includes(medido)) candidatosUsados.add(medido);
+      // Si el ganador es una mancha local, igual se marcan como usados los candidatos globales
+      // de la ventana: son amarillos de la misma placa/vecindad y volver a taparlos en el
+      // barrido final de "amarillos que la IA no reclamó" solo agregaría sellos redundantes.
+      else for (const g of globales) candidatosUsados.add(g);
+
+      const medidoRect = alMenos(
+        rectanguloDeCandidato(medido, imgW, imgH),
+        (placa.caja.w_pct / 100) * imgW * FRACCION_MIN_CAJA_IA,
+        (placa.caja.h_pct / 100) * imgH * FRACCION_MIN_CAJA_IA,
+        imgW, imgH,
+      );
+      const { rect, recortado } = acotarSello(medidoRect, imgW, imgH);
+      if (recortado) motivosRevision.push('Un tapado medido sobre los píxeles salió más grande de lo razonable y hubo que recortarlo.');
+      zonas.push({
+        rect,
+        origen: 'color',
+        detalle: `placa ${placa.deSujeto ? 'del vehículo' : 'de un tercero'} (${placa.confianza}) ubicada sobre los píxeles amarillos (puntaje ${mejor.toFixed(2)}, distancia ${distanciaMedido.toFixed(2)}): ${placa.anchor}`,
+      });
+      continue;
+    }
+
+    // (c) Sin ningún amarillo debajo. La caja de la IA es lo único que hay.
+    if (placa.confianza === 'baja') {
+      // La IA no está segura de que eso sea una placa y el amarillo de la zona (si lo hay) no
+      // llegó al listón de distancia (`DISTANCIA_MAX_AMARILLA` / `DISTANCIA_MAX_OTRA`).
+      //
+      // RESCATE: si SÍ había amarillo en la ventana, se tapa ESE en vez de no tapar nada. El
+      // listón existe para preferir la caja de la IA cuando el amarillo de la vecindad es
+      // sospechoso (una placa blanca de servicio público con un balde amarillo al lado), pero
+      // en esta rama la alternativa no es la caja de la IA: es no tapar NADA. Con "la IA cree
+      // ver una placa acá" + "hay amarillo acá" el saldo se inclina claramente a tapar, y el
+      // sello es del tamaño del amarillo medido, o sea chico. Caso real: la placa de un carro
+      // de terceros en el borde derecho de la foto del DEEPAL, vista casi de canto — la IA la
+      // reportó con confianza baja, el amarillo estaba ahí mismo y quedaba publicada.
+      // El rescate no es "tapar cualquier amarillo de la ventana": se exige la misma distancia
+      // que para una placa amarilla confirmada (`DISTANCIA_MAX_AMARILLA`). La ventana es un
+      // rectángulo y admite centros algo más lejos que esa elipse, y ahí ya no se está tapando
+      // la placa sino lo que haya al lado.
+      if (mejorAmarillo && distanciaMejorAmarillo <= DISTANCIA_MAX_AMARILLA) {
+        const rescate = acotarSello(
+          alMenos(
+            rectanguloDeCandidato(mejorAmarillo, imgW, imgH),
+            (placa.caja.w_pct / 100) * imgW * FRACCION_MIN_CAJA_IA,
+            (placa.caja.h_pct / 100) * imgH * FRACCION_MIN_CAJA_IA,
+            imgW, imgH,
+          ),
+          imgW, imgH,
+        );
+        if (rescate.recortado) motivosRevision.push('Un tapado medido sobre los píxeles salió más grande de lo razonable y hubo que recortarlo.');
+        for (const g of globales) candidatosUsados.add(g);
+        console.warn(
+          `[blur-placas][PLACA-BAJA-CON-AMARILLO] La IA reporta con confianza BAJA una placa ${placa.deSujeto ? 'del vehículo' : 'de un tercero'} y el amarillo más cercano no llega al listón (distancia ${distanciaMejorAmarillo.toFixed(2)} > ${tope} tolerancias) — se tapa ese amarillo igual, que es mejor que no tapar nada.`,
+          { caja: placa.caja, anchor: placa.anchor, rect: rescate.rect },
+        );
+        zonas.push({
+          rect: rescate.rect,
+          origen: 'color',
+          detalle: `placa ${placa.deSujeto ? 'del vehículo' : 'de un tercero'} (baja) tapada sobre el amarillo más cercano: ${placa.anchor}`,
+        });
+        continue;
+      }
+      // Sin ningún amarillo debajo: estampar un sello acá es, con más probabilidad que no,
+      // ensuciar la foto sobre una reja o un faro. No se tapa; si era la placa del propio
+      // carro publicado, la foto va a revisión manual (una placa del vehículo que se publica
+      // es justo la que no puede quedar expuesta por descuido).
+      console.warn(
+        `[blur-placas][PLACA-IA-DESCARTADA] La IA reporta con confianza BAJA una placa ${placa.deSujeto ? 'del vehículo' : 'de un tercero'} que ningún píxel amarillo confirma — no se tapa.`,
+        { caja: placa.caja, anchor: placa.anchor },
+      );
+      // Retener la foto para revisión humana en los dos casos en que "no tapamos nada" duele
+      // de verdad: la placa del propio carro que se publica, y cualquier placa que la IA diga
+      // que se alcanza a LEER (una placa legible es un dato personal expuesto, sea de quien
+      // sea). Un panel de fondo ilegible no manda la foto a revisión: hacerlo llenaría la cola
+      // del admin de fotos perfectamente publicables.
+      if (placa.deSujeto) {
+        motivosRevision.push('La IA cree ver la placa del vehículo pero no está segura de dónde, y el detector de color no la encuentra.');
+      } else if (placa.legible) {
+        motivosRevision.push('La IA cree ver la placa legible de otro vehículo pero no está segura de dónde, y el detector de color no la encuentra.');
+      }
+      continue;
+    }
+
+    // Placa que la IA sí ve con seguridad pero que no es amarilla (placa blanca de servicio
+    // público, placa extranjera) o está tan quemada/en sombra que la máscara no la agarra. Se
+    // tapa la caja de la IA con un margen por eje: la mitad del lado de la caja para cubrir un
+    // panel algo más grande de lo que el modelo dibujó, y como PISO el error residual de la
+    // regla (`ERROR_IA_FRACCION_LADO` de cada lado de la imagen), que es lo que domina cuando
+    // la placa es chica y está lejos.
+    const cajaW = (placa.caja.w_pct / 100) * imgW;
+    const cajaH = (placa.caja.h_pct / 100) * imgH;
+    const padX = Math.max(cajaW * MARGEN_IA_FRACCION_CAJA, imgW * ERROR_IA_FRACCION_LADO);
+    const padY = Math.max(cajaH * MARGEN_IA_FRACCION_CAJA, imgH * ERROR_IA_FRACCION_LADO);
+    const { rect, recortado } = acotarSello(rectanguloDesdeCaja(placa.caja, imgW, imgH, padX, padY), imgW, imgH);
+    if (recortado) motivosRevision.push('El tapado calculado desde la caja de la IA era desproporcionado y hubo que recortarlo.');
+    zonas.push({
+      rect,
+      origen: 'ia',
+      detalle: `placa ${placa.deSujeto ? 'del vehículo' : 'de un tercero'} (${placa.confianza}) SIN confirmación de píxeles: ${placa.anchor}`,
+    });
   }
 
-  // --- Caso B: la IA dice que SÍ hay placa y el detector de color concuerda con la pista ---
-  // Se tapan los candidatos que caen en la ventana (no solo el mejor puntuado): ver
-  // `elegirCandidatosConPista` para por qué elegir uno solo es un riesgo asimétrico. Si
-  // caben más de `MAX_ZONAS_TAPADAS` en la ventana, los que sobran NO se ignoran en
-  // silencio: se revisan uno por uno y, si alguno pudo ser la placa, se cubre la ventana
-  // entera con la banda de respaldo (ver `descartadoSolido` abajo).
-  const { elegidos, descartados } = elegirCandidatosConPista(candidatos, ev.caja);
-  const dentroEnVentana = elegidos.length + descartados.length;
-  if (elegidos.length > 0) {
-    const { cx: pcx, cy: pcy } = centro(ev.caja);
-    const rectangulos = elegidos.map(c => rectanguloDesdeCaja(c, imgW, imgH, MARGEN_CANDIDATO_COLOR));
-
-    // CALIDAD MÍNIMA: este camino es el único de los tres que tiene una alternativa segura a
-    // mano (la banda), así que no puede ser el más permisivo. Si ninguno de los candidatos
-    // tapados parece de verdad una placa (`esSolidoParaPista`: el mismo `esCandidatoFuerte`
-    // de los otros dos caminos MÁS un ancho comparable al de la pista), lo más probable es
-    // que se haya tapado un jirón (placa en sombra que la máscara atrapa a medias) o un
-    // objeto amarillo cualquiera — y devolver `difuminada:true` ahí publicaría como
-    // "procesada" una foto con la placa aún legible. En ese caso se estampa TAMBIÉN la banda
-    // de respaldo, en la misma composición.
-    const hayCandidatoSolido = elegidos.some(c => esSolidoParaPista(c, ev.caja));
-    // SEGUNDA razón para forzar la banda, independiente de la calidad de los que SÍ se
-    // taparon: en la ventana cayeron más candidatos de los que se pueden tapar
-    // (`MAX_ZONAS_TAPADAS`), y alguno de los que el `slice` dejó afuera habría contado él
-    // solo como "placa tapada" (`esSolidoParaPista`). El orden lo decide un puntaje
-    // heurístico sobre una pista que se sabe sesgada, no una medición de "esto es una
-    // placa": si la placa real quedó 4ª y uno de los 3 elegidos es un amarillo bien formado
-    // (un taxi, una valla) que pasa el mismo listón, `hayCandidatoSolido` da true y la foto
-    // saldría con `via:'color'` — reportada como tapado preciso, con la placa legible.
-    //
-    // POR QUÉ SE MIRA *QUÉ* SE DESCARTÓ Y NO SOLO *CUÁNTOS* (medido con fotos reales): la
-    // versión que forzaba la banda con solo `descartados.length > 0` degradaba fotos que ya
-    // funcionaban bien. En `v16_trasera.jpg` de producción (9 candidatos, 5 en la ventana) la
-    // placa es el candidato #1 y ya quedaba tapada con precisión; los descartados son motas
-    // amarillas de la calle de ~35-150px con relleno 0.47-0.59, que no pueden ser una placa.
-    // Con el conteo pelado esa foto pasaba de 0.5% a 14.9% de superficie tapada — una banda
-    // que se come casi todo el carro en la foto principal del anuncio. El listón
-    // `esSolidoParaPista` sí distingue: una placa real (o el taxi/valla del escenario de
-    // riesgo) lo pasa y dispara la banda; una mota de la calle no.
-    //
-    // HUECO CONOCIDO (aceptado, y es el mismo que ya existía): si el candidato descartado
-    // fuera la placa real pero llegara DÉBIL (un jirón angosto, placa en sombra) y además
-    // uno de los 3 tapados fuera un amarillo sólido, no se agrega banda. Ese caso no es
-    // detectable con la información disponible; lo que sí se cerró es el caso donde el
-    // descartado tiene forma y tamaño de placa.
-    const descartadoSolido = descartados.find(c => esSolidoParaPista(c, ev.caja));
-    const necesitaBanda = !hayCandidatoSolido || descartadoSolido !== undefined;
-    if (necesitaBanda) {
-      const banda = bandaRespaldo(ev.caja);
-      rectangulos.push(rectanguloDesdeCaja(banda, imgW, imgH, 0));
-      const motivo = !hayCandidatoSolido
-        ? `los ${elegidos.length} candidato(s) de color que concuerdan con la pista no llegan al listón de "placa clara" ` +
-          `(relleno>=0.62, aspecto 1.5–3.6, ancho>=4% y >=${(FRACCION_ANCHO_PISTA_MIN * 100).toFixed(0)}% del ancho de la pista)`
-        : `cayeron ${dentroEnVentana} candidatos en la ventana, solo se pueden tapar ${MAX_ZONAS_TAPADAS} ` +
-          `(MAX_ZONAS_TAPADAS) y al menos uno de los ${descartados.length} descartado(s) tiene forma y tamaño de placa — puede ser la placa real`;
-      console.warn(
-        `[blur-placas][PLACA-VIA-COLOR-DEBIL] Se agrega la BANDA de respaldo además de tapar los candidatos porque ${motivo}.`,
-        { candidatos: elegidos, dentroEnVentana, descartados, descartadoSolido, banda },
-      );
-    } else if (descartados.length > 0) {
-      // No se agrega banda, pero el descarte queda registrado: es el dato que haría falta
-      // para detectar en producción una placa que se esté yendo por este camino.
-      console.warn(
-        `[blur-placas][PLACA-DESCARTADOS-EN-VENTANA] ${dentroEnVentana} candidatos en la ventana, se tapan ${MAX_ZONAS_TAPADAS} ` +
-        `(MAX_ZONAS_TAPADAS) y los ${descartados.length} restantes NO llegan al listón de "placa clara", así que no se agrega banda.`,
-        { descartados },
-      );
-    }
-
-    const { cx, cy } = centro(elegidos[0]);
-    if (cy > pcy) {
-      // Contradice el sesgo sistemático documentado (la placa real está ARRIBA de la pista,
-      // nunca debajo): es la firma típica de un falso positivo amarillo (taxi, valla, luz).
-      // Se tapa igual — junto con el resto de candidatos de la ventana — pero queda el rastro.
-      console.warn(
-        `[blur-placas][PLACA-CANDIDATO-DEBAJO-DE-PISTA] El candidato mejor puntuado está ${(cy - pcy).toFixed(1)} puntos DEBAJO del centro de la pista de la IA, ` +
-        `cuando el sesgo medido dice que la placa debería estar ~${SESGO_ESPERADO_PCT} puntos por ENCIMA — posible falso positivo amarillo. Revisar si se repite.`,
-      );
-    }
-
-    console.warn(
-      `[blur-placas][PLACA-VIA-COLOR] Placa ubicada por el detector de color (${candidatos.length} candidato(s) amarillo(s) en la foto, ` +
-      `${dentroEnVentana} dentro de la ventana, se tapan ${elegidos.length}${descartados.length > 0 ? ` — ${descartados.length} candidato(s) quedaron fuera por MAX_ZONAS_TAPADAS` : ' (todos)'}). ` +
-      `Pista de la IA: centro (${pcx.toFixed(1)}%, ${pcy.toFixed(1)}%) — mejor candidato: centro (${cx.toFixed(1)}%, ${cy.toFixed(1)}%), ` +
-      `desvío de la IA en Y: ${(pcy - cy).toFixed(1)} puntos porcentuales.`,
-      rectangulos,
-    );
-    const resultado = await taparZonas(buffer, rectangulos);
-    return {
-      buffer: resultado, difuminada: true, contenidoInapropiado, motivoInapropiado, moderacionEvaluada: true,
-      via: necesitaBanda ? 'color_con_banda' : 'color',
-    };
+  // ── Candidatos amarillos que la IA no reclamó ─────────────────────────────────────────
+  // Una placa amarilla inequívoca que la IA pasó por alto se tapa igual: dejar legible la
+  // placa de un cliente es un problema de privacidad real, mientras que tapar de más un objeto
+  // amarillo con forma y tamaño de placa es, como mucho, un problema estético.
+  for (const c of candidatos) {
+    if (candidatosUsados.has(c)) continue;
+    if (!esCandidatoFuerte(c, imgW, imgH)) continue;
+    candidatosUsados.add(c);
+    const { rect } = acotarSello(rectanguloDeCandidato(c, imgW, imgH), imgW, imgH);
+    // Un candidato que cae encima de una zona ya resuelta no agrega privacidad y sí ensucia:
+    // son dos sellos superpuestos sobre la misma placa (pasa cuando el ganador de la ventana
+    // fue una mancha local y este candidato global es otro pedazo del mismo panel amarillo).
+    if (zonas.some(z => solapeRelativo(rect, z.rect) > 0.5)) continue;
+    zonas.push({ rect, origen: 'color', detalle: 'rectángulo amarillo con forma de placa que la IA no reportó' });
   }
 
-  // --- Caso C: la IA dice que SÍ hay placa pero el color no encontró (o no concuerda) ---
-  // Banda de respaldo generosa centrada en la pista — ver `bandaRespaldo` para la
-  // justificación de por qué aquí se tapa MÁS foto a propósito.
-  const banda = bandaRespaldo(ev.caja);
-  const rect = rectanguloDesdeCaja(banda, imgW, imgH, 0);
+  if (zonas.length > MAX_ZONAS_TAPADAS) {
+    console.warn(
+      `[blur-placas][PLACA-DEMASIADAS-ZONAS] Se calcularon ${zonas.length} zonas a tapar y el tope es ${MAX_ZONAS_TAPADAS} — se tapan las ${MAX_ZONAS_TAPADAS} primeras y la foto va a revisión manual.`,
+      zonas.map(z => z.detalle),
+    );
+    motivosRevision.push(`Se detectaron ${zonas.length} placas y solo se taparon ${MAX_ZONAS_TAPADAS}.`);
+    zonas.length = MAX_ZONAS_TAPADAS;
+  }
+
+  const revisionManual = motivosRevision.length > 0;
+  const motivoRevision = revisionManual
+    ? `Foto pendiente de revisión manual de placas: ${[...new Set(motivosRevision)].join(' ')}`
+    : undefined;
+
+  if (zonas.length === 0) {
+    console.warn(
+      `[blur-placas][PLACA-NO-TAPADA] No se tapó nada en esta foto (la IA reportó ${placas.length} placa(s), el detector de color ${candidatos.length} candidato(s) amarillo(s)).`,
+    );
+    return { buffer, difuminada: false, contenidoInapropiado, motivoInapropiado, moderacionEvaluada: true, revisionManual, motivoRevision, via: 'ninguna' };
+  }
+
+  const porColor = zonas.filter(z => z.origen === 'color').length;
+  const via: ResultadoDeteccion['via'] = porColor === zonas.length ? 'color' : porColor === 0 ? 'ia' : 'color_y_ia';
+  const superficie = zonas.reduce((s, z) => s + z.rect.width * z.rect.height, 0) / (imgW * imgH);
   console.warn(
-    `[blur-placas][PLACA-VIA-BANDA-RESPALDO] La IA reporta placa visible pero ningún candidato del detector de color concuerda con su pista (${candidatos.length} candidato(s) amarillo(s) en la foto, ninguno dentro de la ventana de reconciliación) — se tapa una BANDA generosa centrada en la pista para absorber el sesgo vertical conocido de la IA. Monitorear frecuencia en producción.`,
-    { pista: ev.caja, banda, rect },
+    `[blur-placas][PLACA-TAPADA] ${zonas.length} zona(s) tapada(s) en una foto de ${imgW}x${imgH} (via: ${via}, ${(superficie * 100).toFixed(1)}% de la superficie). ` +
+    `La IA reportó ${placas.length} placa(s); el detector de color, ${candidatos.length} candidato(s).`,
+    zonas.map(z => ({ ...z.rect, origen: z.origen, detalle: z.detalle })),
   );
-  const resultado = await taparZonas(buffer, [rect]);
-  return { buffer: resultado, difuminada: true, contenidoInapropiado, motivoInapropiado, moderacionEvaluada: true, via: 'banda_respaldo' };
+
+  const resultado = await taparZonas(buffer, zonas.map(z => z.rect));
+  return { buffer: resultado, difuminada: true, contenidoInapropiado, motivoInapropiado, moderacionEvaluada: true, revisionManual, motivoRevision, via };
 }
