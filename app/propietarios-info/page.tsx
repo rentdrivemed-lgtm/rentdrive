@@ -3,6 +3,7 @@ import React from 'react';
 import Link from 'next/link';
 import { useLang } from '@/contexts/LanguageContext';
 import { IconCar, IconShield, IconRoute, IconKey, IconCalendar, IconCheck, IconArrowR, IconCoin, IconPhoto, IconUsers, IconFlorMedellin } from '@/components/Icons';
+import { BloqueSura } from '@/components/SelloSura';
 
 const T = {
   es: {
@@ -17,7 +18,7 @@ const T = {
     stats: [
       { v: '2018+', l: 'Año mínimo del vehículo' },
       { v: '7 fotos', l: 'Requeridas para publicar' },
-      { v: '100%', l: 'GPS y seguro todo riesgo' },
+      { v: '100%', l: 'GPS y póliza de Seguros SURA' },
       { v: '<10 min', l: 'Tiempo de registro' },
     ],
     howTitle: '¿Cómo funciona?',
@@ -31,7 +32,7 @@ const T = {
     reqTitle: 'Requisitos del vehículo',
     reqs: [
       'Modelo 2018 o más reciente',
-      'Póliza de seguro expedida por DrivePass (no necesitas aportar la tuya)',
+      'Póliza de Seguros SURA contratada por DrivePass (no necesitas aportar la tuya)',
       'SOAT y revisión técnico-mecánica al día',
       'GPS activo o disponibilidad para instalarlo',
       'Buen estado mecánico y estético',
@@ -41,7 +42,8 @@ const T = {
     benefits: [
       { icon: 'users', t: 'Verificamos a los alquiladores', d: 'Solo usuarios verificados con licencia e identidad validada pueden reservar tu vehículo.' },
       { icon: 'pay',   t: 'Gestionamos los pagos',         d: 'Recibimos los pagos con Visa y Mastercard y te transferimos tu parte de forma segura.' },
-      { icon: 'shield',t: 'Monitoreamos con GPS',           d: 'El sistema GPS activo nos permite hacer seguimiento del vehículo en todo momento.' },
+      { icon: 'gps',   t: 'Monitoreamos con GPS',           d: 'El sistema GPS activo nos permite hacer seguimiento del vehículo en todo momento.' },
+      { icon: 'shield',t: 'Pagamos la prima del seguro',    d: 'DrivePass figura como tomador de la póliza de Seguros SURA y asume su costo. Tú eres el asegurado.' },
       { icon: 'price', t: 'Fijamos el precio óptimo',      d: 'Nuestro equipo define precios competitivos para maximizar tus ingresos.' },
     ],
     photosTitle: 'Las 7 fotos requeridas',
@@ -62,7 +64,7 @@ const T = {
     stats: [
       { v: '2018+', l: 'Minimum vehicle year' },
       { v: '7 photos', l: 'Required to publish' },
-      { v: '100%', l: 'GPS and comprehensive insurance' },
+      { v: '100%', l: 'GPS and Seguros SURA policy' },
       { v: '<10 min', l: 'Registration time' },
     ],
     howTitle: 'How does it work?',
@@ -76,7 +78,7 @@ const T = {
     reqTitle: 'Vehicle requirements',
     reqs: [
       '2018 model or newer',
-      'Insurance policy issued by DrivePass (you do not need to provide your own)',
+      'Seguros SURA policy taken out by DrivePass (you do not need to provide your own)',
       'Up-to-date SOAT and technical-mechanical inspection',
       'Active GPS or availability to install one',
       'Good mechanical and aesthetic condition',
@@ -86,7 +88,8 @@ const T = {
     benefits: [
       { icon: 'users',  t: 'We verify renters',        d: 'Only verified users with validated license and identity can book your vehicle.' },
       { icon: 'pay',    t: 'We manage payments',        d: 'We receive payments with Visa and Mastercard and transfer your share safely.' },
-      { icon: 'shield', t: 'GPS monitoring',            d: 'The active GPS system allows us to track the vehicle at all times.' },
+      { icon: 'gps',    t: 'GPS monitoring',            d: 'The active GPS system allows us to track the vehicle at all times.' },
+      { icon: 'shield', t: 'We pay the insurance premium', d: 'DrivePass is the policyholder of the Seguros SURA policy and takes on its cost. You are the insured party.' },
       { icon: 'price',  t: 'We set the optimal price',  d: 'Our team defines competitive prices to maximize your income.' },
     ],
     photosTitle: 'The 7 required photos',
@@ -102,6 +105,7 @@ const benIcon: Record<string, React.ReactElement> = {
   pay:    <IconCoin size={20} className="text-accent"/>,
   shield: <IconShield size={20} className="text-accent"/>,
   price:  <IconKey size={20} className="text-accent"/>,
+  gps:    <IconRoute size={20} className="text-accent"/>,
 };
 
 export default function PropietariosInfoPage() {
@@ -225,6 +229,10 @@ export default function PropietariosInfoPage() {
           </div>
         </div>
       </section>
+
+      {/* RESPALDO ASEGURADOR — al propietario le importa distinto: quién es el
+          asegurado, quién paga la prima y qué se queda por fuera del amparo. */}
+      <BloqueSura perfil="propietario" />
 
       {/* 7 PHOTOS */}
       <section className="max-w-4xl mx-auto px-6 py-14">
