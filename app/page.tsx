@@ -101,7 +101,7 @@ export default function Home() {
     <div>
       {/* ── BARRA DE ANUNCIO (ribbon de marca) ── */}
       <div className="text-center py-2.5 px-4 text-sm font-semibold tracking-tight bg-accent/10 border-b border-accent/20 text-ink">
-        Tu ciudad. Tu ritmo. Tu DrivePass.
+        DrivePass free drive
       </div>
 
       {/* ── HERO (banner a sangre completa, template DrivePass) ── */}

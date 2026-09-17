@@ -58,7 +58,7 @@ export default function HeroSlider() {
           </span>
           <h1 className="font-black text-ink leading-[1.04] tracking-[-0.03em] mt-5 mb-4"
             style={{ fontSize: 'clamp(36px, 5.5vw, 60px)' }}>
-            Tu ciudad.<br />Tu ritmo.<br /><span className="text-accent">Tu DrivePass.</span>
+            DrivePass<br /><span className="text-accent">free drive</span>
           </h1>
           <p className="text-ink-soft text-lg leading-relaxed max-w-[32ch]">
             Conectamos propietarios y alquiladores en Medellín de forma simple, segura y transparente.
