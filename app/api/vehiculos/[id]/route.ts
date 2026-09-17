@@ -7,6 +7,7 @@ import { eliminarVehiculoInteligente } from '@/lib/eliminar';
 import { registrarAuditoria } from '@/lib/permisos';
 import { extraerUrlsFotos, fotosRegistradasEntre, normalizarUrlFoto } from '@/lib/moderacion';
 import { documentosConUrlsValidas, esUrlDeStorageValida } from '@/lib/storage';
+import { CASILLA_LABELS, leerFotos, ubicacionesDeFotos } from '@/lib/fotos-vehiculo';
 import { tecnoRequerida } from '@/lib/tecnomecanica';
 import { CLAVE_POLIZA, POLIZA_LABEL, leerPoliza, normalizarPolizaEntrada, parsearDocumentos, quitarPolizaDeEntrada } from '@/lib/poliza-vehiculo';
 import { esCombustibleValido, inscripcionExencionConfirmada, requiereInscripcionExencion, sanitizarClaseVehiculo } from '@/lib/vehiculo-campos';
@@ -234,6 +235,18 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       : inscripcionExencionConfirmada(vehiculo.exencion_pico_placa_inscrita);
     body.exencion_pico_placa_inscrita = requiereInscripcionExencion(combustibleEfectivo) && confirmada ? 1 : 0;
   }
+
+  // ── Fotos agregadas/eliminadas en este request (bitácora + aviso al propietario) ──────
+  // Se llena en el bloque de moderación de fotos (más abajo), que es donde ya se parsean
+  // las dos columnas, y se consume DESPUÉS del UPDATE — igual que `diasResumen`, para no
+  // dejar una entrada de bitácora de algo que otra validación posterior rechazó.
+  type FotoUbicada = { url: string; donde: string };
+  let fotosResumen: { agregadas: FotoUbicada[]; quitadas: FotoUbicada[] } | null = null;
+  // Se devuelve en la respuesta cuando la moderación fuerza la revisión de contenido por
+  // culpa de una foto de este mismo request: el panel necesita saberlo para avisar que el
+  // vehículo acaba de salir del catálogo público (hoy, sin saldo en la API de IA, TODA
+  // foto nueva se marca para revisión manual — ver app/api/upload/route.ts).
+  let revisionForzada: { motivo: string } | null = null;
 
   // ── `dias_disponibles`: formato + protección de reservas activas ──────────────────────
   //
@@ -719,6 +732,34 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     const urlsExistentes = new Set(extraerUrlsFotos(vehiculo.fotos, vehiculo.fotos_detalle).map(normalizarUrlFoto));
     const urlsNuevas = urlsFotos.filter(u => !urlsExistentes.has(normalizarUrlFoto(u)));
 
+    // Resumen del cambio para la BITÁCORA (solo se usa si quien edita es admin, ver más
+    // abajo): qué foto entró y cuál salió, y de qué ranura. Se calcula ACÁ, con el vehículo
+    // todavía sin tocar, porque después del UPDATE ya no hay con qué comparar. Un request
+    // que solo manda una de las dos columnas deja la otra como está en BD — por eso el
+    // `?? vehiculo.…` en cada una.
+    if (isAdmin) {
+      const antes = ubicacionesDeFotos(
+        leerFotos({ fotos: String(vehiculo.fotos ?? ''), fotos_detalle: String(vehiculo.fotos_detalle ?? '') }),
+        CASILLA_LABELS,
+      );
+      const despues = ubicacionesDeFotos(
+        leerFotos({
+          fotos: String((body.fotos ?? vehiculo.fotos) ?? ''),
+          fotos_detalle: String((body.fotos_detalle ?? vehiculo.fotos_detalle) ?? ''),
+        }),
+        CASILLA_LABELS,
+      );
+      // El cruce va por URL NORMALIZADA (misma función que la allow-list) para que un
+      // cambio cosmético de la URL no se cuente como "borró una y agregó otra".
+      const claveAntes = new Map([...antes].map(([url, donde]) => [normalizarUrlFoto(url), { url, donde }]));
+      const claveDespues = new Map([...despues].map(([url, donde]) => [normalizarUrlFoto(url), { url, donde }]));
+      const agregadas = [...claveDespues].filter(([k]) => !claveAntes.has(k)).map(([, v]) => v);
+      const quitadas = [...claveAntes].filter(([k]) => !claveDespues.has(k)).map(([, v]) => v);
+      if (agregadas.length > 0 || quitadas.length > 0) {
+        fotosResumen = { agregadas, quitadas };
+      }
+    }
+
     if (urlsNuevas.length > 0) {
       const registradasNuevas = fotosRegistradasEntre(db, urlsNuevas);
       for (const u of urlsNuevas) {
@@ -736,6 +777,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     const fotosMarcadas = [...registradasTodas.values()].filter(r => r.contenidoInapropiado);
     if (fotosMarcadas.length > 0) {
       const motivo = fotosMarcadas.map(f => f.motivo).filter(Boolean).join(' | ');
+      revisionForzada = { motivo };
       const idxRevision = pairs.indexOf('contenido_revision = ?');
       if (idxRevision !== -1) values[idxRevision] = 1;
       else { pairs.push('contenido_revision = ?'); values.push(1); }
@@ -815,6 +857,51 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     db.prepare(`UPDATE vehiculos SET ${pairs.join(', ')} WHERE id = ?`).run(...values, Number(id));
   }
 
+  // ── Fotos tocadas por el admin: bitácora + aviso al propietario ──────────────────────
+  // Son fotos de un bien AJENO: que un admin agregue o borre una tiene que quedar con
+  // nombre, vehículo, ranura y URL — la URL es lo único que permite ir a buscar la imagen
+  // en Cloudinary si hubo un borrado por error (el archivo sigue ahí; lo que se borra acá
+  // es la referencia, no el binario).
+  //
+  // Mismo criterio que el calendario de más abajo: solo cuando quien edita es ADMIN (el
+  // propietario editando sus propias fotos no genera bitácora, sería ruido) y solo si el
+  // conjunto de fotos cambió de verdad (reguardar lo mismo no audita nada).
+  if (isAdmin && fotosResumen) {
+    const etiquetaVehiculo = `${vehiculo.marca} ${vehiculo.modelo} ${vehiculo.anio}${vehiculo.placa ? ` (${vehiculo.placa})` : ''}`;
+    const { agregadas, quitadas } = fotosResumen;
+    const lista = (fs: FotoUbicada[]) => fs.map(f => `[${f.donde}] ${f.url}`).join(' , ');
+    const partes: string[] = [];
+    if (agregadas.length > 0) partes.push(`agregó ${agregadas.length} foto${agregadas.length !== 1 ? 's' : ''}`);
+    if (quitadas.length > 0) partes.push(`eliminó ${quitadas.length} foto${quitadas.length !== 1 ? 's' : ''}`);
+    registrarAuditoria(db, user, {
+      area: 'vehiculos', accion: 'editar_fotos_vehiculo',
+      entidad: 'vehiculo', entidad_id: Number(id),
+      detalle: `${partes.join(' y ')} de ${etiquetaVehiculo} (propietario #${vehiculo.propietario_id})`
+        + (agregadas.length > 0 ? ` · Agregadas: ${lista(agregadas)}` : '')
+        + (quitadas.length > 0 ? ` · Eliminadas: ${lista(quitadas)}` : ''),
+    });
+
+    // Aviso al propietario — best-effort (si falla, el guardado NO se cae), y solo si el
+    // vehículo es AJENO: un admin que además sea el dueño no se auto-notifica.
+    if (Number(vehiculo.propietario_id) !== user.id) {
+      try {
+        const detalleAviso = [
+          agregadas.length > 0 ? `agregó ${agregadas.length} foto${agregadas.length !== 1 ? 's' : ''} (${agregadas.map(f => f.donde).join(', ')})` : '',
+          quitadas.length > 0 ? `eliminó ${quitadas.length} foto${quitadas.length !== 1 ? 's' : ''} (${quitadas.map(f => f.donde).join(', ')})` : '',
+        ].filter(Boolean).join(' y ');
+        db.prepare('INSERT INTO notificaciones (destinatario_id, tipo, titulo, mensaje, referencia_id, referencia_tipo) VALUES (?, ?, ?, ?, ?, ?)')
+          .run(
+            Number(vehiculo.propietario_id), 'fotos_actualizadas_admin',
+            '📸 DrivePass actualizó las fotos de tu vehículo',
+            `${user.nombre} (equipo DrivePass) ${detalleAviso} de ${etiquetaVehiculo}. Revísalo en tu panel.`,
+            Number(id), 'vehiculo',
+          );
+      } catch (e) {
+        console.error('[vehiculos] no se pudo notificar el cambio de fotos:', e instanceof Error ? e.message : e);
+      }
+    }
+  }
+
   // ── Calendario tocado por el admin: bitácora + aviso al propietario ───────────────────
   // Decisión del dueño (sep-2026): el admin tiene las MISMAS capacidades que el propietario
   // sobre el calendario, pero cada vez que toca el de OTRO queda registro y el propietario se
@@ -880,6 +967,12 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     // Se devuelve el calendario tal como quedó en BD (normalizado) para que el cliente
     // sincronice con eso en vez de con lo que él creía estar guardando.
     ...(diasFinales !== null ? { dias_disponibles: diasFinales } : {}),
+    // Solo cuando la moderación forzó la revisión por una foto de este request: el panel
+    // de admin lo usa para avisar que el vehículo salió del catálogo público y para mover
+    // la tarjeta a la vista «en revisión de contenido».
+    ...(revisionForzada !== null
+      ? { contenido_revision: 1, contenido_revision_motivo: revisionForzada.motivo }
+      : {}),
   });
 }
 

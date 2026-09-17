@@ -24,6 +24,11 @@ import VisorFotos, { type FotoVisor } from '@/components/VisorFotos';
 import TaparPlacaManual from '@/components/TaparPlacaManual';
 import { FotoPlaca, AvisoPlacas, usePlacasVehiculo, vehiculoConFotoCambiada } from '@/components/TaparPlacaFotos';
 import ResultadoIA from '@/components/ResultadoIA';
+import FotoUpload from '@/components/FotoUpload';
+import {
+  CASILLAS_FOTO, conCasilla, conSuelta, leerFotos, serializarFotos, sinSuelta,
+  type EfectoFotos,
+} from '@/lib/fotos-vehiculo';
 import {
   FiltroCampo, BotonOrdenLlegada, ResumenFiltros, CLASE_CONTROL_FILTRO,
 } from '@/components/FiltrosLista';
@@ -102,6 +107,16 @@ export default function VehiculosSeccion({ miId, vehiculoInicial }: {
   const [picoPlaca, setPicoPlaca] = useState<PicoPlaca>(picoPlacaVacio());
   const [precioEdit, setPrecioEdit] = useState<Record<number, string>>({});
   const [fotoModal, setFotoModal] = useState<{ v: Vehiculo } | null>(null);
+  // ── Edición de fotos desde el panel (agregar / reemplazar / eliminar) ──────
+  // Apagada por defecto: el modal abre en la vista de SIEMPRE (mirar, ampliar, tapar
+  // placa). Hay que pedir "✏️ Editar fotos" para que aparezcan los botones que suben y
+  // borran — borrar una foto no se puede deshacer y este modal se abre muchas veces al
+  // día solo para mirar.
+  const [fotosEdit, setFotosEdit] = useState(false);
+  /** Ranura con un guardado en curso ('casilla:frente', 'suelta:<url>', 'nueva'), o null. */
+  const [fotosOcupado, setFotosOcupado] = useState<string | null>(null);
+  const [fotosMsg, setFotosMsg] = useState('');
+  const [fotosError, setFotosError] = useState('');
   const [placaEditor, setPlacaEditor] = useState<{ v: Vehiculo; url: string; origenUrl: string } | null>(null);
   const [placaMsg, setPlacaMsg] = useState('');
   const [docModal, setDocModal] = useState<{ v: Vehiculo } | null>(null);
@@ -154,6 +169,145 @@ export default function VehiculosSeccion({ miId, vehiculoInicial }: {
   // Estado de placa de las fotos del vehículo abierto en el modal "Fotos"; se pide solo
   // cuando hay modal abierto y se recarga tras aplicar un tapado.
   const placas = usePlacasVehiculo(fotoModal?.v.id ?? null);
+
+  // ── Modal de fotos: abrir/cerrar y editar el juego de fotos ────────────────
+  const abrirFotoModal = (v: Vehiculo) => {
+    setFotosEdit(false);
+    setFotosOcupado(null);
+    setFotosMsg('');
+    setFotosError('');
+    setPlacaMsg('');
+    setFotoModal({ v });
+  };
+
+  /** Copia del vehículo con las dos columnas de fotos ya reemplazadas. */
+  const conFotosNuevas = <T extends { fotos: string; fotos_detalle: string }>(x: T, cols: { fotos: string; fotos_detalle: string }): T =>
+    ({ ...x, fotos: cols.fotos, fotos_detalle: cols.fotos_detalle });
+
+  /**
+   * Persiste un cambio de fotos del admin y deja la pantalla coherente.
+   *
+   * Cada acción se guarda SOLA (un PUT por foto agregada o borrada), sin botón "Guardar":
+   * así no hay forma de cerrar el modal creyendo que algo se guardó, y cada confirmación
+   * de borrado corresponde exactamente a un cambio en la base.
+   *
+   * El servidor puede responder que el vehículo quedó EN REVISIÓN DE CONTENIDO por culpa
+   * de la foto recién subida (hoy pasa siempre: sin saldo en la API de IA el difuminado de
+   * placa no corre y la foto se marca para revisión manual). En ese caso el vehículo sale
+   * del catálogo público y cambia de lista dentro de esta misma pestaña, así que se
+   * recargan ambas listas y se avisa con todas las letras.
+   */
+  const guardarFotos = async (v: Vehiculo, efecto: EfectoFotos, ranura: string, resumen: string) => {
+    const cols = serializarFotos(efecto.fotos);
+    setFotosOcupado(ranura);
+    setFotosMsg('');
+    setFotosError('');
+    try {
+      const res = await fetch(`/api/vehiculos/${v.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cols),
+      });
+      const d = await res.json().catch(() => ({})) as {
+        error?: string; contenido_revision?: number; contenido_revision_motivo?: string;
+      };
+      if (!res.ok) {
+        setFotosError(d.error || 'No se pudo guardar el cambio. Las fotos quedaron como estaban.');
+        return;
+      }
+      const enRevision = Number(d.contenido_revision) === 1;
+      const parche = (x: Vehiculo): Vehiculo => ({
+        ...conFotosNuevas(x, cols),
+        ...(enRevision ? { contenido_revision: 1, contenido_revision_motivo: d.contenido_revision_motivo || '' } : {}),
+      });
+      setFotoModal(fm => (fm && fm.v.id === v.id ? { v: parche(fm.v) } : fm));
+      setVehiculos(vs => vs.map(x => (x.id === v.id ? parche(x) : x)));
+      setVehiculosArchivados(vs => vs.map(x => (x.id === v.id ? parche(x) : x)));
+      setVehiculosRevisionContenido(vs => vs.map(x => (x.id === v.id ? parche(x) : x)));
+      // El estado de placa de la foto nueva (o la desaparición de la borrada) lo sabe el
+      // servidor, no nosotros: se vuelve a pedir en vez de inventarlo.
+      placas.recargar();
+
+      const avisos = [
+        efecto.quedaVacio
+          ? '⚠️ El vehículo se quedó SIN NINGUNA foto: su ficha se ve vacía y en el catálogo sale la silueta genérica.'
+          : '',
+        efecto.portadaPromovida
+          ? '🖼️ La galería se quedó sin fotos sueltas, así que la portada del catálogo pasó a ser una de las casillas.'
+          : (efecto.portadaDespues !== efecto.portadaAntes && !efecto.quedaVacio
+              ? '🖼️ Cambió la foto de portada (la que se ve en el catálogo).'
+              : ''),
+      ].filter(Boolean).join(' ');
+      setFotosMsg(`✓ ${resumen}.${avisos ? ` ${avisos}` : ''}`);
+
+      if (enRevision) {
+        setFotosError(
+          '🔞 La foto quedó marcada para revisión manual, así que el vehículo salió del catálogo público y pasó a '
+          + '“Ver en revisión de contenido”. Revísala ahí y usa “✓ Aprobar y publicar” para devolverlo a la vitrina.'
+          + (d.contenido_revision_motivo ? ` Motivo: ${d.contenido_revision_motivo}` : ''),
+        );
+        cargarVehiculos();
+        cargarVehiculosRevisionContenido();
+      }
+    } catch {
+      setFotosError('Sin conexión — el cambio no se guardó. Intenta de nuevo.');
+    } finally {
+      setFotosOcupado(null);
+    }
+  };
+
+  /** Sube/reemplaza la foto de una de las siete casillas de `fotos_detalle`. */
+  const ponerFotoCasilla = (v: Vehiculo, clave: string, label: string, url: string) => {
+    const actuales = leerFotos(v);
+    const habia = !!(actuales.detalle[clave] || '').trim();
+    const efecto = conCasilla(actuales, clave, url, CASILLAS_FOTO);
+    return guardarFotos(v, efecto, `casilla:${clave}`, `${habia ? 'Reemplazaste' : 'Agregaste'} la foto de “${label}”`);
+  };
+
+  /** Borra la foto de una casilla. Destructivo: confirma nombrando qué se va a borrar. */
+  const borrarFotoCasilla = (v: Vehiculo, clave: string, label: string) => {
+    const actuales = leerFotos(v);
+    if (!(actuales.detalle[clave] || '').trim()) return;
+    const efecto = conCasilla(actuales, clave, '', CASILLAS_FOTO);
+    if (!confirmarBorrado(v, `la foto de “${label}”`, actuales, efecto)) return;
+    return guardarFotos(v, efecto, `casilla:${clave}`, `Eliminaste la foto de “${label}”`);
+  };
+
+  /** Agrega una foto suelta a la galería (`vehiculos.fotos`). */
+  const agregarFotoSuelta = (v: Vehiculo, url: string) => {
+    const efecto = conSuelta(leerFotos(v), url, CASILLAS_FOTO);
+    return guardarFotos(v, efecto, 'nueva', 'Agregaste una foto a la publicación');
+  };
+
+  /** Borra una foto suelta. Destructivo: confirma nombrando cuál es. */
+  const borrarFotoSuelta = (v: Vehiculo, url: string, posicion: number) => {
+    const actuales = leerFotos(v);
+    const efecto = sinSuelta(actuales, url, CASILLAS_FOTO);
+    if (!confirmarBorrado(v, `la foto ${posicion} de “otras fotos de la publicación”`, actuales, efecto)) return;
+    return guardarFotos(v, efecto, `suelta:${url}`, `Eliminaste una foto de la publicación`);
+  };
+
+  /**
+   * Confirmación de un borrado, nombrando QUÉ se borra y QUÉ se rompe: si era la portada
+   * del catálogo, si el carro se queda sin ninguna foto. Borrar no se puede deshacer desde
+   * acá (el archivo sigue en Cloudinary y la bitácora guarda su URL, pero la publicación
+   * pierde la referencia).
+   */
+  function confirmarBorrado(v: Vehiculo, queSeBorra: string, actuales: ReturnType<typeof leerFotos>, efecto: EfectoFotos): boolean {
+    const lineas = [
+      `¿Eliminar ${queSeBorra} de ${v.marca} ${v.modelo} ${v.anio}${v.placa ? ` (${v.placa})` : ''}?`,
+      '',
+    ];
+    if (efecto.quedaVacio) {
+      lineas.push('⚠️ Es la ÚLTIMA foto del vehículo: la publicación va a quedar vacía y en el catálogo saldrá la silueta genérica en vez del carro.', '');
+    } else if (efecto.portadaPromovida) {
+      lineas.push('🖼️ Era la última foto de la galería, así que la portada del catálogo pasará a ser una de las fotos de las casillas.', '');
+    } else if (actuales.galeria[0] && efecto.portadaDespues !== efecto.portadaAntes) {
+      lineas.push('🖼️ Es la foto de PORTADA (la que se ve en el catálogo): pasará a serlo la siguiente de la galería.', '');
+    }
+    lineas.push('Esto no se puede deshacer desde el panel. El propietario recibe un aviso y queda registrado en la bitácora.');
+    return window.confirm(lineas.join('\n'));
+  }
 
   const abrirEditorPlaca = (v: Vehiculo, url: string) => {
     setPlacaMsg('');
@@ -678,7 +832,7 @@ export default function VehiculosSeccion({ miId, vehiculoInicial }: {
                   <p className="text-xs text-danger mt-1">🔞 {v.contenido_revision_motivo || 'La IA marcó al menos una foto como contenido inapropiado.'}</p>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
-                  <button onClick={() => setFotoModal({ v })}
+                  <button onClick={() => abrirFotoModal(v)}
                     className="flex items-center gap-1 text-xs border border-accent/30 text-accent px-2.5 py-1.5 rounded-xl hover:bg-accent-light transition font-medium">
                     Ver fotos
                   </button>
@@ -854,7 +1008,7 @@ export default function VehiculosSeccion({ miId, vehiculoInicial }: {
                       }`}>
                       {v.disponible ? '✓ Activo' : 'Activar'}
                     </button>
-                    <button onClick={() => setFotoModal({ v })}
+                    <button onClick={() => abrirFotoModal(v)}
                       className="flex items-center gap-1 text-xs border border-accent/30 text-accent px-2.5 py-1.5 rounded-xl hover:bg-accent-light transition font-medium">
                       Fotos
                     </button>
@@ -892,34 +1046,81 @@ export default function VehiculosSeccion({ miId, vehiculoInicial }: {
       {/* Modal fotos */}
       {fotoModal && (() => {
         const v = fotoModal.v;
-        let detalle: Record<string, string> = {};
-        try { detalle = JSON.parse(v.fotos_detalle || '{}'); } catch { detalle = {}; }
-        const tieneDetalle = Object.keys(detalle).some(k => (detalle[k] || '').trim());
+        // Un solo parser para las dos columnas (lib/fotos-vehiculo.ts), el mismo que usan
+        // los cambios de más abajo: lo que se ve en pantalla y lo que se guarda salen de
+        // la misma lectura del dato.
+        const fotos = leerFotos(v);
+        const detalle = fotos.detalle;
+        const tieneDetalle = Object.values(detalle).some(u => u.trim());
         // Fotos de la galería (`vehiculos.fotos`) que NO son ninguna de las siete casillas.
         // Antes este modal solo miraba `fotos_detalle`, así que un carro publicado con fotos
         // sueltas decía "no tiene fotos" aunque su miniatura sí se viera en la lista.
-        const enCasillas = new Set(Object.values(detalle).map(u => String(u || '').trim()).filter(Boolean));
-        let sueltas: string[] = [];
-        try { sueltas = (JSON.parse(v.fotos || '[]') as string[]).map(u => String(u || '').trim()); } catch { sueltas = []; }
-        sueltas = [...new Set(sueltas.filter(u => u && !enCasillas.has(u)))];
+        const enCasillas = new Set(Object.values(detalle).filter(Boolean));
+        const sueltas = fotos.galeria.filter(u => !enCasillas.has(u));
+        // `fotos[0]` = portada: lo único que mira la tarjeta del catálogo. Se marca en la
+        // rejilla para que borrarla no sea una sorpresa (ver lib/fotos-vehiculo.ts).
+        const portada = fotos.galeria[0] || '';
         const hayAlgo = tieneDetalle || sueltas.length > 0;
+        // Un guardado en curso bloquea TODAS las demás acciones del modal: dos cambios a la
+        // vez se calcularían sobre la misma foto de partida y el segundo pisaría al primero.
+        const ocupado = fotosOcupado !== null;
+        const marcaPortada = (url: string) => (url && url === portada ? ' · ★ portada' : '');
+        /** Caja de subida: la MISMA de la publicación del propietario (components/FotoUpload.tsx),
+         *  o sea que sube por POST /api/upload — el único camino que difumina la placa y deja
+         *  registro de moderación. No hay otra vía de subida en este panel. */
+        const cajaSubir = (etiqueta: string, ranura: string, onUrl: (url: string) => void) => (
+          <div className={ocupado ? 'opacity-50 pointer-events-none' : ''}>
+            <FotoUpload label={etiqueta} value="" onChange={onUrl} />
+            {fotosOcupado === ranura && <p className="text-[11px] text-ink/50 mt-1">Guardando…</p>}
+          </div>
+        );
         return (
-          <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setFotoModal(null)}>
+          <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => { if (!ocupado) setFotoModal(null); }}>
             <div className="bg-surface-2 rounded-3xl shadow-2xl max-w-3xl w-full p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-              <div className="flex justify-between items-center mb-5">
+              <div className="flex justify-between items-start gap-3 mb-5">
                 <div className="min-w-0">
                   <h3 className="font-bold text-ink">{v.marca} {v.modelo} — Fotos</h3>
                   {hayAlgo && <p className="text-[11px] text-ink/50 mt-0.5">Clic en una foto para verla completa y con zoom · “🛡️ Tapar placa” si quedó alguna a la vista.</p>}
+                  {fotosEdit && <p className="text-[11px] text-ink/50 mt-0.5">Cada cambio se guarda solo. Eliminar una foto no se puede deshacer.</p>}
                 </div>
-                <button onClick={() => setFotoModal(null)} aria-label="Cerrar"
-                  className="p-1.5 rounded-xl text-ink/50 hover:text-ink hover:bg-surface transition">
-                  <IconX size={18} />
-                </button>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <button
+                    type="button" onClick={() => { setFotosEdit(e => !e); setFotosMsg(''); setFotosError(''); }}
+                    disabled={ocupado}
+                    title={fotosEdit ? 'Volver a la vista de solo lectura' : 'Agregar, reemplazar o eliminar fotos de este vehículo'}
+                    className={`text-xs font-semibold px-2.5 py-1.5 rounded-xl border transition disabled:opacity-50 ${
+                      fotosEdit
+                        ? 'border-accent bg-accent-light text-accent'
+                        : 'border-accent/30 text-accent hover:bg-accent-light'
+                    }`}>
+                    {fotosEdit ? '✓ Listo' : '✏️ Editar fotos'}
+                  </button>
+                  <button onClick={() => { if (!ocupado) setFotoModal(null); }} aria-label="Cerrar" disabled={ocupado}
+                    className="p-1.5 rounded-xl text-ink/50 hover:text-ink hover:bg-surface transition disabled:opacity-40">
+                    <IconX size={18} />
+                  </button>
+                </div>
               </div>
               <AvisoPlacas placas={placas} mensaje={placaMsg} />
-              {hayAlgo ? (
+              {fotosMsg && (
+                <div className="mb-4 bg-success/10 border border-success/25 rounded-2xl px-3 py-2">
+                  <p className="text-xs font-medium text-success">{fotosMsg}</p>
+                </div>
+              )}
+              {fotosError && (
+                <div className="mb-4 bg-danger/5 border border-danger/25 rounded-2xl px-3 py-2">
+                  <p className="text-xs font-medium text-danger">{fotosError}</p>
+                </div>
+              )}
+              {fotosEdit && (
+                <p className="mb-4 text-[11px] text-ink/50 leading-snug">
+                  Las fotos son del propietario: cada cambio queda en la bitácora con tu nombre y se le avisa a él.
+                  Toda foto que subas pasa por el tapado automático de placa antes de publicarse.
+                </p>
+              )}
+              {hayAlgo || fotosEdit ? (
                 <div className="space-y-5">
-                  {tieneDetalle && (
+                  {(tieneDetalle || fotosEdit) && (
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                       {Object.entries(FOTOS_LABELS).map(([key, label]) => (
                         <div key={key}>
@@ -928,33 +1129,66 @@ export default function VehiculosSeccion({ miId, vehiculoInicial }: {
                             // miniatura va con object-cover, o sea RECORTADA — sin ampliar no
                             // se puede revisar un rayón ni leer una placa.
                             <FotoPlaca
-                              url={detalle[key]} label={label} alt={label} estado={placas.de(detalle[key])}
+                              url={detalle[key]} label={`${label}${marcaPortada(detalle[key])}`} alt={label}
+                              estado={placas.de(detalle[key])}
                               onVer={() => abrirVisorVehiculo(v, detalle[key])}
                               onTapar={() => abrirEditorPlaca(v, detalle[key])} />
-                          ) : (
+                          ) : !fotosEdit ? (
                             <>
                               <p className="text-xs text-ink/50 mb-1 font-medium">{label}</p>
                               <div className="w-full h-28 bg-surface rounded-xl flex items-center justify-center text-ink/25 text-xs border border-border">
                                 Sin foto
                               </div>
                             </>
+                          ) : null}
+                          {fotosEdit && (
+                            <div className={detalle[key] ? 'mt-2' : ''}>
+                              {cajaSubir(
+                                detalle[key] ? `Reemplazar ${label}` : label,
+                                `casilla:${key}`,
+                                url => { void ponerFotoCasilla(v, key, label, url); },
+                              )}
+                              {/* El botón de borrar va al FINAL de la tarjeta, lo más lejos
+                                  posible de la miniatura (que en el celular es el botón de
+                                  ampliar): un dedo no puede confundirlos. */}
+                              {detalle[key] && (
+                                <button
+                                  type="button" onClick={() => { void borrarFotoCasilla(v, key, label); }}
+                                  disabled={ocupado}
+                                  className="mt-2 w-full text-[11px] font-semibold px-2 py-2 rounded-xl border border-danger/30 text-danger hover:bg-danger/10 transition disabled:opacity-50">
+                                  {fotosOcupado === `casilla:${key}` ? 'Guardando…' : `🗑️ Eliminar ${label}`}
+                                </button>
+                              )}
+                            </div>
                           )}
                         </div>
                       ))}
                     </div>
                   )}
-                  {sueltas.length > 0 && (
+                  {(sueltas.length > 0 || fotosEdit) && (
                     <div>
                       <p className="text-xs text-ink/50 mb-2 font-medium">
                         Otras fotos de la publicación ({sueltas.length})
                       </p>
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                         {sueltas.map((url, i) => (
-                          <FotoPlaca
-                            key={url} url={url} alt={`Foto ${i + 1} de ${v.marca} ${v.modelo}`} estado={placas.de(url)}
-                            onVer={() => abrirVisorVehiculo(v, url)}
-                            onTapar={() => abrirEditorPlaca(v, url)} />
+                          <div key={url}>
+                            <FotoPlaca
+                              url={url} label={portada === url ? '★ portada' : undefined}
+                              alt={`Foto ${i + 1} de ${v.marca} ${v.modelo}`} estado={placas.de(url)}
+                              onVer={() => abrirVisorVehiculo(v, url)}
+                              onTapar={() => abrirEditorPlaca(v, url)} />
+                            {fotosEdit && (
+                              <button
+                                type="button" onClick={() => { void borrarFotoSuelta(v, url, i + 1); }}
+                                disabled={ocupado}
+                                className="mt-2 w-full text-[11px] font-semibold px-2 py-2 rounded-xl border border-danger/30 text-danger hover:bg-danger/10 transition disabled:opacity-50">
+                                {fotosOcupado === `suelta:${url}` ? 'Guardando…' : `🗑️ Eliminar foto ${i + 1}`}
+                              </button>
+                            )}
+                          </div>
                         ))}
+                        {fotosEdit && cajaSubir('Agregar otra foto', 'nueva', url => { void agregarFotoSuelta(v, url); })}
                       </div>
                     </div>
                   )}
