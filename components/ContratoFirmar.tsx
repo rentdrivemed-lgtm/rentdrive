@@ -125,7 +125,11 @@ export default function ContratoFirmar({ contratoId, onCambio }: Props) {
 
   // Mostrador: subir el escaneado del ejemplar firmado a mano.
   // Panel de DATOS (completar lo que falta). No edita el texto: lo regenera.
-  const [datosAbierto, setDatosAbierto] = useState(false);
+  // Arranca CERRADO, salvo que falten datos: ahí se abre solo. El panel vivía tras un
+  // enlace discreto debajo del texto del contrato y el dueño no lo encontró —vio los
+  // huecos en el documento y concluyó que no se podían llenar—. Si el documento tiene
+  // huecos, la forma de llenarlos no puede estar escondida.
+  const [datosAbierto, setDatosAbierto] = useState<boolean | null>(null);
 
   const [subiendoPapel, setSubiendoPapel] = useState(false);
   const [errorPapel, setErrorPapel] = useState('');
@@ -291,6 +295,8 @@ export default function ContratoFirmar({ contratoId, onCambio }: Props) {
   // Completar datos: lo decide el servidor (área de contratos + sin firmar + sin vía
   // elegida). Aquí solo se pinta.
   const puedeEditarDatos = detalle.permisos.editar_datos === true;
+  const datosQueFaltan = detalle.faltantes.bloqueantes.length + detalle.faltantes.estructurales.length;
+  const datosVisibles = datosAbierto ?? datosQueFaltan > 0;
 
   return (
     <div className="space-y-4">
@@ -402,15 +408,23 @@ export default function ContratoFirmar({ contratoId, onCambio }: Props) {
           firmar y sin vía de firma elegida; el servidor lo vuelve a comprobar. */}
       {detalle.permisos.gestionar && (
         puedeEditarDatos ? (
-          <div className="border border-border rounded-xl">
+          <div className={`rounded-xl border ${datosQueFaltan > 0 ? 'border-warning/40 bg-warning/5' : 'border-border'}`}>
             <button
               type="button"
-              onClick={() => setDatosAbierto(v => !v)}
-              className="w-full text-left px-3.5 py-2.5 text-sm font-semibold text-accent"
+              onClick={() => setDatosAbierto(!datosVisibles)}
+              className="w-full flex items-center justify-between gap-3 text-left px-3.5 py-3 text-sm font-semibold text-ink"
             >
-              {datosAbierto ? 'Cerrar los datos del documento' : 'Completar los datos del documento'}
+              <span>
+                {datosQueFaltan > 0 ? '✏️ Completar los datos del documento' : '✏️ Datos del documento'}
+                {datosQueFaltan > 0 && (
+                  <span className="ml-2 text-[11px] font-bold text-warning">
+                    {datosQueFaltan} {datosQueFaltan === 1 ? 'dato sale en blanco' : 'datos salen en blanco'}
+                  </span>
+                )}
+              </span>
+              <span className="text-xs text-ink/50 shrink-0">{datosVisibles ? 'Cerrar' : 'Abrir'}</span>
             </button>
-            {datosAbierto && (
+            {datosVisibles && (
               <div className="border-t border-border p-3.5">
                 <ContratoDatos
                   contratoId={contratoId}
