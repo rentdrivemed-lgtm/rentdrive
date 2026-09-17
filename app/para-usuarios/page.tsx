@@ -2,18 +2,19 @@
 import Link from 'next/link';
 import { useLang } from '@/contexts/LanguageContext';
 import { IconCar, IconShield, IconRoute, IconKey, IconCalendar, IconCheck, IconArrowR, IconPlane, IconCreditCard, IconUsers } from '@/components/Icons';
+import { BloqueSura } from '@/components/SelloSura';
 
 const T = {
   es: {
     badge: 'Para alquiladores',
     title: 'Alquila con confianza en Medellín',
-    sub: 'Vehículos verificados, seguros todo riesgo, GPS satelital y atención personalizada. Todo en un solo lugar.',
+    sub: 'Vehículos verificados, póliza de Seguros SURA, GPS satelital y atención personalizada. Todo en un solo lugar.',
     ctaSearch: 'Buscar vehículos ahora',
     ctaOwner: '¿Eres propietario?',
     benTitle: '¿Qué incluye cada alquiler?',
     bens: [
       { icon: 'car',    t: 'Flota 2018 en adelante',   d: 'Solo manejamos vehículos modelo 2018 o más recientes, en perfectas condiciones mecánicas y estéticas.' },
-      { icon: 'shield', t: 'Seguro todo riesgo',        d: 'Cada vehículo cuenta con póliza todo riesgo activa. Tu tranquilidad está cubierta.' },
+      { icon: 'shield', t: 'Póliza de Seguros SURA',    d: 'El vehículo se entrega amparado por una póliza que DrivePass contrata con Seguros Generales Suramericana S.A.' },
       { icon: 'gps',    t: 'GPS y monitoreo satelital', d: 'Sistema de rastreo en tiempo real en todos los vehículos de la flota.' },
       { icon: 'plane',  t: 'Servicio aeropuerto',       d: 'Recogida en tu ubicación y traslado al Aeropuerto J.M. Córdova u Olaya Herrera con costo adicional.' },
       { icon: 'pay',    t: 'Pago seguro: Visa y MC',    d: 'Aceptamos Visa y Mastercard. Todos los pagos son procesados de forma encriptada.' },
@@ -24,7 +25,7 @@ const T = {
     steps: [
       { n: '01', t: 'Busca y filtra',      d: 'Ingresa tus fechas, selecciona el sector de Medellín y el tipo de vehículo que necesitas. Filtra por precio máximo por día.' },
       { n: '02', t: 'Reserva al instante', d: 'Confirma tu reserva de forma segura. Paga con Visa o Mastercard. Recibirás confirmación inmediata por correo.' },
-      { n: '03', t: 'Recoge y disfruta',   d: 'Recoge el vehículo en la ubicación acordada. GPS y seguro todo riesgo incluidos desde el primer kilómetro.' },
+      { n: '03', t: 'Recoge y disfruta',   d: 'Recoge el vehículo en la ubicación acordada. GPS y póliza de Seguros SURA vigentes desde el primer kilómetro.' },
     ],
     reqTitle: 'Requisitos para alquilar',
     reqs: [
@@ -44,7 +45,7 @@ const T = {
       { q: '¿Cuánto tiempo de anticipación debo reservar?', a: 'Puedes reservar con cualquier antelación, incluso el mismo día si hay disponibilidad.' },
       { q: '¿Qué pasa si necesito extender el alquiler?', a: 'Contacta al propietario o a nuestro equipo de soporte. Las extensiones están sujetas a disponibilidad.' },
       { q: '¿Puedo cancelar mi reserva?', a: 'Sí. Con más de 48 horas de anticipación recibes reembolso total. Entre 24-48 horas, reembolso parcial del 50%. Menos de 24 horas, sin reembolso.' },
-      { q: '¿Están cubiertos los daños durante el alquiler?', a: 'Cada vehículo tiene seguro todo riesgo activo. Revisa siempre el estado del vehículo al recibirlo y documenta cualquier daño previo.' },
+      { q: '¿Están cubiertos los daños durante el alquiler?', a: 'El vehículo va amparado por una póliza de Seguros SURA y tú quedas incorporado al amparo de responsabilidad civil extracontractual. No es cobertura total: el deducible, la franquicia y el faltante frente al valor real del daño corren por tu cuenta, igual que en cualquier alquiler. Revisa el estado del vehículo al recibirlo, documenta cualquier daño previo y pide la carátula de la póliza antes de firmar.' },
       { q: '¿Puedo llevar el vehículo fuera de Medellín?', a: 'Depende del propietario. Consulta con él directamente antes de hacer la reserva.' },
     ],
     ctaTitle: '¿Listo para reservar?',
@@ -54,13 +55,13 @@ const T = {
   en: {
     badge: 'For renters',
     title: 'Rent with confidence in Medellín',
-    sub: 'Verified vehicles, comprehensive insurance, satellite GPS and personalized service. All in one place.',
+    sub: 'Verified vehicles, a Seguros SURA policy, satellite GPS and personalized service. All in one place.',
     ctaSearch: 'Search vehicles now',
     ctaOwner: 'Are you an owner?',
     benTitle: 'What is included in every rental?',
     bens: [
       { icon: 'car',    t: '2018+ Fleet',                  d: 'We only handle 2018 or newer model vehicles in perfect mechanical and aesthetic condition.' },
-      { icon: 'shield', t: 'Full coverage insurance',       d: 'Every vehicle has an active comprehensive insurance policy. Your peace of mind is covered.' },
+      { icon: 'shield', t: 'Seguros SURA policy',            d: 'The vehicle is handed over covered by a policy DrivePass takes out with Seguros Generales Suramericana S.A.' },
       { icon: 'gps',    t: 'GPS & satellite monitoring',    d: 'Real-time tracking system on all fleet vehicles.' },
       { icon: 'plane',  t: 'Airport service',               d: 'Pickup at your location and transfer to J.M. Córdova or Olaya Herrera Airport at additional cost.' },
       { icon: 'pay',    t: 'Secure payment: Visa & MC',     d: 'We accept Visa and Mastercard. All payments are processed with encryption.' },
@@ -71,7 +72,7 @@ const T = {
     steps: [
       { n: '01', t: 'Search & filter',    d: 'Enter your dates, select the Medellín area and the type of vehicle you need. Filter by maximum daily price.' },
       { n: '02', t: 'Book instantly',     d: 'Confirm your booking securely. Pay with Visa or Mastercard. You will receive immediate confirmation by email.' },
-      { n: '03', t: 'Pick up & enjoy',    d: 'Pick up the vehicle at the agreed location. GPS and comprehensive insurance included from the first kilometer.' },
+      { n: '03', t: 'Pick up & enjoy',    d: 'Pick up the vehicle at the agreed location. GPS and the Seguros SURA policy are in force from the first kilometer.' },
     ],
     reqTitle: 'Requirements to rent',
     reqs: [
@@ -91,7 +92,7 @@ const T = {
       { q: 'How far in advance do I need to book?', a: 'You can book at any time, even the same day if available.' },
       { q: 'What if I need to extend the rental?', a: 'Contact the owner or our support team. Extensions are subject to availability.' },
       { q: 'Can I cancel my booking?', a: 'Yes. More than 48 hours in advance gets a full refund. Between 24-48 hours, 50% partial refund. Less than 24 hours, no refund.' },
-      { q: 'Are damages during rental covered?', a: 'Every vehicle has active comprehensive insurance. Always check the vehicle condition when you receive it and document any prior damage.' },
+      { q: 'Are damages during rental covered?', a: 'The vehicle is covered by a Seguros SURA policy and you are named under its third-party liability cover. It is not total coverage: the deductible, the franchise and the gap against the real value of the damage are on you, as in any rental. Check the vehicle condition when you receive it, document any prior damage and ask for the policy schedule before signing.' },
       { q: 'Can I take the vehicle outside Medellín?', a: 'It depends on the owner. Check with them directly before making the booking.' },
     ],
     ctaTitle: 'Ready to book?',
@@ -158,6 +159,9 @@ export default function ParaUsuariosPage() {
           ))}
         </div>
       </section>
+
+      {/* RESPALDO ASEGURADOR — destino del enlace «Ver qué cubre» de la portada (#seguro) */}
+      <BloqueSura perfil="usuario" />
 
       {/* HOW IT WORKS */}
       <section className="bg-brand-muted py-14">

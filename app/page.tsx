@@ -5,6 +5,7 @@ import VehiculoCard from '@/components/VehiculoCard';
 import { useLang } from '@/contexts/LanguageContext';
 import { IconFilter, IconKey, IconShield, IconMetrocable, IconCar, IconCalendar, IconX } from '@/components/Icons';
 import { TIPO_VEHICULO_LABELS, type TipoVehiculo } from '@/lib/rentabilidad';
+import { FranjaSura } from '@/components/SelloSura';
 
 const CATEGORIAS = Object.entries(TIPO_VEHICULO_LABELS) as [TipoVehiculo, string][];
 
@@ -122,6 +123,13 @@ export default function Home() {
           ))}
         </div>
       </section>
+
+      {/* ── RESPALDO ASEGURADOR ──
+          Va aquí, pegada al bloque de confianza y antes de la vitrina, para que
+          se vea sin bajar del primer scroll: es la señal que convierte «seguro
+          todo riesgo» en algo verificable. El texto y el aviso viven en
+          `lib/i18n.ts` (clave `sura`) y salen del clausulado, no del marketing. */}
+      <FranjaSura />
 
       {/* ── FILTROS ── */}
       <section id="vehiculos" className="max-w-7xl mx-auto px-4 sm:px-6 py-8 sm:py-10">
