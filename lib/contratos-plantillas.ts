@@ -6,6 +6,30 @@
 // operación. Si hay que corregir una cláusula, se corrige acá con el texto exacto
 // que entregue el abogado.
 //
+// DÓNDE ESTÁN LOS ORIGINALES (.docx) y a qué función corresponde cada uno:
+//
+//     Desktop/DrivePass - Documentación Maestra/02_Legal/Contratos/
+//       · Contrato_Agencia_Comercial.docx        → contratoAgencia()
+//       · Otrosi_Agencia_Comercial.docx          → otrosiAgencia()
+//       · Contrato_Arrendamiento_Vehiculo.docx   → contratoArrendamiento()
+//       · Otrosi_Arrendamiento.docx              → otrosiArrendamiento()
+//       · Pagare_y_Carta_de_Instrucciones.docx   → pagare()
+//       · Acta_Entrega_y_Devolucion.docx         → actaEntregaDevolucion()
+//
+// El `00_Indice_Contratos.md` de esa carpeta guarda la correspondencia y el resultado
+// de la última verificación.
+//
+// VERIFICADO el 21 de septiembre de 2026 contra esos seis originales, en las dos
+// direcciones (que lo que dice el código esté en el documento, y que no haya texto en
+// el documento que el código no cubra): 113 fragmentos literales comparados, CERO
+// divergencias. No se modificó ninguna plantilla porque ya coincidían palabra por
+// palabra — incluidas la escala de comisión, las 18 filas del inventario de estado y
+// los 7 conceptos documentales del acta.
+//
+// ⚠️ Los contratos de VINCULACIÓN (los que se firman al crear la cuenta) NO están en
+// este archivo ni entre esos seis originales: viven en ./contratos-vinculacion-texto.ts
+// y su texto sigue siendo un borrador del equipo, pendiente de revisión legal.
+//
 // Cada `${…}` que se ve en el texto es, literalmente, la lista de lo que es
 // VARIABLE. Todo lo demás es fijo a propósito (ver el reporte de la fase 1):
 // entre otras cosas quedaron fijas la ciudad de las cláusulas de jurisdicción
