@@ -13,7 +13,7 @@ import {
   type TipoVehiculo, type RentabilidadInput,
 } from '@/lib/rentabilidad';
 import {
-  precioMercadoSugerido, bandaPrecioValor,
+  precioMercadoSugerido, bandaPrecioValor, valorComercialSugerido, precioSegmentoPorAnio,
   MODELOS_MERCADO, precioModeloSugerido,
 } from '@/lib/precioMercado';
 import InputPorcentaje from '@/components/InputPorcentaje';
@@ -45,7 +45,6 @@ export default function CalculadoraPanel() {
     setModeloIdx(null);                    // categoría manual → sin modelo específico
     setTipo(t);
     const d = DEFAULTS_POR_TIPO[t];
-    setValorComercial(d.valorComercial);
     setSoat(d.soat);
     setPctSeguro(d.pctSeguro);
     setMantenimiento(d.mantenimiento);
@@ -63,26 +62,45 @@ export default function CalculadoraPanel() {
     setSoat(d.soat);
     setPctSeguro(d.pctSeguro);
     setMantenimiento(d.mantenimiento);
-    setValorComercial(m.valor);
-    // El precio/día se recalcula solo (efecto abajo).
+    // Valor comercial y precio/día se recalculan solos (reconciliación abajo).
   };
 
   const modeloSel = modeloIdx != null ? MODELOS_MERCADO[modeloIdx] : null;
 
-  // Precio sugerido EFECTIVO: si hay modelo elegido manda la tabla marca+modelo (afinada por año);
-  // si no, se interpola por segmento según el valor comercial. En ambos casos aplica el ajuste %.
-  const precioSugerido = useMemo(
-    () => modeloSel
-      ? precioModeloSugerido(modeloSel, anio, ajuste)
-      : precioMercadoSugerido(tipo, valorComercial, ajuste),
-    [modeloSel, tipo, valorComercial, anio, ajuste],
+  // ─── El valor comercial sigue al año (igual que en /calculadora-propietarios) ───
+  // Este panel se había quedado con el bug del CX-5: fijaba el valor comercial del modelo 0 km
+  // y no lo depreciaba nunca. Resultado: admin y propietario daban cifras MATERIALMENTE
+  // distintas para el mismo carro (un Mazda 3 de 2014 salía en $100.000.000 acá y en
+  // $52.000.000 en la pública, con tramo de impuesto 3,5% contra 2,5%), y la banda de cordura
+  // —que acá se llamaba sin el año— marcaba un falso "por debajo del mercado".
+  const valorBase = modeloSel ? modeloSel.valor : DEFAULTS_POR_TIPO[tipo].valorComercial;
+  const transmisionRef = modeloSel?.soloAutomatica ? 'automatica' as const : 'mecanica' as const;
+  const valorSugerido = useMemo(
+    () => valorComercialSugerido(valorBase, anio, { transmision: transmisionRef, soloAutomatica: modeloSel?.soloAutomatica }),
+    [valorBase, anio, transmisionRef, modeloSel],
   );
 
-  // El precio/día efectivo sigue al sugerido cuando cambia cualquiera de sus entradas
-  // (modelo, categoría, valor, año, ajuste); se puede editar a mano hasta el próximo cambio.
-  useEffect(() => {
+  const claveValor = `${modeloIdx ?? 'n'}|${tipo}|${anio}`;
+  const [valorSincronizado, setValorSincronizado] = useState(claveValor);
+  if (claveValor !== valorSincronizado) {
+    setValorSincronizado(claveValor);
+    if (Number.isFinite(valorSugerido)) setValorComercial(valorSugerido || 0);
+  }
+
+  // Precio sugerido EFECTIVO: si hay modelo elegido manda la tabla marca+modelo (afinada por año);
+  // si no, se interpola por segmento. En ambos casos aplica el ajuste %.
+  const precioSugerido = useMemo(
+    () => modeloSel
+      ? precioModeloSugerido(modeloSel, anio, { ajustePct: ajuste, transmision: transmisionRef })
+      : precioSegmentoPorAnio(tipo, valorComercial, anio, { ajustePct: ajuste }),
+    [modeloSel, tipo, valorComercial, anio, ajuste, transmisionRef],
+  );
+
+  const [precioSincronizado, setPrecioSincronizado] = useState(precioSugerido);
+  if (Number.isFinite(precioSugerido) && precioSugerido !== precioSincronizado) {
+    setPrecioSincronizado(precioSugerido);
     setPrecioDia(precioSugerido || 0);
-  }, [precioSugerido]);
+  }
 
   const input: RentabilidadInput = useMemo(() => ({
     valorComercial, soat, pctSeguro, mantenimiento,
@@ -91,7 +109,7 @@ export default function CalculadoraPanel() {
   }), [valorComercial, soat, pctSeguro, mantenimiento, precioDia, comision, ocupacion]);
 
   const r = useMemo(() => calcularRentabilidad(input), [input]);
-  const banda = useMemo(() => bandaPrecioValor(valorComercial), [valorComercial]);
+  const banda = useMemo(() => bandaPrecioValor(valorComercial, { anio }), [valorComercial, anio]);
   const fueraDeBanda = valorComercial > 0 && precioDia > 0 && (precioDia < banda.min || precioDia > banda.max);
   const requiereInspeccion = anio > 0 && anio < ANIO_MINIMO_SIN_INSPECCION;
 

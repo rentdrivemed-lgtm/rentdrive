@@ -1,16 +1,18 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { IconUser, IconCoin } from '@/components/Icons';
+import { TIPO_VEHICULO_LABELS } from '@/lib/rentabilidad';
 
 type Lead = {
   id: number; nombre: string; correo: string; celular: string;
   tipo_vehiculo: string; origen: string; created_at: string;
 };
 
-const TIPO_LABELS: Record<string, string> = {
-  sedan: 'Sedán', coupe: 'Coupé', suv: 'SUV',
-  camioneta7: 'Camioneta 7 puestos', lujo_auto: 'Automóvil de lujo', lujo_camioneta: 'Camioneta de lujo',
-};
+// `tipo_vehiculo` llega como texto libre desde la tabla de leads (puede ser un tipo viejo o
+// vacío), por eso el Record es de string y el llamador cae al valor crudo si no lo reconoce.
+// La lista sale de lib/rentabilidad.ts: era una tercera copia a mano y se habría quedado sin
+// 'Económico' ni 'Pick up' justo cuando esos son los dos segmentos nuevos.
+const TIPO_LABELS: Record<string, string> = TIPO_VEHICULO_LABELS;
 
 export default function LeadsPropietariosPanel() {
   const [leads, setLeads] = useState<Lead[]>([]);

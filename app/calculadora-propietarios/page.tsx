@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   IconCoin, IconCar, IconCheck, IconArrowR, IconArrowL, IconKey, IconCalendar, IconShield, IconUser, IconInbox,
@@ -7,16 +7,23 @@ import {
 } from '@/components/Icons';
 import {
   DEFAULTS_POR_TIPO, TIPO_VEHICULO_LABELS,
-  COMISION_PLATAFORMA_DEFAULT, OCUPACION_DEFAULT,
+  COMISION_PLATAFORMA_DEFAULT, OCUPACION_DEFAULT, IVA_TARIFA_DEFAULT,
   GPS_DISPOSITIVO_DEFAULT, GPS_ANIOS_AMORTIZACION_DEFAULT, GPS_PLAN_ANUAL_DEFAULT,
-  ANIO_MINIMO_SIN_INSPECCION,
-  calcularRentabilidad, sensibilidadPorOcupacion,
+  ANIO_MINIMO_SIN_INSPECCION, DIAS_MINIMOS_ALQUILER, ESCALERA_DURACION,
+  calcularRentabilidad, sensibilidadPorOcupacion, desgloseTarifa, factorDuracion, factorPrecioCliente,
   type TipoVehiculo, type RentabilidadInput,
 } from '@/lib/rentabilidad';
 import {
-  precioMercadoSugerido, bandaPrecioValor,
+  bandaPrecioValor, valorComercialSugerido, precioSegmentoPorAnio, precioMercadoSugerido,
   MODELOS_MERCADO, precioModeloSugerido,
+  BENEFICIO_EXENCION_PICO_PLACA_DEFAULT, factorTarifaExencion,
+  TRANSMISION_LABELS, EQUIPAMIENTO_LABELS,
+  type Transmision, type Equipamiento,
 } from '@/lib/precioMercado';
+import {
+  COMBUSTIBLE_LABELS, COMBUSTIBLES, exentoPicoPlaca, requiereInscripcionExencion,
+  type Combustible,
+} from '@/lib/vehiculo-campos';
 import InputPorcentaje from '@/components/InputPorcentaje';
 
 const cop = (n: number) => `$${Math.round(n).toLocaleString('es-CO')}`;
@@ -35,6 +42,18 @@ type Lead = { nombre: string; correo: string; celular: string };
 function numInput(v: string): number {
   const n = Number(v.replace(/\D/g, ''));
   return Number.isFinite(n) ? n : 0;
+}
+
+// Límites del año del vehículo. Sin ellos, vaciar el campo daba `anio = 0` y la página
+// imprimía "Sugerido para un 0" y "Kia Picanto 0" en el texto que se pega en WhatsApp; y
+// tecleando "2", "20", "201" el valor comercial saltaba a la curva de 10+ años en cada
+// pulsación. Se corrige al salir del campo (onBlur) y no mientras se escribe, para no pelear
+// con quien está tecleando.
+const ANIO_MINIMO_VEHICULO = 1990;
+const ANIO_MAXIMO_VEHICULO = new Date().getFullYear() + 1;
+function anioValido(a: number): number {
+  if (!Number.isFinite(a) || a <= 0) return new Date().getFullYear() - 2;
+  return Math.min(ANIO_MAXIMO_VEHICULO, Math.max(ANIO_MINIMO_VEHICULO, a));
 }
 
 function LeadGate({ tipo, onDesbloqueado }: { tipo: TipoVehiculo; onDesbloqueado: (lead: Lead) => void }) {
@@ -237,6 +256,21 @@ export default function CalculadoraPropietariosPage() {
   const [gpsPlan, setGpsPlan] = useState(GPS_PLAN_ANUAL_DEFAULT);
   const [ajustePrecio, setAjustePrecio] = useState(0);            // ajuste por demanda / negociación, %
   const [modeloIdx, setModeloIdx] = useState<number | null>(null); // null = "Otro / no está en la lista"
+  const [transmision, setTransmision] = useState<Transmision>('mecanica');
+  const [equipamiento, setEquipamiento] = useState<Equipamiento>('estandar');
+  const [combustible, setCombustible] = useState<Combustible>('gasolina');
+  const [exencionInscrita, setExencionInscrita] = useState(false);
+  const [digitoPlaca, setDigitoPlaca] = useState('');              // '' = todavía no lo sabe
+  // El BENEFICIO TOTAL de estar exento, no el multiplicador de tarifa: la parte que aportan los
+  // días facturables se descuenta después con `factorTarifaExencion()`, para no contarla dos veces.
+  const [beneficioExencion, setBeneficioExencion] = useState(BENEFICIO_EXENCION_PICO_PLACA_DEFAULT);
+  const [diasAlquiler, setDiasAlquiler] = useState(DIAS_MINIMOS_ALQUILER + 1);
+  const [cobrarIva, setCobrarIva] = useState(true);
+  const [copiado, setCopiado] = useState<'cliente' | 'propietario' | null>(null);
+  // Se cancela al desmontar: sin esto, salir de la página dentro de los 2 segundos siguientes a
+  // copiar dispara un setState sobre un componente que ya no existe.
+  const temporizadorCopiado = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (temporizadorCopiado.current) clearTimeout(temporizadorCopiado.current); }, []);
 
   const [lead, setLead] = useState<Lead | null>(null);
   const [revisandoLead, setRevisandoLead] = useState(true);
@@ -259,11 +293,10 @@ export default function CalculadoraPropietariosPage() {
     setTipo(t);
     setNombreVehiculo(TIPO_VEHICULO_LABELS[t]);
     const d = DEFAULTS_POR_TIPO[t];
-    setValorComercial(d.valorComercial);
     setSoat(d.soat);
     setPctSeguro(d.pctSeguro);
     setMantenimiento(d.mantenimiento);
-    // El precio/día se recalcula solo (efecto abajo).
+    // Valor comercial y precio/día se recalculan solos (efectos abajo).
   };
 
   const aplicarModelo = (idxStr: string) => {
@@ -278,45 +311,186 @@ export default function CalculadoraPropietariosPage() {
     setSoat(d.soat);
     setPctSeguro(d.pctSeguro);
     setMantenimiento(d.mantenimiento);
-    setValorComercial(m.valor);
-    // El precio/día se recalcula solo (efecto abajo).
+    // Los modelos que solo existen en automático fijan la transmisión: dejar el selector en
+    // "mecánica" mostraría un valor comercial y un precio de una versión que no se vende.
+    // Y al salir de uno de esos, se vuelve a mecánica: si no, el +10% de automática se quedaba
+    // pegado al siguiente modelo (elegir un Tiguan y después un Mazda 2 lo dejaba automático).
+    setTransmision(m.soloAutomatica ? 'automatica' : 'mecanica');
+    // Valor comercial y precio/día se recalculan solos (efectos abajo).
   };
 
   const modeloSel = modeloIdx != null ? MODELOS_MERCADO[modeloIdx] : null;
+  const soloAutomatica = !!modeloSel?.soloAutomatica;
+  const transmisionEfectiva: Transmision = soloAutomatica ? 'automatica' : transmision;
 
-  // Precio sugerido EFECTIVO: si hay modelo elegido manda la tabla marca+modelo (afinada por año);
-  // si no, se interpola por segmento según el valor comercial. En ambos casos aplica el ajuste %.
+  // ¿Este vehículo está exento de pico y placa? La decisión NO se toma acá: se delega en
+  // `exentoPicoPlaca()` (lib/vehiculo-campos.ts), el mismo punto de verdad que usan el
+  // calendario de reservas y el motor de disponibilidad. Los eléctricos quedan exentos
+  // solos; los híbridos y los de gas, solo con la inscripción hecha ante la Secretaría de
+  // Movilidad de Medellín.
+  const exento = exentoPicoPlaca({ combustible, inscrita: exencionInscrita });
+  const necesitaTramite = requiereInscripcionExencion(combustible);
+
+  // ─── Valor comercial: ahora SÍ sigue al año ────────────────────────────────
+  // Este era el bug reportado en producción: al bajar el año de un CX-5 de 2024 a 2016 el
+  // precio caía de $435.000 a $326.000 pero el valor comercial se quedaba en $135.000.000,
+  // el de un ejemplar 0 km. Eso metía el carro en el tramo del 3,5% de impuesto vehicular
+  // en vez del 2,5%, inflaba la prima del seguro, subestimaba el retorno, y hacía que la
+  // banda de cordura marcara como "fuera de mercado" el precio que la propia calculadora
+  // acababa de sugerir.
+  const valorBase = modeloSel ? modeloSel.valor : DEFAULTS_POR_TIPO[tipo].valorComercial;
+  const valorSugerido = useMemo(
+    () => valorComercialSugerido(valorBase, anio, { transmision: transmisionEfectiva, equipamiento, soloAutomatica }),
+    [valorBase, anio, transmisionEfectiva, equipamiento, soloAutomatica],
+  );
+
+  // El valor sigue al sugerido cuando cambia alguna de sus entradas (modelo, categoría, año,
+  // transmisión, equipamiento), y el propietario puede escribirlo a mano — ese valor manual
+  // queda hasta el próximo cambio de esas entradas.
+  //
+  // Se reconcilia DURANTE EL RENDER y no en un `useEffect`, que es el patrón que React
+  // recomienda para "ajustar estado cuando cambia una entrada derivada": el efecto provoca un
+  // render intermedio con el valor viejo ya pintado (y es lo que marca la regla
+  // react-hooks/set-state-in-effect). El `useState` testigo recuerda a qué sugerencia se
+  // sincronizó la última vez, para no pisar lo que el propietario escribió a mano.
+  // El testigo guarda la IDENTIDAD de las entradas, no la cifra resultante. Guardando la cifra,
+  // dos modelos con el mismo valor de referencia no disparaban la reconciliación y el valor
+  // escrito a mano para el carro anterior se quedaba pegado al nuevo. Hay varias colisiones
+  // reales en la tabla: Alaskan y Trailblazer ($150M, y encima de segmentos distintos), RAV4 y
+  // CX-9 ($160M), Equinox/CX-30/Sportage/Tucson/Arkana (todos $120M).
+  const claveValor = `${modeloIdx ?? 'n'}|${tipo}|${anio}|${transmisionEfectiva}|${equipamiento}`;
+  const [valorSincronizado, setValorSincronizado] = useState(claveValor);
+  if (claveValor !== valorSincronizado) {
+    setValorSincronizado(claveValor);
+    // Blindaje: `NaN !== NaN` es siempre true, así que un NaN acá sería un "Too many
+    // re-renders" y una página en blanco. Hoy es inalcanzable, pero sale barato.
+    if (Number.isFinite(valorSugerido)) setValorComercial(valorSugerido || 0);
+  }
+
+  // Precio sugerido EFECTIVO: si hay modelo elegido manda la tabla marca+modelo (afinada por
+  // año, transmisión y exención); si no, se interpola por segmento según el valor comercial.
+  // En ambos casos aplica el ajuste %. La escalera de duración NO entra acá: este es el canon
+  // base (tramo de 2 a 4 días) y la duración se aplica después, en la cotización.
+  const factorExencionTarifa = factorTarifaExencion(beneficioExencion);
   const precioSugerido = useMemo(
     () => modeloSel
-      ? precioModeloSugerido(modeloSel, anio, ajustePrecio)
-      : precioMercadoSugerido(tipo, valorComercial, ajustePrecio),
-    [modeloSel, tipo, valorComercial, anio, ajustePrecio],
+      ? precioModeloSugerido(modeloSel, anio, {
+          ajustePct: ajustePrecio, transmision: transmisionEfectiva,
+          exentoPicoPlaca: exento, factorExencion: factorExencionTarifa,
+        })
+      : precioSegmentoPorAnio(tipo, valorComercial, anio, {
+          ajustePct: ajustePrecio, exentoPicoPlaca: exento, factorExencion: factorExencionTarifa,
+        }),
+    [modeloSel, tipo, valorComercial, anio, ajustePrecio, transmisionEfectiva, exento, factorExencionTarifa],
   );
 
   // El precio/día efectivo sigue al sugerido cuando cambia cualquiera de sus entradas (modelo,
   // categoría, valor, año, ajuste). El usuario aún puede escribirlo a mano: queda hasta el próximo
-  // cambio de esas entradas.
-  useEffect(() => {
+  // cambio de esas entradas. Mismo patrón de reconciliación en render que el valor comercial —
+  // antes era un `useEffect` y pintaba un render intermedio con el precio anterior.
+  const [precioSincronizado, setPrecioSincronizado] = useState(precioSugerido);
+  if (Number.isFinite(precioSugerido) && precioSugerido !== precioSincronizado) {
+    setPrecioSincronizado(precioSugerido);
     setPrecioDia(precioSugerido || 0);
-  }, [precioSugerido]);
+  }
 
+  // ─── Escalera de duración y disponibilidad ─────────────────────────────────
+  // `precioDia` es el CANON base, el del tramo más corto (2 a 4 días). La escalera de
+  // duración se aplica encima, y sobre ese canon ya escalonado se calcula el IVA — que se
+  // causa sobre la comisión, no sobre el canon (ver desgloseTarifa en lib/rentabilidad.ts).
+  const canonPorDias = (dias: number) => Math.round(precioDia * factorDuracion(dias) / 1000) * 1000;
+  const tarifaPorDias = (dias: number) => desgloseTarifa(canonPorDias(dias), { comision, cobrarIva });
+  const diasCotiza = Math.max(DIAS_MINIMOS_ALQUILER, diasAlquiler || DIAS_MINIMOS_ALQUILER);
+
+  // Un carro NO exento pierde un día hábil por semana de disponibilidad: 52 días al año que
+  // no se pueden alquilar por más demanda que haya. Es el techo real de ocupación.
+  const diasDisponiblesAnio = exento ? 365 : 365 - 52;
+  const ocupacionTecho = diasDisponiblesAnio / 365;
+  const ocupacionExcedeTecho = ocupacion > ocupacionTecho + 0.001;
+
+  // La proyección anual usa el canon YA ESCALONADO a la duración típica que el propietario
+  // indicó arriba, no el del tramo de 2 días. Proyectar el año entero al canon corto es
+  // literalmente "el precio de 2 días multiplicado por 365" — justo lo que la escalera existe
+  // para evitar — y sobreestimaba la utilidad anual entre un 10% y un 28%.
   const input: RentabilidadInput = useMemo(() => ({
     valorComercial, soat, pctSeguro, mantenimiento,
     gpsDispositivo, gpsAniosAmortizacion: gpsAnios, gpsPlanAnual: gpsPlan,
-    precioDia, comision, ocupacion,
-  }), [valorComercial, soat, pctSeguro, mantenimiento, gpsDispositivo, gpsAnios, gpsPlan, precioDia, comision, ocupacion]);
+    precioDia: Math.round(precioDia * factorDuracion(diasCotiza) / 1000) * 1000,
+    comision, ocupacion, diasDisponibles: diasDisponiblesAnio,
+  }), [valorComercial, soat, pctSeguro, mantenimiento, gpsDispositivo, gpsAnios, gpsPlan, precioDia, diasCotiza, comision, ocupacion, diasDisponiblesAnio]);
 
   const r = useMemo(() => calcularRentabilidad(input), [input]);
   const sensibilidad = useMemo(() => sensibilidadPorOcupacion(input), [input]);
   const requiereInspeccion = anio > 0 && anio < ANIO_MINIMO_SIN_INSPECCION;
 
   // Banda de cordura por valor comercial + posición del precio dentro de ella.
-  const banda = useMemo(() => bandaPrecioValor(valorComercial), [valorComercial]);
+  // La banda tiene que mirar los MISMOS ejes que el precio, o vuelve a acusar el precio que la
+  // propia calculadora sugiere: el equipamiento sube el valor y no la tarifa, la exención sube
+  // la tarifa y no el valor.
+  const banda = useMemo(
+    () => bandaPrecioValor(valorComercial, {
+      anio, equipamiento, factorExencion: exento ? factorExencionTarifa : 1,
+    }),
+    [valorComercial, anio, equipamiento, exento, factorExencionTarifa],
+  );
   const fueraDeBanda: 'bajo' | 'alto' | null =
     valorComercial > 0 && precioDia > 0
       ? (precioDia < banda.min ? 'bajo' : precioDia > banda.max ? 'alto' : null)
       : null;
   const pctDelValor = valorComercial > 0 ? (precioDia / valorComercial) * 100 : 0;
+
+  // ─── Cotización ────────────────────────────────────────────────────────────
+  const tarifa = tarifaPorDias(diasCotiza);
+
+  // El día de pico y placa del vehículo no se le cobra al arrendatario ni se le paga al
+  // propietario: sale de los días facturables. Un carro exento factura los 7 días.
+  //
+  // Esta es la MITAD del beneficio de estar exento; la otra mitad va en la tarifa/día. Las dos
+  // juntas componen el beneficio total configurable de arriba — ver `factorTarifaExencion()` en
+  // lib/precioMercado.ts, donde está explicado por qué no se pueden aplicar las dos a full.
+  const diasPicoPlaca = exento ? 0 : Math.floor(diasCotiza / 7);
+  const diasFacturables = Math.max(1, diasCotiza - diasPicoPlaca);
+  const totalCliente = tarifa.precioCliente * diasFacturables;
+  const totalPropietario = tarifa.propietario * diasFacturables;
+
+  const notaExencion = exento
+    ? combustible === 'electrico'
+      ? 'Exento de pico y placa en el Valle de Aburrá — se puede alquilar los 7 días. La exención de los eléctricos es automática por su registro en el RUNT; verifícalo en tu matrícula.'
+      : 'Exento de pico y placa en el Valle de Aburrá — se puede alquilar los 7 días. Mantén vigente la inscripción de la exención ante la Secretaría de Movilidad de Medellín.'
+    : null;
+
+  const copiar = async (que: 'cliente' | 'propietario', texto: string) => {
+    try {
+      await navigator.clipboard.writeText(texto);
+      setCopiado(que);
+      if (temporizadorCopiado.current) clearTimeout(temporizadorCopiado.current);
+      temporizadorCopiado.current = setTimeout(() => setCopiado(null), 2000);
+    } catch {
+      /* Sin permiso de portapapeles (o contexto no seguro): el texto queda visible para
+         seleccionarlo a mano, así que no hay nada que avisar. */
+    }
+  };
+
+  // Tuteo, sin emojis y sin lenguaje burocrático: esto se pega tal cual en WhatsApp.
+  const textoCliente = [
+    `${nombreVehiculo} ${anio}`.trim(),
+    `${cop(tarifaPorDias(DIAS_MINIMOS_ALQUILER).precioCliente)} por día`,
+    `5 días o más: ${cop(tarifaPorDias(5).precioCliente)} por día`,
+    `Un mes: ${cop(tarifaPorDias(30).precioCliente)} por día`,
+    '',
+    'Incluye kilometraje ilimitado, póliza SURA de alquiler y entrega donde estés.',
+    ...(exento
+      ? ['Este carro no tiene pico y placa, lo puedes usar los 7 días.']
+      : digitoPlaca
+        ? [`La placa termina en ${digitoPlaca}: tiene pico y placa un día entre semana, y ese día no te lo cobramos.`]
+        : []),
+  ].join('\n');
+
+  const pctPropietario = Math.round((1 - comision) * 100);
+  const textoPropietario = [
+    `${nombreVehiculo} ${anio}`.trim(),
+    `Tú recibes el ${pctPropietario}%: ${cop(tarifaPorDias(DIAS_MINIMOS_ALQUILER).propietario)} por día alquilado`,
+  ].join('\n');
 
   if (revisandoLead) return null;
 
@@ -430,15 +604,102 @@ export default function CalculadoraPropietariosPage() {
                 </div>
                 <div>
                   <label className="text-xs font-medium text-ink/60 block mb-1">Año del vehículo</label>
-                  <input type="number" value={anio} onChange={e => setAnio(numInput(e.target.value))}
+                  <input type="number" min={ANIO_MINIMO_VEHICULO} max={ANIO_MAXIMO_VEHICULO} value={anio}
+                    onChange={e => setAnio(numInput(e.target.value))}
+                    onBlur={e => setAnio(anioValido(numInput(e.target.value)))}
                     className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40" />
                 </div>
               </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-ink/60 block mb-1">Transmisión</label>
+                  <select value={transmisionEfectiva} disabled={soloAutomatica}
+                    onChange={e => setTransmision(e.target.value as Transmision)}
+                    className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-accent/40">
+                    {(Object.keys(TRANSMISION_LABELS) as Transmision[]).map(t => (
+                      <option key={t} value={t}>{TRANSMISION_LABELS[t]}</option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-ink/50 mt-1">
+                    {soloAutomatica
+                      ? 'Este modelo solo se consigue automático.'
+                      : 'Un automático vale más y se alquila más caro.'}
+                  </p>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-ink/60 block mb-1">Equipamiento</label>
+                  <select value={equipamiento} onChange={e => setEquipamiento(e.target.value as Equipamiento)}
+                    className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40">
+                    {(Object.keys(EQUIPAMIENTO_LABELS) as Equipamiento[]).map(t => (
+                      <option key={t} value={t}>{EQUIPAMIENTO_LABELS[t]}</option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-ink/50 mt-1">Sube el valor comercial, no la tarifa.</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-ink/60 block mb-1">Tren motriz</label>
+                  <select value={combustible}
+                    onChange={e => {
+                      const c = e.target.value as Combustible;
+                      setCombustible(c);
+                      // La inscripción es de un vehículo concreto: al cambiar el tren motriz
+                      // deja de aplicar, y dejarla marcada haría pasar por exento a un carro
+                      // que no lo está.
+                      if (!requiereInscripcionExencion(c)) setExencionInscrita(false);
+                    }}
+                    className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40">
+                    {COMBUSTIBLES.map(c => (
+                      <option key={c} value={c}>{COMBUSTIBLE_LABELS[c]}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-ink/60 block mb-1">Último dígito de la placa</label>
+                  <select value={exento ? 'exento' : digitoPlaca} disabled={exento}
+                    onChange={e => setDigitoPlaca(e.target.value)}
+                    className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-accent/40">
+                    {exento
+                      ? <option value="exento">Exento</option>
+                      : <>
+                          <option value="">Todavía no lo sé</option>
+                          {['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'].map(d => (
+                            <option key={d} value={d}>{d}</option>
+                          ))}
+                        </>}
+                  </select>
+                </div>
+              </div>
+
+              {necesitaTramite && (
+                <label className="flex items-start gap-2.5 bg-surface rounded-xl border border-border px-3.5 py-3 cursor-pointer">
+                  <input type="checkbox" checked={exencionInscrita}
+                    onChange={e => setExencionInscrita(e.target.checked)}
+                    className="mt-0.5 accent-accent" />
+                  <span className="text-xs text-ink/70 leading-relaxed">
+                    Ya inscribí la exención de pico y placa ante la <strong>Secretaría de Movilidad de Medellín</strong>.
+                    <span className="block text-ink/50 mt-0.5">
+                      En {COMBUSTIBLE_LABELS[combustible].toLowerCase()} la exención no es automática: sin ese trámite
+                      el carro sigue con pico y placa y lo comparendan igual.
+                    </span>
+                  </span>
+                </label>
+              )}
+
+              {notaExencion && (
+                <div className="flex items-start gap-2.5 bg-success/10 border border-success/25 rounded-xl px-3.5 py-3">
+                  <IconCheck size={14} className="text-success mt-0.5 flex-shrink-0" />
+                  <p className="text-xs text-success leading-relaxed">{notaExencion}</p>
+                </div>
+              )}
+
               {requiereInspeccion && (
                 <div className="flex items-start gap-2.5 bg-warning/10 border border-warning/25 rounded-xl px-3.5 py-3">
                   <span className="text-warning text-base leading-none">⚠️</span>
                   <p className="text-xs text-warning leading-relaxed">
-                    Los vehículos modelo {ANIO_MINIMO_SIN_INSPECCION} o anteriores no se aprueban automáticamente:
+                    Los vehículos anteriores al modelo {ANIO_MINIMO_SIN_INSPECCION} no se aprueban automáticamente:
                     su publicación queda sujeta a <strong>inspección física</strong>. Puedes seguir viendo la simulación,
                     pero coordina la inspección con nuestro equipo antes de publicar.
                   </p>
@@ -449,7 +710,23 @@ export default function CalculadoraPropietariosPage() {
                 <input type="text" inputMode="numeric" value={valorComercial.toLocaleString('es-CO')}
                   onChange={e => setValorComercial(numInput(e.target.value))}
                   className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40" />
-                <p className="text-[11px] text-ink/50 mt-1">Si no lo sabes con certeza, usa ~80% del precio 0&nbsp;km.</p>
+                {valorSugerido > 0 && (
+                  <div className="flex items-center justify-between gap-2 mt-1.5">
+                    <p className="text-[11px] text-ink/60">
+                      Sugerido para un {anio}: <span className="font-semibold text-accent">{cop(valorSugerido)}</span>
+                    </p>
+                    {valorComercial !== valorSugerido && (
+                      <button type="button" onClick={() => setValorComercial(valorSugerido)}
+                        className="text-[11px] font-semibold text-accent hover:underline whitespace-nowrap">
+                        Usar sugerido
+                      </button>
+                    )}
+                  </div>
+                )}
+                <p className="text-[11px] text-ink/50 mt-1">
+                  Se recalcula con el año, la transmisión y el equipamiento. Puedes escribirlo a mano si conoces
+                  el valor real de tu carro.
+                </p>
               </div>
             </div>
           </div>
@@ -543,6 +820,26 @@ export default function CalculadoraPropietariosPage() {
                     className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40" />
                   <p className="text-[11px] text-ink/50 mt-1">Sube modelos muy pedidos (Fortuner, Prado, híbridos) o baja los de baja rotación. Recomendado: −15% a +15%.</p>
                 </div>
+                {exento && (
+                  <div className="mt-2">
+                    <label className="text-xs font-medium text-ink/60 block mb-1">Multiplicador por estar exento de pico y placa</label>
+                    <input type="number" step="0.05" min="1" value={beneficioExencion}
+                      onChange={e => setBeneficioExencion(Math.max(1, Number(e.target.value) || 1))}
+                      className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40" />
+                    <p className="text-[11px] text-ink/50 mt-1 leading-relaxed">
+                      Un carro sin pico y placa se alquila los 7 días y se cobra más caro. En Medellín la diferencia
+                      publicada llega al 50%; por defecto usamos {BENEFICIO_EXENCION_PICO_PLACA_DEFAULT.toFixed(2)},
+                      que es más conservador.
+                    </p>
+                  </div>
+                )}
+                {modeloSel?.estimado && (
+                  <p className="text-[11px] text-ink/60 mt-2 leading-relaxed bg-surface rounded-lg border border-border px-2.5 py-2">
+                    <strong className="text-ink/80">Precio estimado</strong> — sin referencia publicada en el mercado
+                    formal. Lo calculamos a partir de modelos comparables que sí la tienen, así que tómalo como un
+                    punto de partida y no como una tarifa de referencia.
+                  </p>
+                )}
                 {fueraDeBanda && (
                   <p className="text-[11px] text-warning mt-2 leading-relaxed">
                     ⚠️ Este precio está {fueraDeBanda === 'alto' ? 'por encima' : 'por debajo'} del rango de mercado
@@ -572,7 +869,126 @@ export default function CalculadoraPropietariosPage() {
                   </button>
                 ))}
               </div>
+              {ocupacionExcedeTecho && (
+                <p className="text-[11px] text-warning leading-relaxed">
+                  Con pico y placa tu carro solo está disponible {diasDisponiblesAnio} días al año
+                  ({pct(ocupacionTecho)} como máximo). Por encima de ahí los números no se cumplen.
+                </p>
+              )}
             </div>
+          </div>
+
+          {/* ─── Cotización para WhatsApp ─── */}
+          <div className="bg-surface-2 rounded-2xl border border-border p-5">
+            <h2 className="font-bold text-ink text-sm mb-4 flex items-center gap-2">
+              <IconCalendar size={15} className="text-accent" /> Cotización
+            </h2>
+
+            <div className="mb-4">
+              <label className="text-xs font-medium text-ink/60 block mb-1">Días de alquiler</label>
+              <input type="number" min={DIAS_MINIMOS_ALQUILER} value={diasAlquiler}
+                onChange={e => setDiasAlquiler(numInput(e.target.value))}
+                className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40" />
+              {diasAlquiler < DIAS_MINIMOS_ALQUILER && (
+                <p className="text-[11px] text-warning mt-1">
+                  El alquiler de un solo día no está disponible: el mínimo son {DIAS_MINIMOS_ALQUILER} días.
+                </p>
+              )}
+            </div>
+
+            <table className="w-full text-sm mb-4">
+              <thead>
+                <tr className="text-left text-ink/50 text-[11px] uppercase tracking-wide">
+                  <th className="pb-2 font-semibold">Duración</th>
+                  <th className="pb-2 font-semibold text-right">Canon/día</th>
+                  <th className="pb-2 font-semibold text-right">Paga el cliente</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ESCALERA_DURACION.map(t => {
+                  const activo = diasCotiza >= t.desde && (t.hasta === null || diasCotiza <= t.hasta);
+                  const d = tarifaPorDias(t.desde);
+                  return (
+                    <tr key={t.desde} className={`border-t border-border/60 ${activo ? 'bg-accent-light' : ''}`}>
+                      <td className="py-2 font-medium text-ink">{t.etiqueta}</td>
+                      <td className="py-2 text-right text-ink/60 tabular-nums">{cop(d.canon)}</td>
+                      <td className="py-2 text-right font-semibold text-accent tabular-nums">{cop(d.precioCliente)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+
+            <label className="flex items-start gap-2.5 mb-4 cursor-pointer">
+              <input type="checkbox" checked={cobrarIva} onChange={e => setCobrarIva(e.target.checked)}
+                className="mt-0.5 accent-accent" />
+              <span className="text-xs text-ink/70 leading-relaxed">
+                Cobrar IVA
+                <span className="block text-ink/50 mt-0.5">
+                  El {pct(IVA_TARIFA_DEFAULT)} se causa sobre la comisión de DrivePass, no sobre el canon:
+                  el cliente paga {factorPrecioCliente(comision).toFixed(4)} veces el canon.
+                </span>
+              </span>
+            </label>
+
+            <dl className="space-y-2 text-sm border-t border-border/60 pt-3">
+              <div className="flex items-center justify-between">
+                <dt className="text-ink/50">Canon por día ({diasCotiza} días)</dt>
+                <dd className="font-medium text-ink tabular-nums">{cop(tarifa.canon)}</dd>
+              </div>
+              <div className="flex items-center justify-between">
+                <dt className="text-ink/50">Comisión DrivePass ({pct(comision)})</dt>
+                <dd className="font-medium text-ink tabular-nums">{cop(tarifa.comision)}</dd>
+              </div>
+              <div className="flex items-center justify-between border-b border-border/60 pb-2">
+                <dt className="text-ink/50">IVA sobre la comisión ({pct(IVA_TARIFA_DEFAULT)})</dt>
+                <dd className="font-medium text-ink tabular-nums">{cobrarIva ? cop(tarifa.iva) : '—'}</dd>
+              </div>
+              <div className="flex items-center justify-between">
+                <dt className="text-ink font-semibold">Precio al cliente / día</dt>
+                <dd className="font-bold text-accent tabular-nums">{cop(tarifa.precioCliente)}</dd>
+              </div>
+              <div className="flex items-center justify-between border-b border-border/60 pb-2">
+                <dt className="text-ink font-semibold">Tú recibes / día</dt>
+                <dd className="font-bold text-success tabular-nums">{cop(tarifa.propietario)}</dd>
+              </div>
+              <div className="flex items-center justify-between">
+                <dt className="text-ink/50">Días facturables</dt>
+                <dd className="font-medium text-ink tabular-nums">
+                  {diasFacturables} de {diasCotiza}
+                  {diasPicoPlaca > 0 && <span className="text-ink/40"> · −{diasPicoPlaca} por pico y placa</span>}
+                </dd>
+              </div>
+              <div className="flex items-center justify-between">
+                <dt className="text-ink/50">Total del alquiler (cliente)</dt>
+                <dd className="font-medium text-ink tabular-nums">{cop(totalCliente)}</dd>
+              </div>
+              <div className="flex items-center justify-between">
+                <dt className="text-ink/50">Total para ti</dt>
+                <dd className="font-medium text-success tabular-nums">{cop(totalPropietario)}</dd>
+              </div>
+            </dl>
+
+            {diasPicoPlaca > 0 && (
+              <p className="text-[11px] text-ink/50 mt-3 leading-relaxed">
+                El día de pico y placa no se le cobra al cliente ni se te paga a ti: sale de los días facturables.
+                Un carro exento factura los 7 días de la semana.
+              </p>
+            )}
+
+            <div className="grid grid-cols-2 gap-2.5 mt-4">
+              <button type="button" onClick={() => copiar('cliente', textoCliente)}
+                className="text-xs font-semibold py-2.5 rounded-xl border border-accent text-accent hover:bg-accent-light transition">
+                {copiado === 'cliente' ? 'Copiado' : 'Copiar cotización · cliente'}
+              </button>
+              <button type="button" onClick={() => copiar('propietario', textoPropietario)}
+                className="text-xs font-semibold py-2.5 rounded-xl border border-border text-ink/70 hover:bg-surface transition">
+                {copiado === 'propietario' ? 'Copiado' : 'Copiar cotización · propietario'}
+              </button>
+            </div>
+            <pre className="text-[11px] text-ink/60 bg-surface rounded-xl border border-border p-3 mt-3 whitespace-pre-wrap font-sans leading-relaxed">
+              {textoCliente}
+            </pre>
           </div>
         </div>
 
@@ -667,7 +1083,8 @@ export default function CalculadoraPropietariosPage() {
 
       <p className="text-[11px] text-ink/50 text-center mt-8 max-w-2xl mx-auto leading-relaxed flex items-center justify-center gap-1.5">
         <IconCheck size={12} className="flex-shrink-0" />
-        Simulación con datos de mercado de julio 2026 (SOAT, impuesto vehicular Antioquia, seguros). Es una guía, no una cotización — tu caso real puede variar.
+        Tarifas de referencia de rentadoras formales de Medellín (septiembre 2026); SOAT, impuesto vehicular de
+        Antioquia y seguros con tarifas 2026. Es una guía, no una cotización en firme — tu caso real puede variar.
       </p>
     </div>
   );

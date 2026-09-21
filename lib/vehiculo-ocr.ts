@@ -14,7 +14,7 @@
 // reflejos o tarjetas desgastadas.
 
 import { getAnthropic } from './anthropic';
-import type { TipoVehiculo } from './rentabilidad';
+import { TIPO_VEHICULO_LABELS, type TipoVehiculo } from './rentabilidad';
 import type { MediaTypeImagen } from './subida-imagen';
 import { esCombustibleValido, sanitizarClaseVehiculo, type Combustible } from './vehiculo-campos';
 
@@ -52,10 +52,13 @@ const DATOS_VACIOS: DatosVehiculoTarjeta = {
   clase_vehiculo: null,
 };
 
-const TIPOS_VALIDOS: TipoVehiculo[] = ['sedan', 'coupe', 'suv', 'camioneta7', 'lujo_auto', 'lujo_camioneta'];
+// Se deriva de TIPO_VEHICULO_LABELS en vez de repetir la lista a mano: cuando se agregaron
+// 'economico' y 'pickup' (sep-2026) esta copia se habría quedado corta en silencio y el OCR
+// habría descartado como inválido un tipo que sí lo es.
+const TIPOS_VALIDOS: TipoVehiculo[] = Object.keys(TIPO_VEHICULO_LABELS) as TipoVehiculo[];
 
 // Mapa MUY conservador de "clase de vehículo" (tal como la imprime el RUNT en la
-// tarjeta de propiedad) a nuestros 6 segmentos de alquiler. A propósito NO
+// tarjeta de propiedad) a nuestros segmentos de alquiler. A propósito NO
 // mapeamos "camioneta" (en Colombia puede ser pickup, SUV grande o station wagon
 // según la tarjeta) ni distinguimos lujo/coupé (eso depende de la marca/modelo,
 // no de la clase RUNT): mejor dejar el campo en null y que el propietario elija,
