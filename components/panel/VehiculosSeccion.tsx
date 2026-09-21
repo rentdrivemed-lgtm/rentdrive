@@ -1548,7 +1548,7 @@ export default function VehiculosSeccion({ miId, vehiculoInicial }: {
                 </div>
               )}
 
-              {/* Carátula de la póliza todo riesgo — la carga DrivePass, no el propietario.
+              {/* Carátula de la póliza del vehículo — la carga DrivePass, no el propietario.
                   Va FUERA de la lista de arriba (y fuera del `tieneDocs`) a propósito: no
                   pertenece al flujo de revisión del propietario, no cuenta para el estado
                   agregado y tiene que poder cargarse aunque el carro todavía no tenga ningún

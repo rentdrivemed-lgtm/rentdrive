@@ -1,13 +1,18 @@
-// ── Carátula de la póliza todo riesgo del vehículo ──────────────────────────
+// ── Carátula de la póliza del vehículo ──────────────────────────────────────
 //
 // ÚNICA FUENTE DE VERDAD de la clave `poliza` dentro de `vehiculos.documentos`.
 //
 // ── Qué es y por qué es distinta de los demás documentos ────────────────────
-// Desde sep-2026 la póliza todo riesgo la expide **DrivePass**, no el propietario
-// (por eso se retiró del formulario la vieja clave `todo_riesgo`, que sí subía él).
+// Desde sep-2026 la póliza la expide **DrivePass**, no el propietario (por eso se
+// retiró del formulario la vieja clave `todo_riesgo`, que sí subía él).
+//
 // La carátula de esa póliza la tiene la empresa, así que es el ÚNICO documento del
 // vehículo que **carga el administrador**: el SOAT, la tecno-mecánica y la tarjeta
 // de propiedad las sigue subiendo el propietario.
+//
+// HAY UNA CARÁTULA POR VEHÍCULO, no una sola para toda la flota: SURA las expide
+// individualmente. Es la razón de fondo por la que este documento vive en
+// `vehiculos.documentos` y no en una tabla de empresa. Confirmado en sep-2026.
 //
 // De ahí salen tres reglas que se aplican en el servidor, no en la interfaz:
 //
@@ -40,8 +45,20 @@
 /** Nombre de la clave dentro del JSON de `vehiculos.documentos`. */
 export const CLAVE_POLIZA = 'poliza';
 
-/** Etiqueta visible, la misma en el panel del admin y en el del propietario. */
-export const POLIZA_LABEL = 'Carátula de la póliza todo riesgo';
+/**
+ * Etiqueta visible: la misma en el panel del admin, en el del propietario y en el
+ * paquete descargable de documentos.
+ *
+ * Decía «Carátula de la póliza todo riesgo» hasta sep-2026. Se cambió al verificar el
+ * condicionado que SURA expide de verdad —el **Plan Utilitarios y Pesados**, archivado
+ * en `08_Seguros/SURA_Condicionado_Plan_Utilitarios_y_Pesados.pdf`—: ese documento no
+ * usa la expresión «todo riesgo» en ninguna de sus 26 páginas y ampara por coberturas
+ * nombradas una por una (daños a terceros, hurto, pérdidas totales y parciales). Es la
+ * misma razón por la que la frase se retiró de las páginas públicas, y acá pesa igual:
+ * este rótulo lo VE el propietario en su panel, así que no puede prometer una cobertura
+ * que la póliza no da.
+ */
+export const POLIZA_LABEL = 'Carátula de la póliza del vehículo';
 
 /**
  * A diferencia del SOAT y la tecno-mecánica —que hoy guardan solo el archivo—, la

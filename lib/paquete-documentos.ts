@@ -739,7 +739,7 @@ export async function construirPaquete(
     'no lo reenvíes ni lo guardes fuera de los medios autorizados por la empresa.',
     'Cada descarga queda registrada en la Bitácora con el nombre de quien la hizo.',
     '',
-    'Nota: la carátula de la póliza todo riesgo la expide y la carga DrivePass',
+    'Nota: la carátula de la póliza del vehículo la expide y la carga DrivePass',
     '(no el propietario); aparece por vehículo cuando ya se cargó en el sistema.',
     '',
     'Contratos: cada PDF se genera desde el texto que quedó congelado al firmarlo, con',

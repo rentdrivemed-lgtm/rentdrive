@@ -389,7 +389,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     return NextResponse.json({ ok: true, documentos_estado: newEstado, documentos_nota: newNota, documentos_revisiones: JSON.stringify(revs) });
   }
 
-  // ── Carátula de la póliza todo riesgo: SOLO el admin (ver lib/poliza-vehiculo.ts) ──
+  // ── Carátula de la póliza del vehículo: SOLO el admin (ver lib/poliza-vehiculo.ts) ──
   //
   // Desde sep-2026 la póliza la expide DrivePass, así que la carátula la tiene la
   // empresa y no el propietario: es el único documento del vehículo que carga el

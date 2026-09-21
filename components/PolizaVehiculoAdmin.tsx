@@ -1,5 +1,5 @@
 'use client';
-// ── Carátula de la póliza todo riesgo — editor del ADMIN ────────────────────
+// ── Carátula de la póliza del vehículo — editor del ADMIN ───────────────────
 //
 // El único documento del vehículo que NO sube el propietario: desde sep-2026 la
 // póliza la expide DrivePass, así que la carátula la tiene la empresa. Ver

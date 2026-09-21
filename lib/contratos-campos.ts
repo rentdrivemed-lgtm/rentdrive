@@ -62,7 +62,7 @@ export const GRUPOS: readonly DefGrupo[] = [
     nota: 'Se guarda en la ficha del vehículo: el próximo contrato de este mismo carro ya sale lleno.',
   },
   {
-    clave: 'poliza', titulo: 'La póliza todo riesgo',
+    clave: 'poliza', titulo: 'La póliza del vehículo',
     nota: 'Datos de la carátula. Se guardan en la ficha del vehículo. Si al grupo le falta una pieza, el documento imprime el grupo entero en blanco (no una frase a medias).',
   },
   {
