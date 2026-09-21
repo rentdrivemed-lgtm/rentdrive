@@ -1032,6 +1032,7 @@ function initDb(db: Database.Database) {
 
   migrarCotizacionesReservaOpcional(db);
   migrarUsuariosEstadoArchivada(db);
+  migrarContratosVinculacion(db);
   migrarPicoPlacaActivar(db);
   sembrarBusCategorias(db);
   sembrarConfigBuses(db);
@@ -1236,6 +1237,124 @@ function migrarUsuariosEstadoArchivada(db: Database.Database) {
     console.log('[db] Migración: usuarios.estado_cuenta ahora admite "archivada".');
   } catch (e) {
     console.error('[db] Migración usuarios.estado_cuenta archivada falló:', e instanceof Error ? e.message : e);
+  } finally {
+    if (fkEstabaActivo) db.pragma('foreign_keys = ON');
+  }
+}
+
+// ── Contratos de VINCULACIÓN (los que se firman al registrarse) ─────────────
+//
+// Hasta sep-2026 TODO contrato colgaba de una reserva y de un vehículo concretos:
+// `reserva_id` y `vehiculo_id` eran NOT NULL. Los dos documentos nuevos —el que
+// firma el cliente y el que firma el propietario al crear su cuenta— no tienen ni
+// lo uno ni lo otro: se firman ANTES de que exista ninguna reserva.
+//
+// Se reutiliza la tabla `contratos` en vez de crear una paralela, a propósito: el
+// motor de firmas (bloques, sellos HMAC, anulación con reemisión, vía papel, PDF)
+// ya está construido y auditado sobre ella. Una tabla aparte obligaría a duplicarlo
+// y a mantener dos verdades sobre qué es un documento firmado.
+//
+// Cómo se representan las partes, sin columnas nuevas:
+//
+//   · vinculacion-cliente      → cliente_id = el titular · propietario_id = NULL
+//   · vinculacion-propietario  → propietario_id = el titular · cliente_id = NULL
+//
+// Eso encaja tal cual con `accesoContrato()` (lib/contratos-acceso.ts), que decide
+// el papel comparando la cuenta contra esas dos columnas, y con los roles de bloque
+// 'cliente'/'propietario'/'agente' que ya existen.
+//
+// El `UNIQUE(reserva_id, tipo, version)` de la tabla NO sirve para estos: en SQLite
+// dos NULL nunca colisionan, así que no impediría emitir el mismo documento dos
+// veces. Por eso abajo van dos índices únicos PARCIALES, uno por cada titular.
+function migrarContratosVinculacion(db: Database.Database) {
+  const fkEstabaActivo = !!db.pragma('foreign_keys', { simple: true });
+  try {
+    const tabla = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='contratos'").get() as { sql?: string } | undefined;
+    if (!tabla?.sql) return;                                   // la tabla todavía no existe
+    if (!/vinculacion-cliente/.test(tabla.sql)) {
+      // Columnas BASE reescritas a mano (conservan sus constraints reales); el resto
+      // —las añadidas por ALTER a lo largo de las sesiones: via_firma, papel_*,
+      // datos_revision— se copian dinámicamente, igual que en la migración de
+      // `usuarios`. Todas ellas son nullable con un DEFAULT simple.
+      const cols = db.prepare('PRAGMA table_info(contratos)').all() as
+        { name: string; type: string; notnull: number; dflt_value: string | null; pk: number }[];
+
+      const BASE = [
+        'id', 'reserva_id', 'vehiculo_id', 'propietario_id', 'cliente_id', 'tipo', 'numero',
+        'version', 'estado', 'texto', 'datos_json', 'faltantes_json', 'generado_por',
+        'generado_por_nombre', 'firmado_en', 'anulado_en', 'anulado_por', 'anulado_por_nombre',
+        'motivo_anulacion', 'created_at',
+      ];
+      const baseSet = new Set(BASE);
+      const extra = cols.filter(c => !baseSet.has(c.name));
+      const extraDef = extra
+        .map(c => `${c.name} ${c.type || 'TEXT'}${c.dflt_value === null ? '' : ` DEFAULT ${c.dflt_value}`}`)
+        .join(',\n          ');
+
+      // Lista explícita de columnas para el INSERT (nunca `SELECT *`): en una base que
+      // ya recibió ALTERs, el orden físico de la tabla vieja no tiene por qué coincidir
+      // con el de la nueva.
+      const copiadas = [...BASE.filter(n => cols.some(c => c.name === n)), ...extra.map(c => c.name)];
+      const listaCols = copiadas.join(', ');
+
+      if (fkEstabaActivo) db.pragma('foreign_keys = OFF');
+      const reconstruir = db.transaction(() => {
+        db.exec(`
+          CREATE TABLE contratos_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            -- Opcionales desde sep-2026: los contratos de vinculación no tienen reserva
+            -- ni vehículo. Para los otros seis tipos siguen llegando siempre llenos.
+            reserva_id INTEGER REFERENCES reservas(id),
+            vehiculo_id INTEGER REFERENCES vehiculos(id),
+            -- También opcionales: en un contrato de vinculación solo hay UNA parte
+            -- además de DrivePass (el cliente o el propietario, según el tipo).
+            propietario_id INTEGER REFERENCES usuarios(id),
+            cliente_id INTEGER REFERENCES usuarios(id),
+            tipo TEXT NOT NULL CHECK(tipo IN ('agencia','otrosi-agencia','arrendamiento','otrosi-arrendamiento','acta-entrega','pagare','vinculacion-cliente','vinculacion-propietario')),
+            numero TEXT NOT NULL DEFAULT '',
+            version INTEGER NOT NULL DEFAULT 1,
+            estado TEXT NOT NULL DEFAULT 'pendiente' CHECK(estado IN ('pendiente','firmado','anulado')),
+            texto TEXT NOT NULL,
+            datos_json TEXT NOT NULL DEFAULT '{}',
+            faltantes_json TEXT NOT NULL DEFAULT '[]',
+            generado_por INTEGER REFERENCES usuarios(id),
+            generado_por_nombre TEXT DEFAULT '',
+            firmado_en TEXT DEFAULT '',
+            anulado_en TEXT DEFAULT '',
+            anulado_por INTEGER REFERENCES usuarios(id),
+            anulado_por_nombre TEXT DEFAULT '',
+            motivo_anulacion TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now', 'localtime'))${extra.length ? ',\n            ' + extraDef : ''},
+            UNIQUE(reserva_id, tipo, version)
+          );
+
+          INSERT INTO contratos_new (${listaCols}) SELECT ${listaCols} FROM contratos;
+
+          DROP TABLE contratos;
+          ALTER TABLE contratos_new RENAME TO contratos;
+
+          CREATE INDEX IF NOT EXISTS idx_contratos_reserva ON contratos(reserva_id);
+          CREATE INDEX IF NOT EXISTS idx_contratos_cliente ON contratos(cliente_id);
+          CREATE INDEX IF NOT EXISTS idx_contratos_propietario ON contratos(propietario_id);
+        `);
+      });
+      reconstruir();
+      console.log('[db] Migración: contratos admite documentos de vinculación (sin reserva ni vehículo).');
+    }
+
+    // Un titular no puede tener DOS veces el mismo documento de vinculación en la misma
+    // versión. Parciales y separados (en vez de uno solo sobre COALESCE) para que cada
+    // índice cubra exactamente una de las dos formas y se lea sin ambigüedad.
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_contratos_vinculacion_cliente
+        ON contratos(tipo, version, cliente_id)
+        WHERE reserva_id IS NULL AND cliente_id IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_contratos_vinculacion_propietario
+        ON contratos(tipo, version, propietario_id)
+        WHERE reserva_id IS NULL AND propietario_id IS NOT NULL;
+    `);
+  } catch (e) {
+    console.error('[db] Migración contratos de vinculación falló:', e instanceof Error ? e.message : e);
   } finally {
     if (fkEstabaActivo) db.pragma('foreign_keys = ON');
   }
@@ -1507,6 +1626,11 @@ function crearTablasContratos(db: Database.Database) {
       firma_metodo TEXT DEFAULT '',
       firma_ip TEXT DEFAULT '',
       firma_user_agent TEXT DEFAULT '',
+      -- Cuenta del equipo que presenció la firma en el mostrador (NULL = la persona
+      -- firmó sola desde su propio dispositivo). NO sustituye al firmante: quien
+      -- traza sigue siendo el titular del bloque (ver puedeFirmarBloque).
+      asistida_por_id INTEGER REFERENCES usuarios(id),
+      asistida_por_nombre TEXT DEFAULT '',
       -- Sello HMAC-SHA256 ('cf1:<hex>') sobre el texto íntegro del documento y el
       -- acto de firma. Ver lib/contratos-firma.ts → calcularSelloFirma.
       firma_hash TEXT DEFAULT '',
@@ -1569,6 +1693,20 @@ function crearTablasContratos(db: Database.Database) {
     "papel_sello TEXT DEFAULT ''",
   ]) {
     try { db.exec(`ALTER TABLE contratos ADD COLUMN ${col}`); } catch { /* ya existe */ }
+  }
+
+  // ── Firma ASISTIDA en el mostrador (sep-2026) ─────────────────────────────
+  // Quien traza sigue siendo el firmante —`firmada_por_id` no cambia de significado
+  // y `puedeFirmarBloque()` sigue exigiendo que sea la persona del bloque—, pero
+  // cuando la firma se recoge en el punto de atención queda registrado QUÉ cuenta
+  // del equipo abrió y presenció el acto. Es la diferencia entre "firmó desde su
+  // celular" y "firmó en el mostrador con la secretaria delante", y es justo lo
+  // que habría que poder demostrar si el cliente desconoce la firma.
+  for (const col of [
+    'asistida_por_id INTEGER REFERENCES usuarios(id)',
+    "asistida_por_nombre TEXT DEFAULT ''",
+  ]) {
+    try { db.exec(`ALTER TABLE contrato_firmas ADD COLUMN ${col}`); } catch { /* ya existe */ }
   }
 
   // Contratos que ya tenían firmas electrónicas ANTES de que existiera `via_firma`: se

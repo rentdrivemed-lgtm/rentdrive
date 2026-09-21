@@ -12,6 +12,8 @@ import { documentosConUrlsValidas } from '@/lib/storage';
 import { quitarPolizaDeEntrada } from '@/lib/poliza-vehiculo';
 import { esCombustibleValido, inscripcionExencionConfirmada, requiereInscripcionExencion, sanitizarClaseVehiculo } from '@/lib/vehiculo-campos';
 import { filtrarVehiculos } from '@/lib/vehiculo-publico';
+import { vinculacionAlDia } from '@/lib/contratos-vinculacion';
+import { CODIGO_VINCULACION_PENDIENTE } from '@/lib/contratos-vinculacion-texto';
 import { validarDiasDisponibles } from '@/lib/dias-disponibles';
 
 function datesInRange(start: string, end: string): string[] {
@@ -192,6 +194,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       { error: 'Completa tu perfil antes de publicar un vehículo.', codigo: CODIGO_PERFIL_INCOMPLETO },
       { status: 403 },
+    );
+  }
+
+  // Contrato de vinculación firmado: sin él no se publica vehículo. Solo frena a quien
+  // YA lo tiene emitido y sin firmar — ver la nota de `vinculacionAlDia`.
+  if (!vinculacionAlDia(getDb(), user.id, user.rol)) {
+    return NextResponse.json(
+      {
+        error: 'Antes de publicar un vehículo tienes que firmar tu contrato de vinculación. Lo encuentras en tu perfil.',
+        codigo: CODIGO_VINCULACION_PENDIENTE,
+      },
+      { status: 409 },
     );
   }
 

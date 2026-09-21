@@ -8,6 +8,7 @@ import { bloqueadoPorCsrf } from '@/lib/csrf';
 import { consumirIntento, ipCliente } from '@/lib/limite-tasa';
 import { generarCodigoCorreo, expiraEnMinutos, CODIGO_VIGENCIA_MIN } from '@/lib/verificacion-correo';
 import { esUrlDeStorageValida } from '@/lib/storage';
+import { emitirYNotificarVinculacion } from '@/lib/contratos-vinculacion';
 import bcrypt from 'bcryptjs';
 
 // Límite por IP: crear cuentas es gratis para quien registra pero NO para quien
@@ -148,6 +149,16 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     console.error('[registro] No se pudo procesar el código de referido:', e instanceof Error ? e.message : e);
   }
+
+  // Contrato de vinculación: se EMITE aquí, al crear la cuenta, y queda esperando que
+  // la persona ponga su trazo desde su propio perfil (ver lib/contratos-vinculacion.ts).
+  // No se da por firmado con una casilla: marcar «leí y acepto» y firmar no son lo
+  // mismo, y lo que hace oponible el documento es el trazo con su sello de integridad.
+  //
+  // `emitirYNotificarVinculacion` no lanza: si falla, la cuenta queda creada igual y el
+  // documento se puede emitir después desde el panel. Perder un registro por esto sería
+  // peor que emitir el contrato un minuto más tarde.
+  emitirYNotificarVinculacion(db, nuevoId, rolFinal, { id: nuevoId, nombre, correo });
 
   // El correo de bienvenida y el código de activación van en el mismo envío (evita
   // mandar dos correos separados). El registro NUNCA se bloquea si el envío falla —

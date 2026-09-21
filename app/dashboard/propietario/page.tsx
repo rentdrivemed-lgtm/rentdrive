@@ -2,6 +2,7 @@
 import { Suspense, useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+import AvisoVinculacion from '@/components/AvisoVinculacion';
 import FotoUpload from '@/components/FotoUpload';
 import DocUpload from '@/components/DocUpload';
 import DocUploadDoble, { ladosFaltantes } from '@/components/DocUploadDoble';
@@ -849,6 +850,9 @@ function DashboardPropietarioInner() {
   // ─────────────────────────────────────────────────────────────────────────
   return (
     <div className="max-w-5xl mx-auto px-4 py-10">
+      {/* Contrato de vinculación pendiente de firma. No pinta nada si ya firmó. */}
+      <AvisoVinculacion className="mb-6" />
+
       {/* Popups */}
       {popupCompleto && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">

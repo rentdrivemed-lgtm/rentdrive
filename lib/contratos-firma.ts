@@ -26,6 +26,7 @@
 // 'use client'. Para los tipos, `import type`.
 
 import type Database from 'better-sqlite3';
+import { TITULOS_VINCULACION } from './contratos-vinculacion-texto';
 import { createHash } from 'crypto';
 import { igualesEnTiempoConstante, sellarHmac } from './firma-sello';
 import { armarDatosContrato, generarDocumento } from './contratos';
@@ -495,8 +496,14 @@ export function listarContratosDeReserva(db: DB, reservaId: number): ContratoRow
   return db.prepare('SELECT * FROM contratos WHERE reserva_id = ? ORDER BY id DESC').all(reservaId) as ContratoRow[];
 }
 
-export function tituloDocumento(tipo: TipoDocumento): string {
-  return TITULOS_DOCUMENTO[tipo] || tipo;
+export function tituloDocumento(tipo: TipoDocumento | string): string {
+  // Los contratos de VINCULACIÓN viven en la misma tabla pero no son de operación, así
+  // que su título no está en TITULOS_DOCUMENTO. Se resuelven aquí para que las rutas y
+  // pantallas compartidas (detalle, firma, PDF) los nombren bien sin tener que saber de
+  // qué familia es cada documento. Ver lib/contratos-vinculacion-texto.ts.
+  const vinculacion = (TITULOS_VINCULACION as Record<string, string>)[tipo];
+  if (vinculacion) return vinculacion;
+  return (TITULOS_DOCUMENTO as Record<string, string>)[tipo] || String(tipo);
 }
 
 // ── Firma de un bloque ──────────────────────────────────────────────────────

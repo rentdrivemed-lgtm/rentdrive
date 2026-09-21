@@ -8,6 +8,8 @@ import { consumirCreditos } from '@/lib/referidos';
 import { perfilIncompleto, CODIGO_PERFIL_INCOMPLETO } from '@/lib/perfil';
 import { mapaDocumentos } from '@/lib/documentos-ref';
 import { correoNoVerificado, CODIGO_CORREO_NO_VERIFICADO } from '@/lib/verificacion-correo';
+import { vinculacionAlDia } from '@/lib/contratos-vinculacion';
+import { CODIGO_VINCULACION_PENDIENTE } from '@/lib/contratos-vinculacion-texto';
 // Reglas de negocio compartidas con la vía de mostrador (POST /api/admin/reservas).
 // Ver lib/reserva-core.ts: ahí viven mínimo de noches, documentos (incluido el
 // contraste del pasaporte contra el tipo de documento registrado), lugares,
@@ -184,6 +186,16 @@ export async function POST(req: NextRequest) {
   if (!firma_contrato) return NextResponse.json({ error: 'Debes aceptar el contrato.' }, { status: 400 });
 
   const db = getDb();
+
+  // Contrato de vinculación firmado: sin él no se reserva. Solo frena a quien YA lo
+  // tiene emitido y sin firmar — ver la nota de `vinculacionAlDia`, que explica por qué
+  // las cuentas anteriores al módulo no quedan bloqueadas de golpe.
+  if (!vinculacionAlDia(db, user.id, user.rol)) {
+    return NextResponse.json({
+      error: 'Antes de reservar tienes que firmar tu contrato de vinculación. Lo encuentras en tu perfil.',
+      codigo: CODIGO_VINCULACION_PENDIENTE,
+    }, { status: 409 });
+  }
 
   // ── Datos de la operación que antes se pedían en el registro ──────────────
   // Se movieron acá para que crear la cuenta sea rápido: la dirección, la ciudad

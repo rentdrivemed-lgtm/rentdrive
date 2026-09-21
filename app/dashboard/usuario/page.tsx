@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import AvisoVinculacion from '@/components/AvisoVinculacion';
 import { IconCar, IconSearch, IconCalendar, IconX } from '@/components/Icons';
 import { fechaHoraRecogida, calcularPoliticaCancelacion } from '@/lib/cancelacion';
 import ReferidosCard from '@/components/ReferidosCard';
@@ -101,6 +102,9 @@ export default function DashboardUsuario() {
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-10">
+
+      {/* Contrato de vinculación pendiente de firma. No pinta nada si ya firmó. */}
+      <AvisoVinculacion className="mb-6" />
 
       {/* Header (template App Dashboard: saludo grande + subtítulo contextual + CTA en gradiente) */}
       <div className="flex items-end justify-between mb-6 pb-6 border-b border-border flex-wrap gap-4">

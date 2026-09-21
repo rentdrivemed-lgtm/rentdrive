@@ -91,6 +91,25 @@ function armarPersona(f: FilaPersona): Persona {
 }
 
 /**
+ * La misma `Persona` de los contratos de operación, pero armada desde UNA CUENTA y sin
+ * pasar por una reserva. La necesitan los contratos de vinculación (lib/contratos-
+ * vinculacion.ts), que se firman al registrarse, cuando todavía no existe ni reserva ni
+ * vehículo de los que sacar las partes.
+ *
+ * Devuelve `null` solo si la cuenta no existe. Los campos que la persona todavía no ha
+ * completado salen como PENDIENTE, igual que en el resto del módulo; quién decide si eso
+ * bloquea la firma es `faltantesVinculacion()`.
+ */
+export function personaDeUsuario(db: DB, usuarioId: number): Persona | null {
+  const f = db.prepare(`
+    SELECT nombre, correo, documento_identidad, tipo_documento, ciudad, direccion,
+           celular, celular_indicativo, numero_licencia, licencia_categoria, licencia_vence
+    FROM usuarios WHERE id = ?
+  `).get(Number(usuarioId)) as FilaPersona | undefined;
+  return f ? armarPersona(f) : null;
+}
+
+/**
  * Dirección del lugar tal como la escribe el otrosí: «Calle 42 A No. 68 A 10 de
  * Medellín, Antioquia». Los lugares del catálogo que no piden dirección (punto de
  * atención y aeropuertos) se nombran por su nombre propio.

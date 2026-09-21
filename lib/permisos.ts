@@ -41,6 +41,13 @@ export const AREA_NIVELES: Record<string, AdminNivel[]> = {
   // documento emitido es un acto jurídico con el cliente y con el propietario, y
   // anularlo tumba firmas ya recogidas.
   contratos:    ['principal', 'socio'],
+  // Contratos de VINCULACIÓN (los que se firman al crear la cuenta). Área APARTE de
+  // `contratos` y sí abierta a secretaría, a propósito: acá solo se puede emitir el
+  // documento, reenviar el aviso y acompañar a la persona mientras firma en el
+  // mostrador. No da acceso a los documentos de una reserva ni permite anular nada,
+  // que es justamente la razón por la que `contratos` excluye a secretaría.
+  // Ver lib/contratos-vinculacion.ts.
+  contratos_vinculacion: ['principal', 'socio', 'secretaria'],
   mercado:      ['principal', 'socio'],
   calculadora:  ['principal', 'socio'],
   buses:        ['principal', 'socio'],
@@ -106,6 +113,7 @@ export const AREA_LABEL: Record<string, string> = {
   reservas: 'Reservas',
   contabilidad: 'Contabilidad',
   contratos: 'Contratos digitales',
+  contratos_vinculacion: 'Contratos de vinculación (registro)',
   mercado: 'Mercado',
   calculadora: 'Calculadora',
   leads: 'Leads',
@@ -137,7 +145,7 @@ export function areaLabel(area: string): string {
 // asignable que no se haya listado arriba, para que nunca quede una sección oculta
 // si se agrega una nueva a AREA_NIVELES.
 const GRUPOS_BASE: { titulo: string; areas: string[] }[] = [
-  { titulo: 'Panel de administración', areas: ['usuarios', 'vehiculos', 'buses', 'reservas', 'contabilidad', 'contratos', 'mercado', 'calculadora', 'leads', 'soporte', 'nfc', 'config', 'auditoria'] },
+  { titulo: 'Panel de administración', areas: ['usuarios', 'vehiculos', 'buses', 'reservas', 'contabilidad', 'contratos', 'contratos_vinculacion', 'mercado', 'calculadora', 'leads', 'soporte', 'nfc', 'config', 'auditoria'] },
   { titulo: 'Panel de control del equipo', areas: ['panel', 'operaciones', 'tareas', 'calendario', 'documentos', 'tableros'] },
   { titulo: 'Acciones sensibles', areas: ['config_editar_operativo', 'config_editar_financiero', 'contratos_firmar_agente'] },
 ];
