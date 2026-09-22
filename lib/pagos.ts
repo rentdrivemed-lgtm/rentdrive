@@ -56,8 +56,11 @@ export async function obtenerTokensAceptacion(): Promise<{ acceptanceToken: stri
 
 export async function crearFuentePago(params: {
   token: string; correo: string; acceptanceToken: string; personalAuthToken: string | null;
-}): Promise<{ id: number }> {
-  const json = await llamarWompi<{ data: { id: number } }>('/payment_sources', {
+}): Promise<{ id: number; bin: string; ultimos4: string }> {
+  const json = await llamarWompi<{ data: {
+    id: number;
+    public_data?: { bin?: string; last_four?: string };
+  } }>('/payment_sources', {
     method: 'POST',
     llave: PRIVATE_KEY,
     body: {
@@ -68,7 +71,24 @@ export async function crearFuentePago(params: {
       ...(params.personalAuthToken ? { accept_personal_auth: params.personalAuthToken } : {}),
     },
   });
-  return { id: json.data.id };
+  return {
+    id: json.data.id,
+    bin: json.data.public_data?.bin || '',
+    ultimos4: json.data.public_data?.last_four || '',
+  };
+}
+
+/**
+ * Marca de la tarjeta a partir del BIN (los primeros dígitos) — se usa cuando
+ * se guarda una tarjeta SIN cobrarla (ver /guardar-tarjeta), así que no hay
+ * una transacción de la que sacar `payment_method.extra.brand` como en el
+ * checkout normal (app/api/reservas/route.ts).
+ */
+export function marcaPorBin(bin: string): string {
+  if (/^4/.test(bin)) return 'VISA';
+  if (/^5[1-5]/.test(bin) || /^2[2-7]/.test(bin)) return 'MASTERCARD';
+  if (/^3[47]/.test(bin)) return 'AMEX';
+  return '';
 }
 
 export async function crearTransaccion(params: {

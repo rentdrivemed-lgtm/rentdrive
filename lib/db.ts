@@ -808,6 +808,20 @@ function initDb(db: Database.Database) {
       created_at TEXT DEFAULT (datetime('now', 'localtime'))
     );
 
+    -- Enlace de un solo uso para que un cliente presencial guarde su tarjeta
+    -- SIN cobrarle nada (ver app/guardar-tarjeta/[token] y lib/pagos.ts). El
+    -- admin lo genera desde la ficha del cliente y se lo manda por su cuenta
+    -- (WhatsApp, SMS, lo que sea) — RentDrive no envía nada automáticamente.
+    CREATE TABLE IF NOT EXISTS enlaces_tarjeta (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      token TEXT NOT NULL UNIQUE,
+      usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+      usado INTEGER DEFAULT 0,
+      creado_por INTEGER NOT NULL REFERENCES usuarios(id),
+      expira_at TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now', 'localtime'))
+    );
+
     CREATE TABLE IF NOT EXISTS cargos_extra (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       reserva_id INTEGER NOT NULL REFERENCES reservas(id),

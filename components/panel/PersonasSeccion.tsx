@@ -197,6 +197,32 @@ export default function PersonasSeccion({ miNivel, miId }: { miNivel: AdminNivel
   const [usrOrden, setUsrOrden] = useState<OrdenLlegada>('recientes');
   const [perfilModal, setPerfilModal] = useState<{ u: Usuario } | null>(null);
   const [eliminandoUsuario, setEliminandoUsuario] = useState<number | null>(null);
+  // Enlace para que el cliente guarde su tarjeta SIN cobrarle (ver
+  // app/api/admin/enlaces-tarjeta y app/guardar-tarjeta/[token]). Se genera acá
+  // y el admin lo copia para mandarlo por su cuenta — nada se envía solo.
+  const [enlaceTarjeta, setEnlaceTarjeta] = useState<{ uid: number; link: string } | null>(null);
+  const [generandoEnlace, setGenerandoEnlace] = useState(false);
+  const [errorEnlace, setErrorEnlace] = useState('');
+
+  const generarEnlaceTarjeta = async (u: Usuario) => {
+    setErrorEnlace('');
+    setEnlaceTarjeta(null);
+    setGenerandoEnlace(true);
+    try {
+      const res = await fetch('/api/admin/enlaces-tarjeta', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ usuario_id: u.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setErrorEnlace(data.error || 'No se pudo generar el enlace.'); return; }
+      setEnlaceTarjeta({ uid: u.id, link: data.link });
+    } catch {
+      setErrorEnlace('Sin conexión — intenta de nuevo.');
+    } finally {
+      setGenerandoEnlace(false);
+    }
+  };
   const [resetPass, setResetPass] = useState<{ uid: number; nueva: string; confirmar: string; guardando: boolean; ok: string } | null>(null);
 
   useEffect(() => {
@@ -853,6 +879,44 @@ export default function PersonasSeccion({ miNivel, miId }: { miNivel: AdminNivel
                     <p className="text-sm font-semibold text-ink font-mono">{emergencia.telefono || '—'}</p>
                   </div>
                 </div>
+
+                {/* Tarjeta guardada sin cobrar — para clientes presenciales que llegan
+                    sin pagar en línea pero quedan con una tarjeta de respaldo (garantía,
+                    multas/daños vía "Cargos extra"). Ver app/guardar-tarjeta/[token]. */}
+                {u.rol === 'usuario' && (
+                  <>
+                    <p className="text-[10px] font-bold text-ink/50 uppercase tracking-widest pt-1">Guardar tarjeta sin cobrar</p>
+                    <div className="bg-surface rounded-xl p-3 border border-border space-y-2">
+                      <p className="text-xs text-ink/50">
+                        Genera un enlace de un solo uso para que el cliente guarde su tarjeta desde su celular — no se le cobra nada. Tú se lo mandas por WhatsApp o donde prefieras.
+                      </p>
+                      <button
+                        onClick={() => generarEnlaceTarjeta(u)}
+                        disabled={generandoEnlace}
+                        className="text-xs font-semibold bg-accent/15 text-accent px-3 py-1.5 rounded-lg hover:bg-accent/20 transition disabled:opacity-50"
+                      >
+                        {generandoEnlace ? 'Generando…' : 'Generar enlace'}
+                      </button>
+                      {errorEnlace && <p className="text-xs text-danger">{errorEnlace}</p>}
+                      {enlaceTarjeta && enlaceTarjeta.uid === u.id && (
+                        <div className="flex items-center gap-2 bg-surface-2 border border-border rounded-lg px-2.5 py-2">
+                          <input
+                            readOnly
+                            value={enlaceTarjeta.link}
+                            onFocus={e => e.currentTarget.select()}
+                            className="flex-1 min-w-0 text-xs font-mono text-ink/70 bg-transparent focus:outline-none"
+                          />
+                          <button
+                            onClick={() => navigator.clipboard?.writeText(enlaceTarjeta.link)}
+                            className="text-[11px] font-semibold text-accent flex-shrink-0"
+                          >
+                            Copiar
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
 
                 {/* Estado de cuenta */}
                 <div className="flex items-center justify-between pt-2 border-t border-border">
