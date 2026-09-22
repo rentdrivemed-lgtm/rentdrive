@@ -16,6 +16,10 @@ export type Transaccion = {
   status: EstadoTransaccion;
   amount_in_cents: number;
   reference: string;
+  // Presente cuando el método de pago es tarjeta — lo usa el checkout para
+  // guardar marca/últimos 4 sin haber visto nunca el número real (el widget de
+  // Wompi es quien lo capturó).
+  payment_method?: { extra?: { brand?: string; last_four?: string } };
 };
 
 class ErrorWompi extends Error {

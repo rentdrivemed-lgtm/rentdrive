@@ -6,6 +6,7 @@ import { IconArrowL, IconShield, IconPin } from '@/components/Icons';
 import DocUploadDoble from '@/components/DocUploadDoble';
 import { LUGAR_VACIO, calcularRecargo, lugarResumen, cargarLugares, type Lugar } from '@/lib/lugares';
 import { validarDireccion, validarCiudad, validarNombreContacto, validarTelefonoContacto } from '@/lib/validacion';
+import { openCardTokenizer } from '@/lib/wompi-widget-client';
 
 type Vehiculo = {
   id: number; marca: string; modelo: string; anio: number;
@@ -17,23 +18,6 @@ type User = {
   tipo_documento?: string;
   cedula_url?: string; cedula_url_dorso?: string; licencia_url?: string;
 };
-
-function detectarTarjeta(num: string) {
-  const n = num.replace(/\s/g, '');
-  if (/^4/.test(n)) return 'Visa';
-  if (/^5[1-5]/.test(n) || /^2[2-7]\d{2}/.test(n)) return 'Mastercard';
-  if (/^3[47]/.test(n)) return 'Amex';
-  return null;
-}
-
-function formatNumero(v: string) {
-  return v.replace(/\D/g, '').slice(0, 16).replace(/(.{4})/g, '$1 ').trim();
-}
-
-function formatVence(v: string) {
-  const c = v.replace(/\D/g, '').slice(0, 4);
-  return c.length >= 3 ? c.slice(0, 2) + '/' + c.slice(2) : c;
-}
 
 function PagoContent() {
   const params = useSearchParams();
@@ -81,11 +65,7 @@ function PagoContent() {
   const [firmaNombre, setFirmaNombre] = useState('');
   const [aceptado, setAceptado] = useState(false);
 
-  // Step 3 — Pago
-  const [numero, setNumero] = useState('');
-  const [nombreTarjeta, setNombreTarjeta] = useState('');
-  const [vence, setVence] = useState('');
-  const [cvv, setCvv] = useState('');
+  // Step 3 — Pago (el número/CVV los captura el widget de Wompi, nunca este componente)
   const [usarCreditos, setUsarCreditos] = useState(true);
 
   const cargarInicial = () => {
@@ -174,71 +154,13 @@ function PagoContent() {
   const creditosDisponibles = user?.creditos_referido || 0;
   const creditosAplicados = usarCreditos ? Math.min(creditosDisponibles, totalBruto) : 0;
   const total = totalBruto - creditosAplicados;
-  const tipoTarj = detectarTarjeta(numero);
-  const bgTarjeta = tipoTarj === 'Visa'
-    ? 'from-brand to-brand/80'
-    : tipoTarj === 'Mastercard'
-    ? 'from-danger to-orange-500'
-    : 'from-brand to-accent';
 
-  const pagar = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-
-    const limpio = numero.replace(/\s/g, '');
-    if (limpio.length !== 16) { setError('El número de tarjeta debe tener 16 dígitos.'); return; }
-    if (!nombreTarjeta.trim()) { setError('Ingresa el nombre del titular de la tarjeta.'); return; }
-
-    const [mm, aa] = vence.split('/').map(Number);
-    const ahora = new Date();
-    const expAnio = 2000 + (aa || 0);
-    if (!mm || mm < 1 || mm > 12 || !aa ||
-        expAnio < ahora.getFullYear() ||
-        (expAnio === ahora.getFullYear() && mm < ahora.getMonth() + 1)) {
-      setError('Fecha de vencimiento inválida.'); return;
-    }
-    if (cvv.length < 3) { setError('CVV inválido.'); return; }
-
+  // Con el token que devuelve el widget de Wompi, crear la reserva: el backend
+  // cobra el alquiler completo de una vez y guarda la tarjeta tokenizada para
+  // cargos futuros (marca/últimos 4 los deriva el propio backend de la
+  // respuesta de Wompi — el navegador ya no ve el número de la tarjeta).
+  const crearReserva = async (cardToken: string) => {
     setLoading(true);
-
-    // 1) Tokenizar la tarjeta directo en el navegador contra Wompi — el número
-    //    y el CVV nunca pasan por nuestro backend, solo el token resultante.
-    let cardToken = '';
-    let cardBrand = '';
-    let cardLast4 = '';
-    try {
-      const baseUrl = process.env.NEXT_PUBLIC_WOMPI_BASE_URL || 'https://sandbox.wompi.co/v1';
-      const tokRes = await fetch(`${baseUrl}/tokens/cards`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${process.env.NEXT_PUBLIC_WOMPI_PUBLIC_KEY}`,
-        },
-        body: JSON.stringify({
-          number: limpio,
-          cvc: cvv,
-          exp_month: String(mm).padStart(2, '0'),
-          exp_year: String(aa).padStart(2, '0'),
-          card_holder: nombreTarjeta.trim(),
-        }),
-      });
-      const tokData = await tokRes.json();
-      if (!tokRes.ok) {
-        setError(tokData?.error?.messages?.[0] || tokData?.error?.reason || 'La tarjeta fue rechazada. Verifica los datos.');
-        setLoading(false);
-        return;
-      }
-      cardToken = tokData.data.id;
-      cardBrand = tokData.data.card?.brand || tipoTarj || '';
-      cardLast4 = tokData.data.card?.last_four || limpio.slice(-4);
-    } catch {
-      setError('No se pudo conectar con la pasarela de pago. Intenta de nuevo.');
-      setLoading(false);
-      return;
-    }
-
-    // 2) Con el token, crear la reserva: el backend cobra el alquiler completo
-    //    de una vez y guarda la tarjeta tokenizada para cargos futuros.
     try {
       const res = await fetch('/api/reservas', {
         method: 'POST',
@@ -260,8 +182,6 @@ function PagoContent() {
           recogida,
           entrega,
           card_token: cardToken,
-          card_brand: cardBrand,
-          card_last4: cardLast4,
           firma_contrato: JSON.stringify({
             nombre: firmaNombre,
             fecha: new Date().toISOString(),
@@ -294,6 +214,32 @@ function PagoContent() {
     } catch {
       setError('Sin conexión — revisa tu internet e intenta de nuevo.');
     } finally {
+      setLoading(false);
+    }
+  };
+
+  // Abre el formulario de tarjeta de Wompi (modal propio, nada del número/CVV
+  // pasa por nuestra página). Si la persona lo cierra sin pagar, Wompi no
+  // avisa — por eso, al recuperar el foco la ventana, si no llegó el token en
+  // ese ratito, se libera el botón para que pueda reintentar.
+  const pagar = async () => {
+    setError('');
+    setLoading(true);
+    let tokenRecibido = false;
+    const liberarSiCierraSinPagar = () => {
+      window.removeEventListener('focus', liberarSiCierraSinPagar);
+      setTimeout(() => { if (!tokenRecibido) setLoading(false); }, 500);
+    };
+    try {
+      const publicKey = process.env.NEXT_PUBLIC_WOMPI_PUBLIC_KEY || '';
+      await openCardTokenizer(publicKey, (source) => {
+        tokenRecibido = true;
+        window.removeEventListener('focus', liberarSiCierraSinPagar);
+        crearReserva(source.token);
+      });
+      window.addEventListener('focus', liberarSiCierraSinPagar);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo abrir el formulario de pago. Intenta de nuevo.');
       setLoading(false);
     }
   };
@@ -674,83 +620,23 @@ function PagoContent() {
         <div className="bg-surface-2 rounded-2xl border border-border p-5">
           <p className="text-[10px] font-bold text-ink/50 uppercase tracking-widest mb-4">Paso 3 de 3 — Pago con tarjeta de crédito</p>
 
-          <div className={`relative rounded-2xl p-5 mb-5 bg-gradient-to-br ${bgTarjeta} text-white overflow-hidden`}
+          <div className="relative rounded-2xl p-5 mb-5 bg-gradient-to-br from-brand to-accent text-white overflow-hidden"
             style={{ minHeight: 130 }}>
             <div className="absolute -top-8 -right-8 w-32 h-32 rounded-full bg-white/10" />
             <div className="absolute -bottom-6 -left-6 w-24 h-24 rounded-full bg-white/10" />
-            <p className="text-[10px] uppercase tracking-widest opacity-60 mb-4 relative z-10">
-              {tipoTarj || 'Tarjeta de crédito'}
-            </p>
-            <p className="text-lg font-mono tracking-widest mb-4 relative z-10">
-              {numero || '•••• •••• •••• ••••'}
-            </p>
-            <div className="flex justify-between items-end relative z-10">
-              <div>
-                <p className="text-[9px] uppercase opacity-50 mb-0.5">Titular</p>
-                <p className="text-sm font-semibold tracking-wide">{nombreTarjeta || 'NOMBRE APELLIDO'}</p>
-              </div>
-              <div className="text-right">
-                <p className="text-[9px] uppercase opacity-50 mb-0.5">Vence</p>
-                <p className="text-sm font-mono">{vence || 'MM/AA'}</p>
-              </div>
+            <div className="relative z-10 h-full flex flex-col justify-center items-center text-center gap-2 py-4">
+              <IconShield size={28} />
+              <p className="text-sm font-semibold">Vas a ingresar los datos de tu tarjeta directo en el formulario seguro de Wompi</p>
+              <p className="text-[11px] opacity-75">Nunca pasan por nuestra página — se abre en su propio formulario protegido</p>
             </div>
           </div>
 
-          <form onSubmit={pagar} className="space-y-3">
-            <div>
-              <label className="text-xs font-semibold text-ink/60 block mb-1.5 uppercase tracking-wide">
-                Número de tarjeta
-              </label>
-              <input
-                type="text" inputMode="numeric"
-                placeholder="1234 5678 9012 3456"
-                value={numero}
-                onChange={e => setNumero(formatNumero(e.target.value))}
-                maxLength={19}
-                className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink font-mono bg-surface-2 focus:outline-none focus:ring-2 focus:ring-accent/40"
-              />
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-ink/60 block mb-1.5 uppercase tracking-wide">
-                Nombre en la tarjeta
-              </label>
-              <input
-                type="text"
-                placeholder="Como aparece en la tarjeta"
-                value={nombreTarjeta}
-                onChange={e => setNombreTarjeta(e.target.value.toUpperCase())}
-                className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink font-mono uppercase bg-surface-2 focus:outline-none focus:ring-2 focus:ring-accent/40"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-semibold text-ink/60 block mb-1.5 uppercase tracking-wide">
-                  Vencimiento
-                </label>
-                <input
-                  type="text" inputMode="numeric"
-                  placeholder="MM/AA"
-                  value={vence}
-                  onChange={e => setVence(formatVence(e.target.value))}
-                  maxLength={5}
-                  className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink font-mono bg-surface-2 focus:outline-none focus:ring-2 focus:ring-accent/40"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-semibold text-ink/60 block mb-1.5 uppercase tracking-wide">
-                  CVV
-                </label>
-                <input
-                  type="text" inputMode="numeric"
-                  placeholder="•••"
-                  value={cvv}
-                  onChange={e => setCvv(e.target.value.replace(/\D/g, '').slice(0, 4))}
-                  maxLength={4}
-                  className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink font-mono bg-surface-2 focus:outline-none focus:ring-2 focus:ring-accent/40"
-                />
-              </div>
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 bg-surface rounded-xl px-3 py-2.5 border border-border">
+              <IconShield size={14} className="text-accent flex-shrink-0" />
+              <p className="text-[11px] text-ink/50">
+                La tarjeta debe estar a nombre de la persona que conducirá el vehículo
+              </p>
             </div>
 
             {error && (
@@ -759,24 +645,18 @@ function PagoContent() {
               </div>
             )}
 
-            <div className="flex items-center gap-2 bg-surface rounded-xl px-3 py-2.5 border border-border">
-              <IconShield size={14} className="text-accent flex-shrink-0" />
-              <p className="text-[11px] text-ink/50">
-                La tarjeta debe estar a nombre de la persona que conducirá el vehículo
-              </p>
-            </div>
-
             <div className="flex gap-3 pt-1">
               <button type="button" onClick={() => { setStep(2); setError(''); }}
-                className="flex-none border border-border text-ink/60 font-medium px-4 py-3 rounded-xl text-sm hover:bg-surface transition">
+                disabled={loading}
+                className="flex-none border border-border text-ink/60 font-medium px-4 py-3 rounded-xl text-sm hover:bg-surface transition disabled:opacity-50">
                 ← Atrás
               </button>
-              <button type="submit" disabled={loading || !vehiculo}
+              <button type="button" onClick={pagar} disabled={loading || !vehiculo}
                 className="flex-1 flex items-center justify-center gap-2 bg-accent hover:bg-accent-hover text-white font-bold py-3 rounded-xl transition shadow-md shadow-accent/20 disabled:opacity-60 text-sm">
                 {loading ? 'Procesando…' : `Pagar $${total.toLocaleString('es-CO')}`}
               </button>
             </div>
-          </form>
+          </div>
         </div>
       )}
     </div>

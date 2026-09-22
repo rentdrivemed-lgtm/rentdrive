@@ -163,7 +163,7 @@ export async function POST(req: NextRequest) {
     licencia_url, licencia_url_dorso,
     firma_contrato, recogida, entrega, usar_creditos,
     direccion, ciudad, emergencia_nombre, emergencia_tel,
-    card_token, card_brand, card_last4,
+    card_token,
   } = await req.json();
   if (!vehiculo_id || !fecha_inicio || !fecha_fin) {
     return NextResponse.json({ error: 'Faltan datos' }, { status: 400 });
@@ -256,6 +256,11 @@ export async function POST(req: NextRequest) {
   let fuentePagoId: number | undefined;
   let transaccionId = '';
   let pagoEstado: 'pagado' | 'pendiente' = 'pendiente';
+  // Marca/últimos 4 salen de la respuesta de Wompi, no del navegador: desde que
+  // el checkout usa su widget para tokenizar, nunca vemos el número de la
+  // tarjeta como para derivarlos nosotros.
+  let cardBrand = '';
+  let cardLast4 = '';
 
   try {
     const { acceptanceToken, personalAuthToken } = await obtenerTokensAceptacion();
@@ -276,6 +281,8 @@ export async function POST(req: NextRequest) {
       : transaccion;
 
     transaccionId = final.id;
+    cardBrand = final.payment_method?.extra?.brand || '';
+    cardLast4 = final.payment_method?.extra?.last_four || '';
     if (final.status === 'APPROVED') pagoEstado = 'pagado';
     else if (final.status === 'DECLINED' || final.status === 'ERROR' || final.status === 'VOIDED') {
       return NextResponse.json({ error: 'El pago fue rechazado. Verifica los datos de tu tarjeta e intenta de nuevo.' }, { status: 402 });
@@ -311,7 +318,7 @@ export async function POST(req: NextRequest) {
     db.prepare(`
       INSERT INTO fuentes_pago (usuario_id, wompi_fuente_id, marca, ultimos4)
       VALUES (?, ?, ?, ?)
-    `).run(user.id, fuentePagoId, card_brand || '', card_last4 || '');
+    `).run(user.id, fuentePagoId, cardBrand, cardLast4);
   }
 
   try {
