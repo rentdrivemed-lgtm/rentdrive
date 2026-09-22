@@ -37,6 +37,20 @@ const estadoColor: Record<string, string> = {
   cancelada:  'bg-danger/15 text-danger',
 };
 
+// Cargos extra (multas/daños) — cobro manual del admin contra la tarjeta guardada
+// en Wompi de la reserva (ver app/api/reservas/[id]/cargos/route.ts).
+type CargoExtra = {
+  id: number; tipo: 'multa' | 'dano' | 'otro'; descripcion: string;
+  monto: number; estado: 'pendiente' | 'cobrado' | 'fallido'; created_at: string;
+};
+const TIPO_CARGO_LABELS: Record<string, string> = { multa: 'Multa de tránsito', dano: 'Daño al vehículo', otro: 'Otro' };
+const ESTADO_CARGO_BADGE: Record<string, string> = {
+  cobrado: 'bg-success/15 text-success', fallido: 'bg-danger/15 text-danger', pendiente: 'bg-warning/15 text-warning',
+};
+const ESTADO_PAGO_BADGE: Record<string, string> = {
+  pagado: 'bg-success/15 text-success', cancelado: 'bg-danger/15 text-danger', pendiente: 'bg-warning/15 text-warning',
+};
+
 export default function ReservasSeccion() {
   const {
     reservas, setReservas, vehiculos, errorListas,
@@ -69,6 +83,12 @@ export default function ReservasSeccion() {
   const [reservaMostradorAviso, setReservaMostradorAviso] = useState(false);
   const [arrIa, setArrIa] = useState<{ rid: number; nombre: string; res?: VerificacionResultado; error?: string } | null>(null);
   const [arrIaCargando, setArrIaCargando] = useState(false);
+  const [cargosModal, setCargosModal] = useState<{ r: ReservaCalendario } | null>(null);
+  const [cargos, setCargos] = useState<CargoExtra[]>([]);
+  const [cargosCargando, setCargosCargando] = useState(false);
+  const [nuevoCargo, setNuevoCargo] = useState({ tipo: 'multa', descripcion: '', monto: '' });
+  const [cobrandoCargo, setCobrandoCargo] = useState(false);
+  const [cargoError, setCargoError] = useState('');
 
   useEffect(() => {
     asegurarReservas();
@@ -100,12 +120,15 @@ export default function ReservasSeccion() {
   const aprobarReserva = async (id: number) => {
     setAccionando(id);
     try {
+      // pago_estado no se manda: si la reserva nació por la web ya refleja el cobro
+      // real hecho con Wompi al reservar; si nació en mostrador, el admin ya lo
+      // registró ahí. Mandarlo acá lo pisaría con un valor que nadie cobró.
       const res = await fetch(`/api/reservas/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ estado: 'confirmada', pago_estado: 'pagado' }),
+        body: JSON.stringify({ estado: 'confirmada' }),
       });
-      if (res.ok) setReservas(rs => rs.map(r => r.id === id ? { ...r, estado: 'confirmada', pago_estado: 'pagado' } : r));
+      if (res.ok) setReservas(rs => rs.map(r => r.id === id ? { ...r, estado: 'confirmada' } : r));
     } finally {
       setAccionando(null);
     }
@@ -114,16 +137,58 @@ export default function ReservasSeccion() {
   const rechazarReserva = async (id: number, motivo: string) => {
     setAccionando(id);
     try {
+      // Si el alquiler ya se había cobrado en línea con Wompi, el backend intenta
+      // anular ese cobro y solo entonces marca pago_estado='cancelado' (ver PUT
+      // /api/reservas/[id]). Si la anulación falla, avisamos para reembolsar a mano.
       const res = await fetch(`/api/reservas/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ estado: 'cancelada', pago_estado: 'cancelado', motivo_rechazo: motivo }),
+        body: JSON.stringify({ estado: 'cancelada', motivo_rechazo: motivo }),
       });
-      if (res.ok) setReservas(rs => rs.map(r => r.id === id ? { ...r, estado: 'cancelada', pago_estado: 'cancelado' } : r));
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        if (data.pago_anulado === false) {
+          alert('La reserva se rechazó, pero no se pudo anular el cobro en Wompi automáticamente. Reembolsa manualmente desde el dashboard de Wompi.');
+        }
+        setReservas(rs => rs.map(r => r.id === id ? { ...r, estado: 'cancelada' } : r));
+      }
     } finally {
       setRechazando(null);
       setAccionando(null);
     }
+  };
+
+  const abrirCargosExtra = async (r: ReservaCalendario) => {
+    setCargosModal({ r });
+    setNuevoCargo({ tipo: 'multa', descripcion: '', monto: '' });
+    setCargoError('');
+    setCargosCargando(true);
+    try {
+      const res = await fetch(`/api/reservas/${r.id}/cargos`);
+      const data = await res.json();
+      setCargos(data.cargos || []);
+    } finally {
+      setCargosCargando(false);
+    }
+  };
+
+  const cobrarCargoExtra = async () => {
+    if (!cargosModal) return;
+    setCargoError('');
+    if (!nuevoCargo.descripcion.trim()) { setCargoError('Describe el motivo del cargo.'); return; }
+    if (!nuevoCargo.monto || Number(nuevoCargo.monto) <= 0) { setCargoError('Ingresa un monto válido.'); return; }
+
+    setCobrandoCargo(true);
+    const res = await fetch(`/api/reservas/${cargosModal.r.id}/cargos`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...nuevoCargo, monto: Number(nuevoCargo.monto) }),
+    });
+    const data = await res.json();
+    setCobrandoCargo(false);
+    if (!res.ok) { setCargoError(data.error || 'No se pudo procesar el cobro.'); return; }
+    setNuevoCargo({ tipo: 'multa', descripcion: '', monto: '' });
+    abrirCargosExtra(cargosModal.r);
   };
 
   const cambiarEstadoReserva = async (id: number, estado: string) => {
@@ -309,6 +374,11 @@ export default function ReservasSeccion() {
                       {r.estado}
                     </span>
                   )}
+                  {r.pago_estado && (
+                    <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${ESTADO_PAGO_BADGE[r.pago_estado] || 'bg-surface'}`}>
+                      💳 {r.pago_estado}
+                    </span>
+                  )}
 
                   {/* Acciones para pendiente */}
                   {r.estado === 'pendiente' && (
@@ -396,6 +466,11 @@ export default function ReservasSeccion() {
                     onClick={() => setClienteDocs({ r })}
                     className="text-[11px] px-2 py-1 inline-flex items-center gap-1 bg-surface text-ink/60 rounded-lg hover:text-ink transition font-medium">
                     📄 Documentos del cliente
+                  </button>
+                  <button
+                    onClick={() => abrirCargosExtra(r)}
+                    className="text-[11px] px-2 py-1 inline-flex items-center gap-1 bg-surface text-ink/60 rounded-lg hover:text-ink transition font-medium">
+                    💳 Cargos extra
                   </button>
                   <button
                     onClick={() => verificarArrendatario(r.id, r.usuario_nombre)}
@@ -504,6 +579,76 @@ export default function ReservasSeccion() {
         );
       })()}
 
+
+      {/* Modal cargos extra (multas / daños) — cobro manual contra la tarjeta guardada */}
+      {cargosModal && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setCargosModal(null)}>
+          <div className="bg-surface-2 rounded-3xl shadow-2xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-start mb-5">
+              <div>
+                <h3 className="font-bold text-ink">Cargos extra</h3>
+                <p className="text-xs text-ink/50 mt-0.5">{cargosModal.r.usuario_nombre} · {cargosModal.r.marca} {cargosModal.r.modelo}</p>
+              </div>
+              <button onClick={() => setCargosModal(null)} aria-label="Cerrar" className="p-1.5 rounded-xl text-ink/40 hover:text-ink hover:bg-surface transition">
+                <IconX size={18} />
+              </button>
+            </div>
+
+            {cargosCargando ? (
+              <p className="text-sm text-ink/40 text-center py-6">Cargando…</p>
+            ) : (
+              <div className="space-y-2 mb-5">
+                {cargos.length === 0 && <p className="text-sm text-ink/40">Sin cargos registrados.</p>}
+                {cargos.map(c => (
+                  <div key={c.id} className="bg-surface rounded-xl p-3 border border-border flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-ink">{TIPO_CARGO_LABELS[c.tipo]}</p>
+                      <p className="text-xs text-ink/50 truncate">{c.descripcion}</p>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <p className="text-sm font-bold text-ink">${c.monto.toLocaleString('es-CO')}</p>
+                      <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${ESTADO_CARGO_BADGE[c.estado]}`}>{c.estado}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="bg-surface rounded-xl p-4 border border-border space-y-3">
+              <p className="text-xs font-bold text-ink/50 uppercase tracking-wide">Registrar y cobrar un cargo nuevo</p>
+              <select
+                value={nuevoCargo.tipo}
+                onChange={e => setNuevoCargo(c => ({ ...c, tipo: e.target.value }))}
+                className="w-full border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface-2 focus:outline-none focus:ring-2 focus:ring-accent/40"
+              >
+                <option value="multa">Multa de tránsito</option>
+                <option value="dano">Daño al vehículo</option>
+                <option value="otro">Otro</option>
+              </select>
+              <textarea
+                rows={2}
+                placeholder="Descripción (ej: fotomulta por exceso de velocidad, comparendo #123456)"
+                value={nuevoCargo.descripcion}
+                onChange={e => setNuevoCargo(c => ({ ...c, descripcion: e.target.value }))}
+                className="w-full border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface-2 focus:outline-none focus:ring-2 focus:ring-accent/40 resize-none"
+              />
+              <input
+                type="number" min="1" placeholder="Monto en COP"
+                value={nuevoCargo.monto}
+                onChange={e => setNuevoCargo(c => ({ ...c, monto: e.target.value }))}
+                className="w-full border border-border rounded-xl px-3 py-2 text-sm text-ink bg-surface-2 focus:outline-none focus:ring-2 focus:ring-accent/40"
+              />
+              {cargoError && <p className="text-sm text-danger">{cargoError}</p>}
+              <button
+                onClick={cobrarCargoExtra}
+                disabled={cobrandoCargo}
+                className="w-full bg-accent hover:bg-accent-hover text-white font-bold py-2.5 rounded-xl transition disabled:opacity-50 text-sm">
+                {cobrandoCargo ? 'Cobrando…' : 'Cobrar a la tarjeta guardada'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal verificación del arrendatario con IA */}
       {arrIa && (

@@ -798,6 +798,27 @@ function initDb(db: Database.Database) {
       estado TEXT DEFAULT 'nueva' CHECK(estado IN ('nueva','contactada','confirmada','descartada')),
       created_at TEXT DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS fuentes_pago (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+      wompi_fuente_id INTEGER NOT NULL,
+      marca TEXT DEFAULT '',
+      ultimos4 TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now', 'localtime'))
+    );
+
+    CREATE TABLE IF NOT EXISTS cargos_extra (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      reserva_id INTEGER NOT NULL REFERENCES reservas(id),
+      tipo TEXT NOT NULL CHECK(tipo IN ('multa','dano','otro')),
+      descripcion TEXT NOT NULL,
+      monto REAL NOT NULL,
+      estado TEXT NOT NULL DEFAULT 'pendiente' CHECK(estado IN ('pendiente','cobrado','fallido')),
+      wompi_transaccion_id TEXT DEFAULT '',
+      creado_por INTEGER NOT NULL REFERENCES usuarios(id),
+      created_at TEXT DEFAULT (datetime('now', 'localtime'))
+    );
   `);
 
   try { db.exec("ALTER TABLE liquidaciones ADD COLUMN comprobante_url TEXT DEFAULT ''"); } catch { /* ya existe */ }
@@ -992,6 +1013,7 @@ function initDb(db: Database.Database) {
   // para que mañana se pueda registrar un pago sobre una reserva que nació en la
   // app sin perder quién lo hizo.
   try { db.exec("ALTER TABLE reservas ADD COLUMN pago_registrado_por INTEGER DEFAULT NULL REFERENCES usuarios(id)"); } catch { /* ya existe */ }
+  try { db.exec("ALTER TABLE reservas ADD COLUMN wompi_transaccion_id TEXT DEFAULT ''"); } catch { /* ya existe */ }
 
   try { db.exec("ALTER TABLE mensajeros ADD COLUMN token TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE operaciones ADD COLUMN fotos_salida TEXT DEFAULT '[]'"); } catch { /* ya existe */ }

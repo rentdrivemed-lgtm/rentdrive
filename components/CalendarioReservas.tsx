@@ -17,6 +17,7 @@ export type ReservaCalendario = {
   estado: string;
   recogida?: string;
   cancelacion_pct?: number | null;
+  pago_estado?: string;
 };
 
 const ESTADO_DOT: Record<string, string> = {

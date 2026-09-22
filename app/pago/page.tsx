@@ -200,6 +200,45 @@ function PagoContent() {
     if (cvv.length < 3) { setError('CVV inválido.'); return; }
 
     setLoading(true);
+
+    // 1) Tokenizar la tarjeta directo en el navegador contra Wompi — el número
+    //    y el CVV nunca pasan por nuestro backend, solo el token resultante.
+    let cardToken = '';
+    let cardBrand = '';
+    let cardLast4 = '';
+    try {
+      const baseUrl = process.env.NEXT_PUBLIC_WOMPI_BASE_URL || 'https://sandbox.wompi.co/v1';
+      const tokRes = await fetch(`${baseUrl}/tokens/cards`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${process.env.NEXT_PUBLIC_WOMPI_PUBLIC_KEY}`,
+        },
+        body: JSON.stringify({
+          number: limpio,
+          cvc: cvv,
+          exp_month: String(mm).padStart(2, '0'),
+          exp_year: String(aa).padStart(2, '0'),
+          card_holder: nombreTarjeta.trim(),
+        }),
+      });
+      const tokData = await tokRes.json();
+      if (!tokRes.ok) {
+        setError(tokData?.error?.messages?.[0] || tokData?.error?.reason || 'La tarjeta fue rechazada. Verifica los datos.');
+        setLoading(false);
+        return;
+      }
+      cardToken = tokData.data.id;
+      cardBrand = tokData.data.card?.brand || tipoTarj || '';
+      cardLast4 = tokData.data.card?.last_four || limpio.slice(-4);
+    } catch {
+      setError('No se pudo conectar con la pasarela de pago. Intenta de nuevo.');
+      setLoading(false);
+      return;
+    }
+
+    // 2) Con el token, crear la reserva: el backend cobra el alquiler completo
+    //    de una vez y guarda la tarjeta tokenizada para cargos futuros.
     try {
       const res = await fetch('/api/reservas', {
         method: 'POST',
@@ -220,6 +259,9 @@ function PagoContent() {
           usar_creditos: usarCreditos,
           recogida,
           entrega,
+          card_token: cardToken,
+          card_brand: cardBrand,
+          card_last4: cardLast4,
           firma_contrato: JSON.stringify({
             nombre: firmaNombre,
             fecha: new Date().toISOString(),
@@ -264,7 +306,7 @@ function PagoContent() {
           <div className="w-16 h-16 rounded-full bg-warning/15 flex items-center justify-center mx-auto mb-4">
             <span className="text-3xl">⏳</span>
           </div>
-          <h1 className="text-2xl font-bold text-ink mb-1">¡Solicitud enviada!</h1>
+          <h1 className="text-2xl font-bold text-ink mb-1">¡Pago exitoso!</h1>
           <p className="text-ink/50 mb-0.5">{vehiculo?.marca} {vehiculo?.modelo} {vehiculo?.anio}</p>
           <p className="text-ink/50 text-sm mb-4">{fecha_inicio} → {fecha_fin} · {dias} día{dias !== 1 ? 's' : ''}</p>
           <p className="text-accent font-bold text-2xl mb-5">${total.toLocaleString('es-CO')}</p>
@@ -272,8 +314,9 @@ function PagoContent() {
           <div className="bg-warning/10 border border-warning/25 rounded-2xl px-5 py-4 text-left mb-4">
             <p className="text-xs font-bold text-warning mb-1.5 uppercase tracking-wide">¿Qué sigue?</p>
             <p className="text-sm text-warning">
-              Tu solicitud está <strong>pendiente de aprobación</strong> por el equipo DrivePass.
-              Recibirás una notificación en tu chat cuando sea aprobada o rechazada, normalmente en menos de 24 horas.
+              Ya cobramos el valor del alquiler a tu tarjeta. Tu reserva está <strong>pendiente de aprobación operativa</strong>
+              (documentos y disponibilidad) por el equipo DrivePass. Recibirás una notificación en tu chat cuando sea aprobada o rechazada,
+              normalmente en menos de 24 horas. Si se rechaza, el cobro se anula automáticamente.
             </p>
           </div>
 
