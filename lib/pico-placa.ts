@@ -74,3 +74,41 @@ export function digitosRestringidos(pp: PicoPlaca, fecha: Date): number[] {
   const diaStr = String(fecha.getDay());
   return pp.dias[diaStr] ?? [];
 }
+
+/**
+ * Los días de un alquiler en que ESTE vehículo no puede circular por pico y placa.
+ *
+ * El rango va como lo guarda una reserva: `fechaInicio` incluido y `fechaFin` EXCLUIDO
+ * (`fecha_inicio < fecha_fin`, igual que `calcularDiasAlquiler` en lib/lugares.ts). El
+ * día de devolución no cuenta porque tampoco se cobra como día de alquiler.
+ *
+ * Existe porque esos días NO SE COBRAN: el cliente tiene el carro pero la norma le
+ * impide moverlo, así que cobrárselos sería cobrarle un día de uso que no puede usar.
+ * Es la misma regla que la calculadora del propietario ya aplicaba por su lado («el día
+ * de pico y placa no se cobra ni se paga»); desde sep-2026 el motor de reservas también.
+ *
+ * Devuelve las FECHAS y no un número para que el desglose pueda decirle al cliente
+ * cuáles son, en vez de restarle días que no sabe de dónde salen.
+ */
+export function diasRestringidosEnRango(
+  pp: PicoPlaca, placa: string, fechaInicio: string, fechaFin: string,
+  exencion?: DatosExencion | null,
+): string[] {
+  if (!pp.activo || !placa || !fechaInicio || !fechaFin) return [];
+  if (exentoPicoPlaca(exencion)) return [];
+  const [ay, am, ad] = fechaInicio.slice(0, 10).split('-').map(Number);
+  const [by, bm, bd] = fechaFin.slice(0, 10).split('-').map(Number);
+  if (!ay || !am || !ad || !by || !bm || !bd) return [];
+  const cur = new Date(ay, am - 1, ad);
+  const fin = new Date(by, bm - 1, bd);
+  const out: string[] = [];
+  // Tope de seguridad: un rango corrupto o invertido no debe colgar el servidor en un
+  // bucle. `MAX_DIAS_DISPONIBLES` (lib/dias-disponibles.ts) es 1100, así que 1200 cubre
+  // cualquier alquiler legítimo con margen.
+  let guardia = 1200;
+  while (cur < fin && guardia-- > 0) {
+    if (placaRestringida(pp, placa, cur, exencion)) out.push(fechaISOLocal(cur));
+    cur.setDate(cur.getDate() + 1);
+  }
+  return out;
+}

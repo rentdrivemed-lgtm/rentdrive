@@ -26,8 +26,11 @@
 // Módulo de SERVIDOR (toca better-sqlite3 vía el tipo y hace queries): no
 // importar desde un componente 'use client'.
 import type Database from 'better-sqlite3';
-import { calcularDiasAlquiler, calcularTotalAlquiler, calcularRecargo, getLugar, lugarValido, normalizarLugar, type Lugar } from './lugares';
+import { calcularDiasAlquiler, calcularRecargo, getLugar, lugarValido, normalizarLugar, type Lugar } from './lugares';
 import { MIN_NOCHES_RESERVA } from './disponibilidad-reglas';
+import { parsePicoPlaca, diasRestringidosEnRango, placaRestringida } from './pico-placa';
+import { getConfig } from './operaciones';
+import { factorDuracion } from './rentabilidad';
 import { esUrlDeStorageValida } from './storage';
 import { validarDireccion, validarCiudad, validarNombreContacto, validarTelefonoContacto } from './validacion';
 
@@ -88,6 +91,81 @@ export function validarNochesMinimas(fechaInicio: string, fechaFin: string, via:
     return { error: `El alquiler mínimo es de ${minimo} ${minimo === 1 ? 'noche' : 'noches'}.`, status: 400 };
   }
   return null;
+}
+
+// ── Autorización para alquilar UN SOLO DÍA ───────────────────────────────────
+//
+// Por la web el mínimo son 2 noches y existe para evitar alquileres de un día pedidos
+// a ciegas por internet. Decisión del dueño (sep-2026): un cliente concreto SÍ puede
+// pedir un día suelto si el equipo lo autorizó ANTES.
+//
+// La autorización es DE UN SOLO USO. Eso obliga a dos cosas que hay que leer juntas:
+//
+//   · `tieneAutorizacionDiaSuelto` solo MIRA (la usan la validación previa y las
+//     pantallas, que necesitan saber si mostrar el día suelto habilitado);
+//   · `consumirAutorizacionDiaSuelto` la gasta, y debe ejecutarse DENTRO de la misma
+//     transacción que inserta la reserva. Si se consumiera fuera, dos peticiones
+//     simultáneas del mismo cliente podrían pasar las dos la comprobación y gastar una
+//     sola autorización en dos reservas.
+
+/** ¿Este cliente tiene una autorización de día suelto sin usar? */
+export function tieneAutorizacionDiaSuelto(db: DB, usuarioId: number): boolean {
+  const f = db.prepare('SELECT dia_suelto_autorizado AS a FROM usuarios WHERE id = ?')
+    .get(Number(usuarioId)) as { a: number } | undefined;
+  return Number(f?.a) === 1;
+}
+
+/**
+ * Mínimo de noches que le aplica REALMENTE a este cliente por esta vía.
+ *
+ * El mostrador ya está en 1, así que la autorización no le cambia nada; solo baja el
+ * mínimo de la vía pública, y solo para quien la tenga concedida.
+ */
+export function minimoNochesPara(db: DB, usuarioId: number, via: ViaReserva): number {
+  const base = MIN_NOCHES_POR_VIA[via];
+  if (base <= 1) return base;
+  return tieneAutorizacionDiaSuelto(db, usuarioId) ? 1 : base;
+}
+
+/**
+ * Igual que `validarNochesMinimas`, pero mirando la autorización del cliente.
+ *
+ * El mensaje de error se mantiene palabra por palabra cuando NO hay autorización, para
+ * no cambiarle el texto a quien reserva normal.
+ */
+export function validarNochesMinimasCliente(
+  db: DB, usuarioId: number, fechaInicio: string, fechaFin: string, via: ViaReserva,
+): ErrorReserva | null {
+  const minimo = minimoNochesPara(db, usuarioId, via);
+  const noches = Math.ceil((new Date(fechaFin).getTime() - new Date(fechaInicio).getTime()) / 86400000);
+  if (noches < minimo) {
+    return { error: `El alquiler mínimo es de ${minimo} ${minimo === 1 ? 'noche' : 'noches'}.`, status: 400 };
+  }
+  return null;
+}
+
+/**
+ * Gasta la autorización, si esta reserva la necesitaba.
+ *
+ * ⚠️ Llamar SIEMPRE dentro de la transacción que inserta la reserva.
+ *
+ * El `WHERE dia_suelto_autorizado = 1` es lo que hace el consumo atómico: si dos
+ * peticiones corren a la vez, solo una de las dos ve `changes === 1`. Devuelve si la
+ * consumió, para poder dejarlo en la bitácora.
+ */
+export function consumirAutorizacionDiaSuelto(
+  db: DB, usuarioId: number, reservaId: number, noches: number, via: ViaReserva,
+): boolean {
+  // Solo se gasta si esta reserva de verdad estaba por debajo del mínimo de la vía.
+  if (noches >= MIN_NOCHES_POR_VIA[via]) return false;
+  const r = db.prepare(`
+    UPDATE usuarios
+       SET dia_suelto_autorizado = 0,
+           dia_suelto_usado_en = datetime('now', 'localtime'),
+           dia_suelto_reserva_id = ?
+     WHERE id = ? AND dia_suelto_autorizado = 1
+  `).run(Number(reservaId), Number(usuarioId));
+  return r.changes === 1;
 }
 
 /**
@@ -338,6 +416,58 @@ export function validarDisponibilidadFechas(
   }
   const diaMalo = diaFueraDelCalendario(vehiculo, fechaInicio, fechaFin);
   if (diaMalo) return { error: `El día ${diaMalo} no está disponible`, status: 409 };
+  const extremo = validarExtremosPicoPlaca(db, vehiculo, fechaInicio, fechaFin);
+  if (extremo) return extremo;
+  return null;
+}
+
+/**
+ * Ni la recogida ni la devolución pueden caer en un día de pico y placa del vehículo.
+ *
+ * Los días restringidos SÍ se atraviesan dentro del alquiler (y no se cobran, ver
+ * `calcularCobroReserva`); lo que no tiene sentido es entregarle a alguien un carro que
+ * no puede mover ese mismo día, o pedirle que lo devuelva un día en que no puede
+ * conducirlo.
+ *
+ * El calendario ya lo impide en pantalla, pero la comprobación que manda es esta: la de
+ * pantalla se salta con una petición hecha a mano, y de esto depende el cobro.
+ *
+ * Si la config de pico y placa no se puede leer NO se bloquea: es preferible dejar pasar
+ * una reserva con un extremo incómodo que tumbar todas las reservas del día por un fallo
+ * al leer una config.
+ */
+export function validarExtremosPicoPlaca(
+  db: DB, vehiculo: Record<string, unknown>, fechaInicio: string, fechaFin: string,
+): ErrorReserva | null {
+  const placa = String(vehiculo.placa || '');
+  if (!placa) return null;
+  let pp;
+  try {
+    pp = parsePicoPlaca(getConfig(db, 'pico_placa'));
+  } catch (e) {
+    console.error('[reservas] No se pudo leer pico y placa para validar los extremos:', e instanceof Error ? e.message : e);
+    return null;
+  }
+  if (!pp.activo) return null;
+  const exencion = {
+    combustible: vehiculo.combustible == null ? null : String(vehiculo.combustible),
+    inscrita: vehiculo.exencion_pico_placa_inscrita == null ? null : Number(vehiculo.exencion_pico_placa_inscrita),
+  };
+
+  // `fechaFin` es el día de DEVOLUCIÓN: el rango de cobro lo excluye, pero es un extremo
+  // real porque ese día el cliente tiene que traer el carro manejando.
+  const extremos: [string, string][] = [[fechaInicio, 'recoger'], [fechaFin, 'entregar']];
+  for (const [iso, verbo] of extremos) {
+    const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
+    if (!y || !m || !d) continue;
+    if (placaRestringida(pp, placa, new Date(y, m - 1, d), exencion)) {
+      return {
+        error: `El ${iso} este vehículo tiene pico y placa, así que no se puede ${verbo} ese día. `
+          + 'Elige otra fecha: dentro del alquiler ese día sí cuenta, y no se cobra.',
+        status: 409,
+      };
+    }
+  }
   return null;
 }
 
@@ -545,25 +675,85 @@ export function precargarDocumentosEnPerfil(
 
 // ── Cobro ────────────────────────────────────────────────────────────────────
 
-/** Días, recargo (autoritativo: server-side) y total bruto antes de créditos. */
+/**
+ * Días, recargo (autoritativo: server-side) y total bruto antes de créditos.
+ *
+ * Desde sep-2026 el total ya NO es «días × precio + recargo». Aplica dos reglas que
+ * hasta ahora solo vivían en la calculadora del propietario — y por eso la cotización
+ * que se copiaba a WhatsApp prometía cosas que la plataforma después no facturaba:
+ *
+ *  1. **Los días de pico y placa no se cobran.** El cliente tiene el carro pero la
+ *     norma le impide moverlo, así que no se le cobra ese día de uso. Se cuentan con
+ *     `diasRestringidosEnRango` contra la config vigente y la placa del vehículo. Un
+ *     vehículo exento (eléctrico, o híbrido/GNV con la inscripción confirmada) no
+ *     tiene ninguno y paga todos los días.
+ *  2. **Descuento por duración**: desde `DIAS_PARA_DESCUENTO_DURACION` días, el canon
+ *     diario baja un `DESCUENTO_DURACION_PCT` %.
+ *
+ * El factor de duración se mira sobre los días TOTALES del alquiler y no sobre los
+ * cobrables, a propósito: el descuento se gana por tener el carro un mes, y no tendría
+ * sentido que descontar los días de pico y placa empujara la reserva por debajo del
+ * umbral y le quitara al cliente el descuento que ya se había ganado.
+ *
+ * El `recargo` de traslado se suma DESPUÉS del descuento, también a propósito: es un
+ * costo de logística que no depende de cuántos días dure el alquiler.
+ */
 export function calcularCobroReserva(
+  db: DB,
   vehiculo: Record<string, unknown>, fechaInicio: string, fechaFin: string,
   recogida?: Lugar | null, entrega?: Lugar | null,
-): { dias: number; recargo: number; totalBruto: number } {
+): {
+  dias: number; recargo: number; totalBruto: number;
+  diasCobrados: number; diasPicoPlaca: string[]; factorDuracion: number; descuentoDuracion: number;
+} {
   const dias = calcularDiasAlquiler(fechaInicio, fechaFin);
   const recargo = calcularRecargo(recogida, entrega);
-  const totalBruto = calcularTotalAlquiler(dias, Number(vehiculo.precio_dia), recargo);
-  return { dias, recargo, totalBruto };
+  const precioDia = Number(vehiculo.precio_dia) || 0;
+
+  // Días que no se cobran por pico y placa. Si la config no se puede leer se cobran
+  // todos: es preferible cobrar de más y corregirlo que regalar días por un fallo de
+  // lectura, y el desglose le muestra al cliente exactamente qué se le cobró.
+  let diasPicoPlaca: string[] = [];
+  try {
+    const pp = parsePicoPlaca(getConfig(db, 'pico_placa'));
+    diasPicoPlaca = diasRestringidosEnRango(
+      pp, String(vehiculo.placa || ''), fechaInicio, fechaFin,
+      {
+        combustible: vehiculo.combustible == null ? null : String(vehiculo.combustible),
+        inscrita: vehiculo.exencion_pico_placa_inscrita == null ? null : Number(vehiculo.exencion_pico_placa_inscrita),
+      },
+    );
+  } catch (e) {
+    console.error('[reservas] No se pudo leer pico y placa; se cobran todos los días:', e instanceof Error ? e.message : e);
+  }
+
+  const diasCobrados = Math.max(0, dias - diasPicoPlaca.length);
+  const factor = factorDuracion(dias);
+  const canonSinDescuento = diasCobrados * precioDia;
+  const canon = Math.round(canonSinDescuento * factor);
+
+  return {
+    dias, recargo,
+    totalBruto: canon + recargo,
+    diasCobrados,
+    diasPicoPlaca,
+    factorDuracion: factor,
+    descuentoDuracion: canonSinDescuento - canon,
+  };
 }
 
 // ── INSERT ───────────────────────────────────────────────────────────────────
 
-/** Método de pago registrado en mostrador. '' = no aplica (reserva creada desde la app). */
+/** Método de pago registrado en mostrador, donde el cobro YA ocurrió. */
 export const METODOS_PAGO = ['efectivo', 'transferencia', 'datafono', 'otro'] as const;
 export type MetodoPago = typeof METODOS_PAGO[number];
 export function esMetodoPago(v: unknown): v is MetodoPago {
   return typeof v === 'string' && (METODOS_PAGO as readonly string[]).includes(v);
 }
+
+// Los métodos de pago de la VÍA WEB viven en ./metodo-pago-web (módulo puro): los
+// importa el checkout, que es 'use client', y este módulo es server-only.
+export { METODOS_PAGO_WEB, METODO_PAGO_WEB_LABEL, esMetodoPagoWeb, type MetodoPagoWeb } from './metodo-pago-web';
 
 /** Canal por el que nació la reserva. '' = la app (valor histórico de todas las filas previas). */
 export const ORIGEN_MOSTRADOR = 'mostrador';
@@ -585,6 +775,13 @@ export type NuevaReserva = {
   /** Trazabilidad del punto de atención. Se omiten en la vía pública. */
   origen?: string;
   creadaPorAdminId?: number | null;
+  /**
+   * En MOSTRADOR: cómo entró la plata (`METODOS_PAGO`), con el cobro ya hecho.
+   * En la WEB: cómo dice el cliente que va a pagar (`METODOS_PAGO_WEB`), con la reserva
+   * todavía en `pago_estado: 'pendiente'`. Las dos vías escriben la misma columna
+   * porque la pregunta que responde es la misma —«¿cómo se paga esto?»—, pero el
+   * momento es distinto: mírese siempre junto a `pago_estado` antes de dar por cobrado.
+   */
   metodoPago?: string;
   pagoReferencia?: string;
   pagoRegistradoPor?: number | null;

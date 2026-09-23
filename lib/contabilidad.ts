@@ -132,7 +132,13 @@ export async function generarCotizacion(db: DB, reservaId: number, enviarCorreoC
 
 // Cotización "suelta" del cotizador de venta: para un prospecto que todavía NO tiene
 // cuenta ni reserva (no hay fila en `reservas` de la cual sacar fechas/vehículo/precio).
-// Reutiliza calcularDiasAlquiler/calcularTotalAlquiler — la MISMA fórmula del flujo real
+// Reutiliza calcularDiasAlquiler/calcularTotalAlquiler: días × precio + recargo.
+// ⚠️ Desde sep-2026 esta YA NO es la fórmula del flujo de reservas, que además no
+// cobra los días de pico y placa y aplica el descuento por duración (ver
+// `calcularCobroReserva` en lib/reserva-core.ts). El cotizador de venta se dejó como
+// estaba a propósito: cotiza vehículos que pueden no estar todavía en la plataforma
+// (sin placa con la que mirar el pico y placa) y admite `totalOverride`. Si se decide
+// que las cotizaciones también lleven esas reglas, hay que traer la placa hasta acá.
 // de reserva (app/api/reservas/route.ts) — para que el precio nunca se desincronice.
 export type CotizacionManualInput = {
   clienteNombre: string;

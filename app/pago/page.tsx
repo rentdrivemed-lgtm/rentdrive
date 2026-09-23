@@ -6,10 +6,15 @@ import { IconArrowL, IconShield, IconPin } from '@/components/Icons';
 import DocUploadDoble from '@/components/DocUploadDoble';
 import { LUGAR_VACIO, calcularRecargo, lugarResumen, cargarLugares, type Lugar } from '@/lib/lugares';
 import { validarDireccion, validarCiudad, validarNombreContacto, validarTelefonoContacto } from '@/lib/validacion';
+import { diasRestringidosEnRango, parsePicoPlaca, picoPlacaVacio, type PicoPlaca } from '@/lib/pico-placa';
+import { factorDuracion, DESCUENTO_DURACION_PCT } from '@/lib/rentabilidad';
+import { METODOS_PAGO_WEB, METODO_PAGO_WEB_LABEL, METODO_PAGO_WEB_AYUDA, type MetodoPagoWeb } from '@/lib/metodo-pago-web';
 
 type Vehiculo = {
   id: number; marca: string; modelo: string; anio: number;
   tipo: string; precio_dia: number; ubicacion: string;
+  // Deciden qué días no se cobran por pico y placa (ver lib/pico-placa.ts).
+  placa?: string; combustible?: string; exencion_pico_placa_inscrita?: number;
 };
 type User = {
   id: number; nombre: string; rol: string; creditos_referido?: number;
@@ -44,6 +49,8 @@ function PagoContent() {
   const fecha_fin    = params.get('fecha_fin');
 
   const [vehiculo, setVehiculo] = useState<Vehiculo | null>(null);
+  // Config de pico y placa, igual que en la ficha del vehículo y en el calendario.
+  const [pp, setPp] = useState<PicoPlaca>(picoPlacaVacio());
   const [user, setUser] = useState<User | null>(null);
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
@@ -83,6 +90,12 @@ function PagoContent() {
 
   // Step 3 — Pago
   const [numero, setNumero] = useState('');
+  // Cómo va a pagar el cliente. Hasta sep-2026 el checkout EXIGÍA tarjeta (16
+  // dígitos, titular, vencimiento y CVV) para poder reservar, y eso dejaba fuera a
+  // quien paga en efectivo. Los datos de la tarjeta nunca viajaron al servidor —no
+  // hay pasarela conectada—, así que la reserva nace `pago_estado: 'pendiente'` con
+  // cualquiera de las tres opciones y el cobro ocurre fuera de la plataforma.
+  const [metodoPago, setMetodoPago] = useState<MetodoPagoWeb>('tarjeta');
   const [nombreTarjeta, setNombreTarjeta] = useState('');
   const [vence, setVence] = useState('');
   const [cvv, setCvv] = useState('');
@@ -134,6 +147,10 @@ function PagoContent() {
     setRecogida(r);
     setEntrega(e);
     if (vehiculo_id) {
+      fetch('/api/pico-placa')
+        .then(r => (r.ok ? r.json() : null))
+        .then(d => { if (d) setPp(parsePicoPlaca(JSON.stringify(d))); })
+        .catch(() => { /* si falla se cobran todos los días, igual que el servidor */ });
       fetch(`/api/vehiculos/${vehiculo_id}`)
         .then(r => r.json())
         .then(d => setVehiculo(d.vehiculo ?? null))
@@ -169,7 +186,18 @@ function PagoContent() {
     (new Date(fecha_fin).getTime() - new Date(fecha_inicio).getTime()) / 86400000
   ));
   const recargo = calcularRecargo(recogida, entrega);
-  const subtotal = vehiculo ? dias * vehiculo.precio_dia : 0;
+  // Mismas dos reglas que `calcularCobroReserva` del servidor, con las mismas funciones
+  // puras: los días de pico y placa no se cobran, y desde DIAS_PARA_DESCUENTO_DURACION
+  // días el canon baja DESCUENTO_DURACION_PCT %. Importa que cuadre: este total es el
+  // que el cliente ve y el que se imprime en el texto del contrato que firma abajo.
+  const diasPicoPlaca = vehiculo && fecha_inicio && fecha_fin
+    ? diasRestringidosEnRango(pp, vehiculo.placa || '', fecha_inicio, fecha_fin,
+        { combustible: vehiculo.combustible, inscrita: vehiculo.exencion_pico_placa_inscrita })
+    : [];
+  const diasCobrados = Math.max(0, dias - diasPicoPlaca.length);
+  const subtotalSinDescuento = vehiculo ? diasCobrados * vehiculo.precio_dia : 0;
+  const subtotal = Math.round(subtotalSinDescuento * factorDuracion(dias));
+  const descuentoDuracion = subtotalSinDescuento - subtotal;
   const totalBruto = subtotal + recargo;
   const creditosDisponibles = user?.creditos_referido || 0;
   const creditosAplicados = usarCreditos ? Math.min(creditosDisponibles, totalBruto) : 0;
@@ -185,19 +213,22 @@ function PagoContent() {
     e.preventDefault();
     setError('');
 
-    const limpio = numero.replace(/\s/g, '');
-    if (limpio.length !== 16) { setError('El número de tarjeta debe tener 16 dígitos.'); return; }
-    if (!nombreTarjeta.trim()) { setError('Ingresa el nombre del titular de la tarjeta.'); return; }
+    // Los datos de la tarjeta solo se exigen si el cliente eligió pagar con tarjeta.
+    if (metodoPago === 'tarjeta') {
+      const limpio = numero.replace(/\s/g, '');
+      if (limpio.length !== 16) { setError('El número de tarjeta debe tener 16 dígitos.'); return; }
+      if (!nombreTarjeta.trim()) { setError('Ingresa el nombre del titular de la tarjeta.'); return; }
 
-    const [mm, aa] = vence.split('/').map(Number);
-    const ahora = new Date();
-    const expAnio = 2000 + (aa || 0);
-    if (!mm || mm < 1 || mm > 12 || !aa ||
-        expAnio < ahora.getFullYear() ||
-        (expAnio === ahora.getFullYear() && mm < ahora.getMonth() + 1)) {
-      setError('Fecha de vencimiento inválida.'); return;
+      const [mm, aa] = vence.split('/').map(Number);
+      const ahora = new Date();
+      const expAnio = 2000 + (aa || 0);
+      if (!mm || mm < 1 || mm > 12 || !aa ||
+          expAnio < ahora.getFullYear() ||
+          (expAnio === ahora.getFullYear() && mm < ahora.getMonth() + 1)) {
+        setError('Fecha de vencimiento inválida.'); return;
+      }
+      if (cvv.length < 3) { setError('CVV inválido.'); return; }
     }
-    if (cvv.length < 3) { setError('CVV inválido.'); return; }
 
     setLoading(true);
     try {
@@ -218,6 +249,7 @@ function PagoContent() {
           emergencia_nombre: emNombre,
           emergencia_tel: emTel,
           usar_creditos: usarCreditos,
+          metodo_pago: metodoPago,
           recogida,
           entrega,
           firma_contrato: JSON.stringify({
@@ -349,7 +381,13 @@ function PagoContent() {
           {/* Desglose con recargo y créditos */}
           {(recargo > 0 || creditosDisponibles > 0) && (
             <div className="mt-2 pt-2 border-t border-border text-xs space-y-0.5">
-              <div className="flex justify-between text-ink/50"><span>Subtotal ({dias} día{dias !== 1 ? 's' : ''})</span><span>${subtotal.toLocaleString('es-CO')}</span></div>
+              <div className="flex justify-between text-ink/50"><span>Subtotal ({diasCobrados} día{diasCobrados !== 1 ? 's' : ''})</span><span>${subtotalSinDescuento.toLocaleString('es-CO')}</span></div>
+              {diasPicoPlaca.length > 0 && (
+                <div className="flex justify-between text-success"><span>{diasPicoPlaca.length} día{diasPicoPlaca.length !== 1 ? 's' : ''} de pico y placa (no se cobra{diasPicoPlaca.length !== 1 ? 'n' : ''})</span><span>−${(diasPicoPlaca.length * (vehiculo?.precio_dia ?? 0)).toLocaleString('es-CO')}</span></div>
+              )}
+              {descuentoDuracion > 0 && (
+                <div className="flex justify-between text-success"><span>Descuento {DESCUENTO_DURACION_PCT}% por {dias} días</span><span>−${descuentoDuracion.toLocaleString('es-CO')}</span></div>
+              )}
               {recargo > 0 && (
                 <div className="flex justify-between text-ink/50"><span>Recargo por lugar</span><span>+${recargo.toLocaleString('es-CO')}</span></div>
               )}
@@ -629,9 +667,41 @@ function PagoContent() {
       {/* ── STEP 3: Pago ── */}
       {step === 3 && (
         <div className="bg-surface-2 rounded-2xl border border-border p-5">
-          <p className="text-[10px] font-bold text-ink/50 uppercase tracking-widest mb-4">Paso 3 de 3 — Pago con tarjeta de crédito</p>
+          <p className="text-[10px] font-bold text-ink/50 uppercase tracking-widest mb-4">Paso 3 de 3 — Cómo vas a pagar</p>
 
-          <div className={`relative rounded-2xl p-5 mb-5 bg-gradient-to-br ${bgTarjeta} text-white overflow-hidden`}
+          {/* Selector de método. La tarjeta dejó de ser obligatoria: hay clientes que
+              pagan en efectivo. En los tres casos la reserva queda PENDIENTE DE PAGO y
+              el cobro se hace fuera de la plataforma. */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mb-5">
+            {METODOS_PAGO_WEB.map(m => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => { setMetodoPago(m); setError(''); }}
+                className={`text-left p-3 rounded-xl border transition ${
+                  metodoPago === m ? 'border-accent bg-accent-light' : 'border-border bg-surface hover:bg-surface-3'
+                }`}
+              >
+                <p className="text-sm font-bold text-ink leading-tight">{METODO_PAGO_WEB_LABEL[m]}</p>
+                <p className="text-[11px] text-ink/55 mt-0.5">{METODO_PAGO_WEB_AYUDA[m]}</p>
+              </button>
+            ))}
+          </div>
+
+          {metodoPago !== 'tarjeta' && (
+            <div className="rounded-xl border border-accent/25 bg-accent-light/50 p-3 mb-5">
+              <p className="text-sm font-semibold text-ink">
+                {metodoPago === 'efectivo'
+                  ? 'Pagas en efectivo al recoger el vehículo.'
+                  : 'Te enviamos los datos de la cuenta cuando confirmemos la reserva.'}
+              </p>
+              <p className="text-[11px] text-ink/60 mt-1">
+                Tu solicitud queda registrada y te avisamos apenas quede confirmada. No necesitas tarjeta.
+              </p>
+            </div>
+          )}
+
+          <div className={`relative rounded-2xl p-5 mb-5 bg-gradient-to-br ${bgTarjeta} text-white overflow-hidden ${metodoPago === 'tarjeta' ? '' : 'hidden'}`}
             style={{ minHeight: 130 }}>
             <div className="absolute -top-8 -right-8 w-32 h-32 rounded-full bg-white/10" />
             <div className="absolute -bottom-6 -left-6 w-24 h-24 rounded-full bg-white/10" />
@@ -654,6 +724,9 @@ function PagoContent() {
           </div>
 
           <form onSubmit={pagar} className="space-y-3">
+            {/* Los datos de la tarjeta solo se piden —y solo se validan— cuando el
+                cliente eligió pagar con tarjeta. Ver `pagar()` más arriba. */}
+            <div className={metodoPago === 'tarjeta' ? 'space-y-3' : 'hidden'}>
             <div>
               <label className="text-xs font-semibold text-ink/60 block mb-1.5 uppercase tracking-wide">
                 Número de tarjeta
@@ -709,6 +782,7 @@ function PagoContent() {
                 />
               </div>
             </div>
+            </div>
 
             {error && (
               <div className="bg-danger/10 border border-danger/25 text-danger text-sm px-3 py-2.5 rounded-xl">
@@ -730,7 +804,11 @@ function PagoContent() {
               </button>
               <button type="submit" disabled={loading || !vehiculo}
                 className="flex-1 flex items-center justify-center gap-2 bg-accent hover:bg-accent-hover text-white font-bold py-3 rounded-xl transition shadow-md shadow-accent/20 disabled:opacity-60 text-sm">
-                {loading ? 'Procesando…' : `Pagar $${total.toLocaleString('es-CO')}`}
+                {loading
+                  ? 'Procesando…'
+                  : metodoPago === 'tarjeta'
+                    ? `Pagar $${total.toLocaleString('es-CO')}`
+                    : `Confirmar reserva · $${total.toLocaleString('es-CO')}`}
               </button>
             </div>
           </form>

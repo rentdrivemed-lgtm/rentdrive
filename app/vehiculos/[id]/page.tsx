@@ -11,6 +11,8 @@ import {
   LUGAR_VACIO, calcularRecargo, lugarValido, cargarLugares, guardarLugares, guardarDestino, type Lugar,
 } from '@/lib/lugares';
 import { MIN_NOCHES_RESERVA } from '@/lib/disponibilidad-reglas';
+import { diasRestringidosEnRango, parsePicoPlaca, picoPlacaVacio, type PicoPlaca } from '@/lib/pico-placa';
+import { factorDuracion, DESCUENTO_DURACION_PCT } from '@/lib/rentabilidad';
 
 const T = {
   es: {
@@ -22,9 +24,12 @@ const T = {
     noDisponibleAhora: 'No disponible', precioNoDisponible: 'Precio no disponible aún',
     irAlPago: 'Ir al pago', iniciarSesion: 'Iniciar sesión para reservar',
     msgInactivo: 'Este vehículo no está disponible actualmente.', msgFechas: 'Selecciona las fechas en el calendario',
-    msgMinNoches: `El alquiler mínimo es de ${MIN_NOCHES_RESERVA} noches.`,
+    msgMinNoches: (n: number) => `El alquiler mínimo es de ${n} ${n === 1 ? 'noche' : 'noches'}.`,
+    avisoDiaSuelto: 'Tienes autorizado un alquiler de un solo día. Se usa una sola vez.',
     msgRecogida: 'Completa el lugar y la hora de recogida.', msgEntrega: 'Completa el lugar y la hora de entrega.',
     dia1: (n: number) => `${n} día${n !== 1 ? 's' : ''}`,
+    noCobradosPico: (n: number) => `${n} día${n !== 1 ? 's' : ''} de pico y placa (no se cobra${n !== 1 ? 'n' : ''})`,
+    descuentoLargo: (pct: number, n: number) => `Descuento ${pct}% por ${n} días`,
     errorVehiculo: 'No pudimos cargar este vehículo. Revisa tu conexión.', reintentar: 'Reintentar',
     esUnBusTitulo: 'Este vehículo es un bus',
     esUnBusTexto: 'Los buses se cotizan por destino, trayecto u horas de disponibilidad en nuestra sección dedicada, no aquí.',
@@ -39,9 +44,12 @@ const T = {
     noDisponibleAhora: 'Not available', precioNoDisponible: 'Price not available yet',
     irAlPago: 'Go to payment', iniciarSesion: 'Sign in to book',
     msgInactivo: 'This vehicle is not currently available.', msgFechas: 'Select the dates on the calendar',
-    msgMinNoches: `The minimum rental is ${MIN_NOCHES_RESERVA} nights.`,
+    msgMinNoches: (n: number) => `The minimum rental is ${n} night${n !== 1 ? 's' : ''}.`,
+    avisoDiaSuelto: 'You are authorised for a single-day rental. It can be used once.',
     msgRecogida: 'Complete the pickup place and time.', msgEntrega: 'Complete the drop-off place and time.',
     dia1: (n: number) => `${n} day${n !== 1 ? 's' : ''}`,
+    noCobradosPico: (n: number) => `${n} pico y placa day${n !== 1 ? 's' : ''} (not charged)`,
+    descuentoLargo: (pct: number, n: number) => `${pct}% off for ${n} days`,
     errorVehiculo: 'We could not load this vehicle. Check your connection.', reintentar: 'Retry',
     esUnBusTitulo: 'This vehicle is a bus',
     esUnBusTexto: 'Buses are quoted by destination, trip or availability hours in our dedicated section, not here.',
@@ -57,7 +65,11 @@ type Vehiculo = {
   dias_disponibles: string; placa?: string; disponible?: number;
   combustible?: string; clase_vehiculo?: string; exencion_pico_placa_inscrita?: number;
 };
-type User = { id: number; nombre: string; rol: string };
+type User = {
+  id: number; nombre: string; rol: string;
+  /** 1 = el equipo le autorizó UNA reserva de un solo día (ver lib/reserva-core.ts). */
+  dia_suelto_autorizado?: number;
+};
 
 export default function VehiculoDetalle() {
   const { id } = useParams<{ id: string }>();
@@ -66,6 +78,23 @@ export default function VehiculoDetalle() {
   const c = T[lang];
   const [vehiculo, setVehiculo] = useState<Vehiculo | null>(null);
   const [user, setUser] = useState<User | null>(null);
+  // Mínimo de noches que le aplica a ESTE cliente. Espejo de `minimoNochesPara` del
+  // servidor: 2 por la web, salvo que el equipo le haya autorizado un día suelto.
+  // La decisión de verdad la vuelve a tomar POST /api/reservas.
+  const puedeDiaSuelto = Number(user?.dia_suelto_autorizado) === 1;
+  const minNoches = puedeDiaSuelto ? 1 : MIN_NOCHES_RESERVA;
+  // Config de pico y placa: la misma que usa el calendario, para que el desglose de
+  // precio del cliente cuadre con lo que después cobra el servidor.
+  const [pp, setPp] = useState<PicoPlaca>(picoPlacaVacio());
+  useEffect(() => {
+    let cancelado = false;
+    fetch('/api/pico-placa')
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (!cancelado && d) setPp(parsePicoPlaca(JSON.stringify(d))); })
+      .catch(() => { /* si falla, se cobran todos los días: igual que el servidor */ });
+    return () => { cancelado = true; };
+  }, []);
+
   const [fechaInicio, setFechaInicio] = useState('');
   const [fechaFin, setFechaFin] = useState('');
   const [ocupadas, setOcupadas] = useState<string[]>([]);
@@ -96,14 +125,28 @@ export default function VehiculoDetalle() {
     ? Math.max(0, Math.ceil((new Date(fechaFin).getTime() - new Date(fechaInicio).getTime()) / 86400000))
     : 0;
   const recargo = calcularRecargo(recogida, entrega);
-  const subtotal = vehiculo ? dias * vehiculo.precio_dia : 0;
+
+  // Mismo cálculo que `calcularCobroReserva` del servidor, con las mismas funciones
+  // puras: los días de pico y placa no se cobran y, a partir de
+  // DIAS_PARA_DESCUENTO_DURACION días, el canon baja DESCUENTO_DURACION_PCT %. Se
+  // recalcula aquí (y no se pide al servidor) para que el precio se mueva al instante
+  // al tocar el calendario; la cifra que MANDA es siempre la del servidor.
+  const diasPicoPlaca = vehiculo && fechaInicio && fechaFin
+    ? diasRestringidosEnRango(pp, vehiculo.placa || '', fechaInicio, fechaFin,
+        { combustible: vehiculo.combustible, inscrita: vehiculo.exencion_pico_placa_inscrita })
+    : [];
+  const diasCobrados = Math.max(0, dias - diasPicoPlaca.length);
+  const factor = factorDuracion(dias);
+  const subtotalSinDescuento = vehiculo ? diasCobrados * vehiculo.precio_dia : 0;
+  const subtotal = Math.round(subtotalSinDescuento * factor);
+  const descuentoDuracion = subtotalSinDescuento - subtotal;
   const total = subtotal + recargo;
   const carInactivo = vehiculo?.disponible === 0;
 
   const reservar = () => {
     if (carInactivo) { setMsg(c.msgInactivo); return; }
     if (!fechaInicio || !fechaFin || dias <= 0) { setMsg(c.msgFechas); return; }
-    if (dias < MIN_NOCHES_RESERVA) { setMsg(c.msgMinNoches); return; }
+    if (dias < minNoches) { setMsg(c.msgMinNoches(minNoches)); return; }
     if (!lugarValido(recogida)) { setMsg(c.msgRecogida); return; }
     if (!lugarValido(entrega))  { setMsg(c.msgEntrega); return; }
     guardarLugares(recogida, entrega);
@@ -222,7 +265,11 @@ export default function VehiculoDetalle() {
                   fin={fechaFin}
                   onChange={(i, f) => { setFechaInicio(i); setFechaFin(f); setMsg(''); }}
                   disabled={carInactivo}
+                  sinMinimoNoches={puedeDiaSuelto}
                 />
+                {puedeDiaSuelto && (
+                  <p className="text-[11px] text-success font-medium mt-1.5">{c.avisoDiaSuelto}</p>
+                )}
               </div>
 
               {/* Lugar y hora de recogida / entrega */}
@@ -233,7 +280,19 @@ export default function VehiculoDetalle() {
 
               {dias > 0 && vehiculo.precio_dia > 0 && (
                 <div className="bg-accent-light border border-accent/20 rounded-xl p-3 text-sm">
-                  <div className="flex justify-between text-ink/70"><span>{c.dia1(dias)} × ${vehiculo.precio_dia.toLocaleString('es-CO')}:</span><span>${subtotal.toLocaleString('es-CO')}</span></div>
+                  <div className="flex justify-between text-ink/70"><span>{c.dia1(diasCobrados)} × ${vehiculo.precio_dia.toLocaleString('es-CO')}:</span><span>${subtotalSinDescuento.toLocaleString('es-CO')}</span></div>
+                  {diasPicoPlaca.length > 0 && (
+                    <div className="flex justify-between text-success mt-1">
+                      <span>{c.noCobradosPico(diasPicoPlaca.length)}</span>
+                      <span>−${(diasPicoPlaca.length * vehiculo.precio_dia).toLocaleString('es-CO')}</span>
+                    </div>
+                  )}
+                  {descuentoDuracion > 0 && (
+                    <div className="flex justify-between text-success mt-1">
+                      <span>{c.descuentoLargo(DESCUENTO_DURACION_PCT, dias)}</span>
+                      <span>−${descuentoDuracion.toLocaleString('es-CO')}</span>
+                    </div>
+                  )}
                   {recargo > 0 && (
                     <div className="flex justify-between text-ink/70 mt-1">
                       <span>{c.recargoLugar}:</span><span>+${recargo.toLocaleString('es-CO')}</span>

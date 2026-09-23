@@ -135,11 +135,25 @@ export function desgloseTarifa(
 // amortiza y las rentadoras formales tampoco lo hacen.
 export const DIAS_MINIMOS_ALQUILER = 2;
 
+/**
+ * Días a partir de los cuales el alquiler lleva descuento por duración, y cuánto.
+ *
+ * REGLA DEL DUEÑO (sep-2026): «cuando sean más de 28 días, un descuento del 15 %».
+ * «Más de 28» es literal — con 28 días NO hay descuento, con 29 sí.
+ *
+ * Sustituye a la escalera de cuatro tramos (10 % de 5 a 14 días, 18 % de 15 a 29 y
+ * 28 % desde 30) que había hasta ahora. No era una calibración distinta de la misma
+ * idea: era OTRA regla, y además solo vivía en la calculadora. El motor de reservas
+ * cobraba días sueltos × precio, sin descuento ninguno, así que la cotización que el
+ * propietario copiaba a WhatsApp prometía hasta un 28 % que la plataforma después no
+ * aplicaba. Con una sola regla en los dos lados, lo cotizado y lo facturado coinciden.
+ */
+export const DIAS_PARA_DESCUENTO_DURACION = 29;
+export const DESCUENTO_DURACION_PCT = 15;
+
 export const ESCALERA_DURACION: { desde: number; hasta: number | null; factor: number; etiqueta: string }[] = [
-  { desde: 2,  hasta: 4,    factor: 1.00, etiqueta: '2 a 4 días' },
-  { desde: 5,  hasta: 14,   factor: 0.90, etiqueta: '5 a 14 días' },
-  { desde: 15, hasta: 29,   factor: 0.82, etiqueta: '15 a 29 días' },
-  { desde: 30, hasta: null, factor: 0.72, etiqueta: '30 días o más' },
+  { desde: DIAS_MINIMOS_ALQUILER, hasta: DIAS_PARA_DESCUENTO_DURACION - 1, factor: 1.00, etiqueta: `${DIAS_MINIMOS_ALQUILER} a ${DIAS_PARA_DESCUENTO_DURACION - 1} días` },
+  { desde: DIAS_PARA_DESCUENTO_DURACION, hasta: null, factor: 1 - DESCUENTO_DURACION_PCT / 100, etiqueta: `${DIAS_PARA_DESCUENTO_DURACION} días o más` },
 ];
 
 /**

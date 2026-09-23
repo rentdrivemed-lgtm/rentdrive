@@ -439,7 +439,7 @@ export async function POST(req: NextRequest) {
         ...precargarDocumentosEnPerfil(db, clienteId, documentos, { soloSiVacio: true }),
       );
 
-      const { recargo, totalBruto } = calcularCobroReserva(vehiculo, fechaInicio, fechaFin, recogida, entrega);
+      const { recargo, totalBruto } = calcularCobroReserva(db, vehiculo, fechaInicio, fechaFin, recogida, entrega);
       // Créditos de referido: igual que en la vía pública, los descuenta el servidor
       // contra el saldo real (nunca se confía en un monto que venga en el body).
       const creditosUsados = body.usar_creditos ? consumirCreditos(db, clienteId, totalBruto) : 0;

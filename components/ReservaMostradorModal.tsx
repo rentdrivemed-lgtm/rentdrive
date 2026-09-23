@@ -19,7 +19,9 @@ import LugarSelector from '@/components/LugarSelector';
 import DocUploadDoble from '@/components/DocUploadDoble';
 import TelefonoInput from '@/components/TelefonoInput';
 import { IconX, IconUser, IconCheck } from '@/components/Icons';
-import { LUGAR_VACIO, calcularRecargo, calcularDiasAlquiler, calcularTotalAlquiler, type Lugar } from '@/lib/lugares';
+import { LUGAR_VACIO, calcularRecargo, calcularDiasAlquiler, type Lugar } from '@/lib/lugares';
+import { diasRestringidosEnRango, parsePicoPlaca, picoPlacaVacio, type PicoPlaca } from '@/lib/pico-placa';
+import { factorDuracion, DESCUENTO_DURACION_PCT } from '@/lib/rentabilidad';
 import { PAIS_TEL_DEFAULT } from '@/lib/validacion';
 
 export type VehiculoMostrador = {
@@ -81,6 +83,18 @@ export default function ReservaMostradorModal({
   onCreada: (info: { id: number; cuenta_creada: boolean; activacion_enviada: boolean; activacion_pendiente: boolean }) => void;
 }) {
   // ── Cliente ──
+  // Config de pico y placa, igual que en el calendario y en el checkout público: sin
+  // ella el total del mostrador no cuadraría con lo que cobra el servidor.
+  const [pp, setPp] = useState<PicoPlaca>(picoPlacaVacio());
+  useEffect(() => {
+    let cancelado = false;
+    fetch('/api/pico-placa')
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (!cancelado && d) setPp(parsePicoPlaca(JSON.stringify(d))); })
+      .catch(() => { /* si falla se cobran todos los días, igual que el servidor */ });
+    return () => { cancelado = true; };
+  }, []);
+
   const [busqueda, setBusqueda] = useState('');
   const [buscando, setBuscando] = useState(false);
   const [buscado, setBuscado] = useState(false);
@@ -182,7 +196,21 @@ export default function ReservaMostradorModal({
 
   const dias = fechaInicio && fechaFin ? calcularDiasAlquiler(fechaInicio, fechaFin) : 0;
   const recargo = calcularRecargo(recogida, entrega);
-  const total = vehiculo && dias > 0 ? calcularTotalAlquiler(dias, vehiculo.precio_dia, recargo) : 0;
+
+  // Las MISMAS dos reglas que aplica el servidor en `calcularCobroReserva`: los días de
+  // pico y placa no se cobran y desde DIAS_PARA_DESCUENTO_DURACION días hay descuento.
+  // Aquí importa especialmente que cuadre: quien atiende el mostrador le dice el precio
+  // al cliente de viva voz antes de que POST /api/admin/reservas lo calcule de verdad.
+  const diasPicoPlaca = vehiculo && fechaInicio && fechaFin
+    ? diasRestringidosEnRango(pp, vehiculo.placa || '', fechaInicio, fechaFin,
+        { combustible: vehiculo.combustible, inscrita: vehiculo.exencion_pico_placa_inscrita })
+    : [];
+  const diasCobrados = Math.max(0, dias - diasPicoPlaca.length);
+  const subtotalSinDescuento = vehiculo ? diasCobrados * vehiculo.precio_dia : 0;
+  const descuentoDuracion = subtotalSinDescuento - Math.round(subtotalSinDescuento * factorDuracion(dias));
+  const total = vehiculo && dias > 0
+    ? Math.round(subtotalSinDescuento * factorDuracion(dias)) + recargo
+    : 0;
 
   const crear = async () => {
     setError(''); setGuardando(true);
@@ -490,6 +518,18 @@ export default function ReservaMostradorModal({
                   <span>{dias} día{dias !== 1 ? 's' : ''} × ${vehiculo.precio_dia.toLocaleString('es-CO')}</span>
                   <span>${(dias * vehiculo.precio_dia).toLocaleString('es-CO')}</span>
                 </div>
+                {diasPicoPlaca.length > 0 && (
+                  <div className="flex justify-between text-success mt-1">
+                    <span>{diasPicoPlaca.length} día{diasPicoPlaca.length !== 1 ? 's' : ''} de pico y placa (no se cobra{diasPicoPlaca.length !== 1 ? 'n' : ''})</span>
+                    <span>−${(diasPicoPlaca.length * (vehiculo?.precio_dia ?? 0)).toLocaleString('es-CO')}</span>
+                  </div>
+                )}
+                {descuentoDuracion > 0 && (
+                  <div className="flex justify-between text-success mt-1">
+                    <span>Descuento {DESCUENTO_DURACION_PCT}% por {dias} días</span>
+                    <span>−${descuentoDuracion.toLocaleString('es-CO')}</span>
+                  </div>
+                )}
                 {recargo > 0 && (
                   <div className="flex justify-between text-ink/60 mt-1">
                     <span>Recargo por lugar</span>

@@ -66,11 +66,13 @@ const T = {
     leyendaDisp: 'Disponible', leyendaOcup: 'Ocupado', leyendaPico: 'Pico y placa',
     placaTermina: 'Placa termina en', picoPlacaDia: 'pico y placa:', sinRestriccion: 'sin restricción de pico y placa',
     exento: 'exento de pico y placa por ser',
+    extremoPico: 'Ese día el carro no puede circular por pico y placa, así que no sirve para recoger ni para entregar. Elige otro — dentro del alquiler sí cuenta, y no te lo cobramos.',
     motivoExento: { electrico: 'eléctrico', hibrido: 'híbrido', gas: 'a gas natural (GNV)' } as Record<string, string>,
   },
   en: {
     dias: ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'], locale: 'en-US',
     rangoInvalido: 'That range includes unavailable days. Pick other dates.',
+    extremoPico: 'The car cannot be driven that day due to pico y placa, so it cannot be the pick-up or return day. Pick another one — inside the rental it still counts, and it is not charged.',
     vehiculoInactivo: 'This vehicle is not available for booking right now.',
     ant: 'Prev', sig: 'Next', limpiar: 'Clear',
     campoRecogida: 'Pick-up', campoDevolucion: 'Return', eligeFecha: 'Choose the date',
@@ -161,10 +163,28 @@ export default function CalendarioReserva({
     return true;
   };
 
+  /**
+   * ¿Este día está restringido por pico y placa para ESTE vehículo?
+   *
+   * Un día restringido SÍ se puede atravesar dentro de un alquiler largo —y además no
+   * se cobra, ver `calcularCobroReserva`—, pero NO puede ser el día de recogida ni el
+   * de devolución: entregarle a alguien un carro que no puede mover ese mismo día, o
+   * pedirle que lo traiga un día en que no puede conducirlo, no tiene sentido.
+   *
+   * Hasta sep-2026 esto se "resolvía" desmarcando los días de pico y placa del
+   * calendario de disponibilidad del vehículo, con un efecto que nadie buscaba: como
+   * `rangoLibre` exige que TODOS los días del rango estén disponibles, ningún alquiler
+   * podía pasar de 6 días seguidos.
+   */
+  const esPicoPlaca = (fecha: Date) =>
+    !!placa && pp.activo && !exento && placaRestringida(pp, placa, fecha, exencion);
+
   const click = (str: string, fecha: Date) => {
     if (!seleccionable(fecha, str)) return;
     setAviso('');
     setPreview('');
+    // Ni la recogida ni la devolución pueden caer en un día de pico y placa.
+    if (esPicoPlaca(fecha)) { setAviso(c.extremoPico); return; }
     // Sin inicio, o rango ya completo → empezar de nuevo
     if (!inicio || (inicio && fin)) { onChange(str, ''); return; }
     // Hay inicio, falta fin

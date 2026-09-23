@@ -3,7 +3,7 @@
 // Sirve para cotizar un vehículo que AÚN no está en el sistema: se elige categoría + valor
 // comercial y muestra el precio de mercado sugerido (mismo motor que la vitrina) junto con la
 // rentabilidad completa. Reutiliza lib/rentabilidad + lib/precioMercado.
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   DEFAULTS_POR_TIPO, TIPO_VEHICULO_LABELS,
   COMISION_PLATAFORMA_DEFAULT, OCUPACION_DEFAULT,

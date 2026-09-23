@@ -10,6 +10,7 @@ import { mapaDocumentos } from '@/lib/documentos-ref';
 import { correoNoVerificado, CODIGO_CORREO_NO_VERIFICADO } from '@/lib/verificacion-correo';
 import { vinculacionAlDia } from '@/lib/contratos-vinculacion';
 import { CODIGO_VINCULACION_PENDIENTE } from '@/lib/contratos-vinculacion-texto';
+import { esMetodoPagoWeb } from '@/lib/metodo-pago-web';
 // Reglas de negocio compartidas con la vía de mostrador (POST /api/admin/reservas).
 // Ver lib/reserva-core.ts: ahí viven mínimo de noches, documentos (incluido el
 // contraste del pasaporte contra el tipo de documento registrado), lugares,
@@ -18,7 +19,7 @@ import { CODIGO_VINCULACION_PENDIENTE } from '@/lib/contratos-vinculacion-texto'
 // (solo rol 'usuario', gates de correo verificado y perfil completo, reserva que
 // nace pendiente y correo de "solicitud recibida").
 import {
-  validarNochesMinimas, validarDocumentosReserva, resolverDocumentosIdentidad, validarLugaresReserva,
+  validarNochesMinimasCliente, consumirAutorizacionDiaSuelto, validarDocumentosReserva, resolverDocumentosIdentidad, validarLugaresReserva,
   cargarVehiculoReservable, validarDisponibilidadFechas,
   leerPerfilOperacion, resolverDatosOperacion, guardarDatosOperacionEnPerfil,
   precargarDocumentosEnPerfil, calcularCobroReserva, insertarReserva,
@@ -164,15 +165,16 @@ export async function POST(req: NextRequest) {
     licencia_url, licencia_url_dorso,
     firma_contrato, recogida, entrega, usar_creditos,
     direccion, ciudad, emergencia_nombre, emergencia_tel,
+    metodo_pago,
   } = await req.json();
   if (!vehiculo_id || !fecha_inicio || !fecha_fin) {
     return NextResponse.json({ error: 'Faltan datos' }, { status: 400 });
   }
-  // Vía 'publica' = el mínimo real del negocio (MIN_NOCHES_RESERVA, hoy 2 noches).
-  // Quien reserva por la web no tiene a nadie del equipo evaluando el caso; la
-  // excepción de 1 día es solo del punto de atención (ver MIN_NOCHES_POR_VIA).
-  const errNoches = validarNochesMinimas(fecha_inicio, fecha_fin, 'publica');
-  if (errNoches) return NextResponse.json({ error: errNoches.error }, { status: errNoches.status });
+  // Cómo dice el cliente que va a pagar. NO es un cobro: la reserva nace
+  // `pago_estado: 'pendiente'` en los tres casos y la plata entra fuera de la
+  // plataforma. Un valor desconocido cae a 'tarjeta', que es lo único que se podía
+  // elegir antes de que existiera el selector.
+  const metodoPagoWeb = esMetodoPagoWeb(metodo_pago) ? metodo_pago : 'tarjeta';
 
   const documentosBody = {
     documento_id_url, documento_id_url_dorso, documento_es_pasaporte,
@@ -186,6 +188,14 @@ export async function POST(req: NextRequest) {
   if (!firma_contrato) return NextResponse.json({ error: 'Debes aceptar el contrato.' }, { status: 400 });
 
   const db = getDb();
+
+  // Vía 'publica' = el mínimo real del negocio (MIN_NOCHES_RESERVA, hoy 2 noches).
+  // Quien reserva por la web no tiene a nadie del equipo evaluando el caso, así que el
+  // mínimo se mantiene salvo que a ESTE cliente el equipo le haya concedido antes una
+  // autorización de día suelto (ver `minimoNochesPara`). La excepción permanente de 1
+  // día sigue siendo solo del punto de atención (ver MIN_NOCHES_POR_VIA).
+  const errNoches = validarNochesMinimasCliente(db, user.id, fecha_inicio, fecha_fin, 'publica');
+  if (errNoches) return NextResponse.json({ error: errNoches.error }, { status: errNoches.status });
 
   // Contrato de vinculación firmado: sin él no se reserva. Solo frena a quien YA lo
   // tiene emitido y sin firmar — ver la nota de `vinculacionAlDia`, que explica por qué
@@ -252,28 +262,44 @@ export async function POST(req: NextRequest) {
   // pasaporte de verdad terminaba pisando la cédula guardada del usuario.
   precargarDocumentosEnPerfil(db, user.id, documentos);
 
-  const { recargo, totalBruto } = calcularCobroReserva(vehiculo, fecha_inicio, fecha_fin, recogidaL, entregaL);
+  const { recargo, totalBruto } = calcularCobroReserva(db, vehiculo, fecha_inicio, fecha_fin, recogidaL, entregaL);
 
   // Créditos de referidos: se descuentan del servidor (nunca se confía en un monto
   // que mande el cliente), y solo hasta el saldo real disponible.
   const creditosUsados = usar_creditos ? consumirCreditos(db, user.id, totalBruto) : 0;
   const total = totalBruto - creditosUsados;
 
-  const reservaId = insertarReserva(db, {
-    usuarioId: user.id,
-    vehiculoId: Number(vehiculo_id),
-    fechaInicio: fecha_inicio,
-    fechaFin: fecha_fin,
-    total,
-    estado: 'pendiente',
-    pagoEstado: 'pendiente',
-    documentos,
-    firmaContrato: firma_contrato || '{}',
-    recogida: recogidaL,
-    entrega: entregaL,
-    recargo,
-    creditosUsados,
-  });
+  // El INSERT y el consumo de la autorización de día suelto van en la MISMA
+  // transacción: si se consumiera aparte, dos peticiones simultáneas del mismo cliente
+  // podrían pasar las dos la validación de arriba y gastar una sola autorización en dos
+  // reservas de un día. El `WHERE dia_suelto_autorizado = 1` del UPDATE es lo que hace
+  // que solo una de las dos gane.
+  const noches = Math.ceil((new Date(fecha_fin).getTime() - new Date(fecha_inicio).getTime()) / 86400000);
+  let autorizacionConsumida = false;
+  const reservaId = db.transaction(() => {
+    const id = insertarReserva(db, {
+      usuarioId: user.id,
+      vehiculoId: Number(vehiculo_id),
+      fechaInicio: fecha_inicio,
+      fechaFin: fecha_fin,
+      total,
+      estado: 'pendiente',
+      pagoEstado: 'pendiente',
+      documentos,
+      firmaContrato: firma_contrato || '{}',
+      recogida: recogidaL,
+      entrega: entregaL,
+      recargo,
+      creditosUsados,
+      metodoPago: metodoPagoWeb,
+    });
+    autorizacionConsumida = consumirAutorizacionDiaSuelto(db, user.id, id, noches, 'publica');
+    return id;
+  })();
+
+  if (autorizacionConsumida) {
+    console.log(`[reservas] Reserva ${reservaId}: consumida la autorización de día suelto del usuario ${user.id}.`);
+  }
 
   try {
     await enviarCorreo(user.correo, 'Tu solicitud de reserva en RentDrive',
