@@ -15,6 +15,12 @@ export type ReservaCalendario = {
   fecha_fin: string;
   total: number;
   estado: string;
+  /**
+   * Cómo se paga: en mostrador es cómo entró la plata (`METODOS_PAGO`); por la web,
+   * lo que el cliente dijo que iba a hacer (`METODOS_PAGO_WEB`). NO implica que ya
+   * esté pagado: eso lo dice `pago_estado`.
+   */
+  metodo_pago?: string;
   recogida?: string;
   cancelacion_pct?: number | null;
 };

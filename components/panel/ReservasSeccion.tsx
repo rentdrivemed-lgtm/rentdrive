@@ -20,6 +20,7 @@
 // cuerpo que usa la acción rápida de la vista HOY: una sola vía de aprobación.
 import { useEffect, useState } from 'react';
 import { rutaDocumento, type DocumentoDisponible, type MapaDocumentos } from '@/lib/documentos-ref';
+import { METODO_PAGO_WEB_LABEL, type MetodoPagoWeb } from '@/lib/metodo-pago-web';
 import CalendarioReservas, { type ReservaCalendario } from '@/components/CalendarioReservas';
 import ReservaMostradorModal from '@/components/ReservaMostradorModal';
 import BotonPaqueteDocumentos from '@/components/BotonPaqueteDocumentos';
@@ -304,6 +305,14 @@ export default function ReservasSeccion() {
                 </div>
                 <div className="flex flex-col items-end gap-2 flex-shrink-0">
                   <p className="font-bold text-accent">${r.total.toLocaleString('es-CO')}</p>
+                  {/* Cómo dijo el cliente que va a pagar. NO significa que ya pagó: eso
+                      lo dice `pago_estado`. Desde sep-2026 el checkout dejó de exigir
+                      tarjeta, así que el equipo necesita saber si viene en efectivo. */}
+                  {!!r.metodo_pago && (
+                    <span className="text-[11px] text-ink/55">
+                      {METODO_PAGO_WEB_LABEL[r.metodo_pago as MetodoPagoWeb] || r.metodo_pago}
+                    </span>
+                  )}
                   {r.estado !== 'pendiente' && (
                     <span className={`text-xs px-2.5 py-1 rounded-full font-semibold ${estadoColor[r.estado] || 'bg-surface'}`}>
                       {r.estado}
