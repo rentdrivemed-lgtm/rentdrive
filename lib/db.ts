@@ -949,6 +949,32 @@ function initDb(db: Database.Database) {
   try { db.exec("ALTER TABLE usuarios ADD COLUMN correo_codigo_generado_at TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE usuarios ADD COLUMN correo_codigo_intentos INTEGER DEFAULT 0"); } catch { /* ya existe */ }
 
+  // ── Autorización para alquilar UN SOLO DÍA (sep-2026) ─────────────────────
+  //
+  // Por la web el mínimo son 2 noches (`MIN_NOCHES_POR_VIA`), y existe para evitar
+  // alquileres de un día pedidos a ciegas por internet. Decisión del dueño: un cliente
+  // concreto SÍ puede pedir un día suelto si el equipo lo autoriza antes.
+  //
+  // La autorización es DE UN SOLO USO: habilita una reserva y se consume al crearla.
+  // Se modela como bandera + metadatos (quién, cuándo, por qué) en vez de una tabla
+  // aparte porque es un atributo del cliente, no una entidad con vida propia; los
+  // metadatos existen para que en la bitácora se pueda responder «¿quién autorizó
+  // esto?» sin tener que cruzar tablas.
+  //
+  // `dia_suelto_usado_en` / `dia_suelto_reserva_id` NO se borran al consumirla: son el
+  // rastro de en qué reserva se gastó la última autorización concedida.
+  for (const col of [
+    'dia_suelto_autorizado INTEGER DEFAULT 0',
+    'dia_suelto_autorizado_por INTEGER REFERENCES usuarios(id)',
+    "dia_suelto_autorizado_por_nombre TEXT DEFAULT ''",
+    "dia_suelto_autorizado_en TEXT DEFAULT ''",
+    "dia_suelto_motivo TEXT DEFAULT ''",
+    "dia_suelto_usado_en TEXT DEFAULT ''",
+    'dia_suelto_reserva_id INTEGER',
+  ]) {
+    try { db.exec(`ALTER TABLE usuarios ADD COLUMN ${col}`); } catch { /* ya existe */ }
+  }
+
   try { db.exec("ALTER TABLE reservas ADD COLUMN documento_id_url TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE reservas ADD COLUMN licencia_url TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE reservas ADD COLUMN documento_id_url_dorso TEXT DEFAULT ''"); } catch { /* ya existe */ }

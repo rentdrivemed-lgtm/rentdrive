@@ -25,7 +25,9 @@ export async function GET() {
            -- sin que nadie pudiera abrirlo después. Van al mismo sitio que cedula_url, que
            -- ya viajaba por acá, y esta ruta ya exige el área usuarios.
            licencia_url, licencia_url_dorso, certificado_bancario_url,
-           banco, numero_cuenta
+           banco, numero_cuenta,
+           -- Autorización para alquilar un solo día por la web (ver lib/reserva-core.ts).
+           dia_suelto_autorizado, dia_suelto_autorizado_por_nombre, dia_suelto_autorizado_en, dia_suelto_motivo
     FROM usuarios
     ORDER BY created_at DESC
   `).all() as Array<Record<string, unknown>>;

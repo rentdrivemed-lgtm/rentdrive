@@ -26,6 +26,11 @@ export type Usuario = {
   // certificado_bancario (ver lib/documentos-ref.ts).
   documentos_id?: MapaDocumentos;
   banco?: string; numero_cuenta?: string;
+  /** 1 = tiene UNA autorización sin usar para alquilar un solo día por la web. */
+  dia_suelto_autorizado?: number;
+  dia_suelto_autorizado_por_nombre?: string;
+  dia_suelto_autorizado_en?: string;
+  dia_suelto_motivo?: string;
 };
 export type DocItem = { url: string; vence?: string };
 // `todo_riesgo` ya no aparece acá (sep-2026): DrivePass expide la póliza directamente, así

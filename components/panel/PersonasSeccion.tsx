@@ -33,6 +33,7 @@ import {
   type OrdenLlegada,
 } from '@/lib/fecha-registro';
 import { IconUser, IconX, IconCheck } from '@/components/Icons';
+import { MIN_NOCHES_RESERVA } from '@/lib/disponibilidad-reglas';
 
 const rolColor: Record<string, string> = {
   admin:       'bg-accent/10 text-accent',
@@ -241,6 +242,38 @@ export default function PersonasSeccion({ miNivel, miId }: { miNivel: AdminNivel
       alert('Error de conexión, intenta de nuevo.');
     } finally {
       setEliminandoUsuario(null);
+    }
+  };
+
+  // ── Autorización de alquiler por UN DÍA ────────────────────────────────────
+  // Levanta, para UN cliente, el mínimo de 2 noches de la vía web. Es de un solo uso:
+  // se gasta al crear la reserva (ver `consumirAutorizacionDiaSuelto`). El motivo es
+  // obligatorio porque es una excepción a una regla del negocio y queda en la bitácora
+  // a nombre de quien la concede.
+  const [diaSueltoMotivo, setDiaSueltoMotivo] = useState('');
+  const [diaSueltoGuardando, setDiaSueltoGuardando] = useState<number | null>(null);
+
+  const cambiarDiaSuelto = async (u: Usuario, autorizar: boolean) => {
+    if (autorizar && !diaSueltoMotivo.trim()) return;
+    setDiaSueltoGuardando(u.id);
+    try {
+      const res = await fetch('/api/admin/clientes/dia-suelto', {
+        method: autorizar ? 'POST' : 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(autorizar ? { usuario_id: u.id, motivo: diaSueltoMotivo.trim() } : { usuario_id: u.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { alert(data.error || 'No se pudo cambiar la autorización.'); return; }
+      // Se refleja en la lista sin recargar toda la sección.
+      setUsuarios(prev => prev.map(x => x.id === u.id ? {
+        ...x,
+        dia_suelto_autorizado: autorizar ? 1 : 0,
+        dia_suelto_motivo: autorizar ? diaSueltoMotivo.trim() : '',
+        dia_suelto_autorizado_por_nombre: autorizar ? (x.dia_suelto_autorizado_por_nombre || '') : '',
+      } : x));
+      if (autorizar) setDiaSueltoMotivo('');
+    } finally {
+      setDiaSueltoGuardando(null);
     }
   };
 
@@ -785,6 +818,61 @@ export default function PersonasSeccion({ miNivel, miId }: { miNivel: AdminNivel
                         <DocumentoVista label="Licencia (dorso)" doc={docsId.licencia_dorso} titulo={u.nombre} />
                       </div>
                     )}
+                  </>
+                )}
+
+                {/* Sección: Alquiler de UN DÍA con autorización previa.
+                    Por la web el mínimo son 2 noches (`MIN_NOCHES_POR_VIA`), para que nadie
+                    pida un día suelto a ciegas por internet. Acá el equipo levanta esa regla
+                    para UN cliente concreto. La autorización es de UN SOLO USO: se gasta al
+                    crear la reserva (`consumirAutorizacionDiaSuelto`) y hay que volver a
+                    concederla. Solo aplica a cuentas de cliente. */}
+                {u.rol === 'usuario' && (
+                  <>
+                    <p className="text-[10px] font-bold text-ink/50 uppercase tracking-widest pt-1">Alquiler de un día</p>
+                    <div className="bg-surface rounded-xl p-3 border border-border space-y-2">
+                      {Number(u.dia_suelto_autorizado) === 1 ? (
+                        <>
+                          <p className="text-sm font-semibold text-success">Autorizado para alquilar por 1 día</p>
+                          <p className="text-[11px] text-ink/60">
+                            {u.dia_suelto_autorizado_por_nombre ? `Autorizó ${u.dia_suelto_autorizado_por_nombre}` : 'Autorizado'}
+                            {u.dia_suelto_autorizado_en ? ` · ${u.dia_suelto_autorizado_en}` : ''}
+                            {u.dia_suelto_motivo ? ` · ${u.dia_suelto_motivo}` : ''}
+                          </p>
+                          <p className="text-[11px] text-ink/45">Se usa una sola vez: al reservar, la autorización se consume.</p>
+                          <button
+                            type="button"
+                            onClick={() => cambiarDiaSuelto(u, false)}
+                            disabled={diaSueltoGuardando === u.id}
+                            className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-danger/30 text-danger hover:bg-danger/5 disabled:opacity-50"
+                          >
+                            {diaSueltoGuardando === u.id ? 'Retirando…' : 'Retirar autorización'}
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <p className="text-[11px] text-ink/60">
+                            Este cliente solo puede reservar desde {MIN_NOCHES_RESERVA} noches. Autorízalo para que
+                            pueda pedir un día suelto por la web.
+                          </p>
+                          <input
+                            type="text"
+                            value={diaSueltoMotivo}
+                            onChange={e => setDiaSueltoMotivo(e.target.value.slice(0, 300))}
+                            placeholder="Motivo (obligatorio)"
+                            className="w-full border border-border rounded-lg px-2.5 py-1.5 text-xs bg-surface-2 text-ink"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => cambiarDiaSuelto(u, true)}
+                            disabled={diaSueltoGuardando === u.id || !diaSueltoMotivo.trim()}
+                            className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-accent text-white hover:opacity-90 disabled:opacity-50"
+                          >
+                            {diaSueltoGuardando === u.id ? 'Autorizando…' : 'Autorizar 1 día'}
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </>
                 )}
 
