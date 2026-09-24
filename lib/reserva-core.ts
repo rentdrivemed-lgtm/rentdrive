@@ -328,10 +328,30 @@ export function resolverDocumentosIdentidad(
   // Se comprueba con el `esPasaporte` YA contrastado: creyéndole al del body, marcar la
   // casilla sacaba el dorso de esta verificación.
   const exentas = new Set(opts.urlsExentas ?? []);
-  const deProcedenciaDudosa = [d.documento_id_url, d.licencia_url, d.licencia_url_dorso]
-    .concat(esPasaporte ? [] : [d.documento_id_url_dorso])
-    .some(u => !(typeof u === 'string' && exentas.has(u)) && !esUrlDeStorageValida(u));
-  if (deProcedenciaDudosa) {
+  const CAMPOS: [string, unknown][] = [
+    ['documento_id_url', d.documento_id_url],
+    ['licencia_url', d.licencia_url],
+    ['licencia_url_dorso', d.licencia_url_dorso],
+    ...(esPasaporte ? [] : [['documento_id_url_dorso', d.documento_id_url_dorso] as [string, unknown]]),
+  ];
+  const rechazados = CAMPOS.filter(([, u]) =>
+    !(typeof u === 'string' && exentas.has(u)) && !esUrlDeStorageValida(u));
+
+  if (rechazados.length > 0) {
+    // Se deja rastro en el log del servidor. Este rechazo se le muestra al cliente
+    // DENTRO del paso del pago (app/pago/page.tsx pinta cualquier error de esta ruta
+    // ahí), así que sin esta línea un fallo de documentos se reporta como «no me deja
+    // pagar» y hay que diagnosticarlo a ciegas. Se registra la FORMA de la URL, no la
+    // URL: apunta al documento de identidad de una persona.
+    const forma = (u: unknown) => {
+      if (typeof u !== 'string' || !u) return 'vacía';
+      try {
+        const { hostname, pathname } = new URL(u);
+        return `${hostname}${pathname.split('/').slice(0, 4).join('/')}/…`;
+      } catch { return u.startsWith('/') ? 'ruta relativa (legada)' : 'no es una URL'; }
+    };
+    console.error('[reservas] Documentos rechazados por procedencia:',
+      rechazados.map(([campo, u]) => `${campo}=${forma(u)}`).join(' · '));
     return { error: { error: 'Los documentos deben subirse desde este formulario.', status: 400 } };
   }
 

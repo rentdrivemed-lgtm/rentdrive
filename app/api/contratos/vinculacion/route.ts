@@ -13,8 +13,9 @@ import { getCurrentUser } from '@/lib/auth';
 import { adminTieneArea, sinPermisoArea } from '@/lib/guard';
 import {
   estadoVinculacion, emitirYNotificarVinculacion, vinculacionQueLeToca, puedeEmitirVinculacion,
+  armarDatosVinculacion,
 } from '@/lib/contratos-vinculacion';
-import { VINCULACION_REVISADA_POR_ABOGADO } from '@/lib/contratos-vinculacion-texto';
+import { REGISTRO_REVISADO_POR_ABOGADO, generarTextoRegistro } from '@/lib/contratos-registro-texto';
 
 /** Área del panel para gestionar estos documentos. Ver lib/permisos.ts. */
 const AREA = 'contratos_vinculacion';
@@ -38,11 +39,29 @@ export async function GET(req: NextRequest) {
     .get(objetivoId) as { id: number; nombre: string; rol: string } | undefined;
   if (!fila) return NextResponse.json({ error: 'La cuenta no existe.' }, { status: 404 });
 
+  const estado = estadoVinculacion(db, fila.id, fila.rol);
+
+  // Texto PARA LEER antes de autorizar, con las casillas en blanco. La ley pide que la
+  // autorización sea «previa, expresa, libre e INFORMADA» (art. 9 de la Ley 1581), así
+  // que la pantalla tiene que poder mostrar el documento completo antes de que nadie
+  // marque nada. Solo se arma si aún no hay documento emitido: cuando ya existe, el
+  // texto bueno es el suyo, congelado y sellado, y se lee en /contratos/<id>.
+  let textoParaLeer: string | null = null;
+  if (esPropio && estado.tipo && estado.contratoId === null) {
+    const datos = armarDatosVinculacion(db, fila.id, fila.rol);
+    if (datos) {
+      textoParaLeer = generarTextoRegistro(datos, {
+        general: false, datosSensibles: false, comunicacionesComerciales: false,
+      });
+    }
+  }
+
   return NextResponse.json({
     usuario: { id: fila.id, nombre: fila.nombre, rol: fila.rol },
-    estado: estadoVinculacion(db, fila.id, fila.rol),
+    estado,
+    textoParaLeer,
     // La pantalla lo usa para mostrar el aviso de borrador sobre el texto.
-    borradorSinRevisar: !VINCULACION_REVISADA_POR_ABOGADO,
+    borradorSinRevisar: !REGISTRO_REVISADO_POR_ABOGADO,
   });
 }
 

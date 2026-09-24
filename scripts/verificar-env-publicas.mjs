@@ -66,18 +66,37 @@ const args = new Set([...dockerfile.matchAll(/^\s*ARG\s+(NEXT_PUBLIC_[A-Z0-9_]+)
 const envs = new Set([...dockerfile.matchAll(/^\s*ENV\s+(NEXT_PUBLIC_[A-Z0-9_]+)=/gm)].map(m => m[1]));
 
 // 3. Comparar.
+//
+// Declarar NO es tener valor. Este script se escribió tras la caída de sep-2026 y
+// comprobaba solo el Dockerfile, así que seguía dejando pasar la mitad del fallo: un
+// `ARG` declarado al que Railway no le pasa nada compila igual, con la variable VACÍA
+// en el navegador, que es exactamente el síntoma original. Por eso ahora, cuando corre
+// DENTRO del build (`process.env` ya tiene los ARG convertidos en ENV), también se
+// exige que el valor no esté vacío.
+//
+// Fuera del build (alguien lo corre a mano en su portátil) esa parte se omite: ahí no
+// hay variables de producción y fallar sería ruido.
+const DENTRO_DEL_BUILD = process.env.VERIFICAR_VALORES === '1'
+  || !!process.env.RAILWAY_ENVIRONMENT
+  || !!process.env.RAILWAY_SERVICE_ID;
+
 const fallos = [];
 for (const [v, donde] of [...usadas].sort()) {
   const faltaArg = !args.has(v);
   const faltaEnv = !envs.has(v);
-  if (faltaArg || faltaEnv) {
-    fallos.push({ v, donde, faltaArg, faltaEnv });
+  const sinValor = DENTRO_DEL_BUILD && !String(process.env[v] ?? '').trim();
+  if (faltaArg || faltaEnv || sinValor) {
+    fallos.push({ v, donde, faltaArg, faltaEnv, sinValor });
   }
 }
 
 console.log(`Variables NEXT_PUBLIC_* que el código lee: ${usadas.size}`);
+console.log(DENTRO_DEL_BUILD
+  ? 'Se comprueba la declaración en el Dockerfile Y que el valor llegue al build.'
+  : 'Fuera del build: se comprueba solo la declaración en el Dockerfile.');
 for (const [v] of [...usadas].sort()) {
-  const ok = args.has(v) && envs.has(v);
+  const ok = args.has(v) && envs.has(v)
+    && (!DENTRO_DEL_BUILD || !!String(process.env[v] ?? '').trim());
   console.log(`  ${ok ? '✓' : '✗'} ${v}`);
 }
 
@@ -86,13 +105,20 @@ if (fallos.length === 0) {
   process.exit(0);
 }
 
-console.error('\n❌ Faltan en el Dockerfile. El build pasará igual y el valor llegará VACÍO al navegador:\n');
-for (const { v, donde, faltaArg, faltaEnv } of fallos) {
+console.error('\n❌ El valor llegaría VACÍO al navegador. Sin esto el build pasa igual y el fallo solo se ve en el celular del cliente:\n');
+for (const { v, donde, faltaArg, faltaEnv, sinValor } of fallos) {
   console.error(`  ${v}`);
   console.error(`     la usa: ${donde.join(', ')}`);
-  console.error(`     falta:  ${[faltaArg && 'ARG', faltaEnv && 'ENV'].filter(Boolean).join(' y ')}`);
-  console.error(`     añade:  ARG ${v}`);
-  console.error(`             ENV ${v}=$${v}\n`);
+  if (faltaArg || faltaEnv) {
+    console.error(`     falta en el Dockerfile: ${[faltaArg && 'ARG', faltaEnv && 'ENV'].filter(Boolean).join(' y ')}`);
+    console.error(`     añade:  ARG ${v}`);
+    console.error(`             ENV ${v}=$${v}`);
+  }
+  if (sinValor) {
+    console.error('     declarada en el Dockerfile, pero SIN VALOR en este build.');
+    console.error('     créala en el panel de Railway (o compruébala si ya está: puede estar');
+    console.error('     en otro entorno, o sellada, y entonces no llega al build).');
+  }
+  console.error('');
 }
-console.error('Y comprueba que la variable exista también en el panel de Railway.');
 process.exit(1);

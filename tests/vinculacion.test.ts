@@ -10,7 +10,7 @@ import {
 } from '@/lib/contratos-vinculacion';
 import { leerContrato, leerFirmas } from '@/lib/contratos-firma';
 import { esSelloInstitucional } from '@/lib/contratos-sello-agente';
-import { TIPO_REGISTRO } from '@/lib/contratos-registro-texto';
+import { TIPO_REGISTRO, generarTextoRegistro } from '@/lib/contratos-registro-texto';
 
 process.env.FIRMA_SECRET = 'secreto-de-prueba-suficientemente-largo';
 
@@ -147,6 +147,32 @@ describe('emisión de la autorización de datos', () => {
     const faltan = faltantesVinculacion(armarDatosVinculacion(db, id, 'usuario')!).map(f => f.ruta);
     expect(faltan).toContain('titular.ciudad');
     expect(faltan).toContain('titular.direccion');
+  });
+});
+
+describe('el texto que se lee ANTES de autorizar', () => {
+  let db: DB;
+  beforeEach(() => { db = baseDePrueba(); });
+
+  it('muestra las casillas SIN marcar y las cláusulas que hay que conocer', () => {
+    // La ley pide autorización «previa, expresa, libre e INFORMADA» (art. 9 Ley 1581):
+    // la pantalla tiene que poder mostrar el documento entero antes de marcar nada, y
+    // con las casillas en blanco — no prerrellenadas.
+    const id = crearUsuario(db, { rol: 'usuario' });
+    const texto = generarTextoRegistro(armarDatosVinculacion(db, id, 'usuario')!, {
+      general: false, datosSensibles: false, comunicacionesComerciales: false,
+    });
+
+    expect(texto).toContain('[ ] Sí autorizo.');
+    expect(texto).toContain('[ ] Autorizo el envío de comunicaciones comerciales.');
+    expect(texto).not.toContain('[X]');
+
+    for (const clausula of ['PRIMERA.', 'SEGUNDA.', 'TERCERA.', 'CUARTA.', 'QUINTA.', 'SEXTA.', 'SÉPTIMA.', 'OCTAVA.']) {
+      expect(texto, `falta la cláusula ${clausula}`).toContain(clausula);
+    }
+    // Los derechos y a dónde ejercerlos no pueden faltar.
+    expect(texto).toContain('Superintendencia de Industria y Comercio');
+    expect(texto).toContain('habeas data');
   });
 });
 

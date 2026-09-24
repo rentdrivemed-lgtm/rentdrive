@@ -21,6 +21,7 @@ import { IconShield } from '@/components/Icons';
 /** Rutas donde el recordatorio estorba en vez de ayudar. */
 const RUTAS_SIN_RECORDATORIO = [
   '/contratos/',          // la pantalla de firma
+  '/autorizacion-datos',  // la pantalla a la que lleva este mismo aviso
   '/verificar-correo',
   '/completar-perfil',
   '/registro',
@@ -36,7 +37,9 @@ export default function RecordatorioVinculacion() {
   const [cerradoEn, setCerradoEn] = useState<string | null>(null);
 
   const v = user?.vinculacion;
-  if (!user || !v?.pendiente || !v.contrato_id) return null;
+  // `contrato_id` puede ser null y eso NO significa «nada que hacer»: significa que la
+  // cuenta todavía no ha autorizado, que es justo lo que hay que pedirle.
+  if (!user || !v?.pendiente) return null;
   if (cerradoEn === pathname) return null;
   if (RUTAS_SIN_RECORDATORIO.some(r => pathname.startsWith(r))) return null;
 
@@ -52,12 +55,12 @@ export default function RecordatorioVinculacion() {
           <span className="shrink-0 mt-0.5 text-warning"><IconShield /></span>
           <div className="min-w-0 flex-1">
             <h2 id="recordatorio-vinculacion-titulo" className="text-base font-bold text-ink">
-              Te falta firmar tu contrato
+              {v.contrato_id ? 'Te falta firmar tu documento' : 'Nos falta tu autorización de datos'}
             </h2>
             <p className="text-sm text-ink/70 mt-1.5">
-              {v.titulo}{v.numero ? ` · ${v.numero}` : ''}. Es el acuerdo que nos permite
-              {user.rol === 'propietario' ? ' administrar tu vehículo' : ' alquilarte un vehículo'}.
-              Se firma en un minuto desde el celular.
+              {v.contrato_id
+                ? `${v.titulo}${v.numero ? ` · ${v.numero}` : ''}. Ya está listo: solo falta tu firma.`
+                : 'Necesitamos que autorices el tratamiento de tus datos para poder verificar tu identidad. Se lee y se marca en un minuto.'}
             </p>
 
             {faltanDatos ? (
@@ -83,10 +86,14 @@ export default function RecordatorioVinculacion() {
           </button>
           <button
             type="button"
-            onClick={() => router.push(faltanDatos ? '/completar-perfil' : `/contratos/${v.contrato_id}`)}
+            onClick={() => router.push(
+              faltanDatos ? '/completar-perfil?next=/autorizacion-datos'
+                : v.contrato_id ? `/contratos/${v.contrato_id}`
+                  : '/autorizacion-datos',
+            )}
             className="flex-1 rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90"
           >
-            {faltanDatos ? 'Completar mis datos' : 'Firmar ahora'}
+            {faltanDatos ? 'Completar mis datos' : v.contrato_id ? 'Firmar ahora' : 'Leer y autorizar'}
           </button>
         </div>
       </div>
