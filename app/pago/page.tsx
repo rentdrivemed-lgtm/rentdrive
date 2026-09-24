@@ -264,6 +264,20 @@ function PagoContent() {
     };
     try {
       const publicKey = process.env.NEXT_PUBLIC_WOMPI_PUBLIC_KEY || '';
+      // Defensa en profundidad. Si esta clave llega vacía, el widget de Wompi falla con
+      // un error genérico y el cliente se queda mirando «no se pudo abrir el formulario»
+      // sin saber qué hacer — y como es la vía por defecto, se pierde la reserva.
+      // Ocurrió en producción (sep-2026): la variable estaba en Railway pero no
+      // declarada como build-arg en el Dockerfile, así que Next la inlineó vacía. Ahora
+      // `npm run build` lo impide (scripts/verificar-env-publicas.mjs); esto es el
+      // segundo cinturón, para que un fallo de configuración NO cueste una venta: se le
+      // dice qué pasa y se le ofrece la salida que sí funciona.
+      if (!publicKey) {
+        console.error('[pago] NEXT_PUBLIC_WOMPI_PUBLIC_KEY vacía: el widget de Wompi no puede abrir.');
+        setError('El pago con tarjeta no está disponible en este momento. Puedes elegir "Efectivo" y pagar al recoger el vehículo, o intentarlo más tarde.');
+        setLoading(false);
+        return;
+      }
       await openCardTokenizer(publicKey, (source) => {
         tokenRecibido = true;
         window.removeEventListener('focus', liberarSiCierraSinPagar);
@@ -271,7 +285,8 @@ function PagoContent() {
       });
       window.addEventListener('focus', liberarSiCierraSinPagar);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'No se pudo abrir el formulario de pago. Intenta de nuevo.');
+      const detalle = e instanceof Error ? e.message : 'No se pudo abrir el formulario de pago.';
+      setError(`${detalle} Si el problema sigue, elige "Efectivo" y paga al recoger el vehículo.`);
       setLoading(false);
     }
   };
