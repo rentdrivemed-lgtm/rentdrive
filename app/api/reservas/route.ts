@@ -7,11 +7,12 @@ import { generarCotizacion } from '@/lib/contabilidad';
 import { consumirCreditos } from '@/lib/referidos';
 import { perfilIncompleto, CODIGO_PERFIL_INCOMPLETO } from '@/lib/perfil';
 import { mapaDocumentos } from '@/lib/documentos-ref';
+import { bloqueadoPorCsrf } from '@/lib/csrf';
 import { correoNoVerificado, CODIGO_CORREO_NO_VERIFICADO } from '@/lib/verificacion-correo';
 import { vinculacionAlDia } from '@/lib/contratos-vinculacion';
 import { CODIGO_VINCULACION_PENDIENTE } from '@/lib/contratos-vinculacion-texto';
 import { esMetodoPagoWeb } from '@/lib/metodo-pago-web';
-import { obtenerTokensAceptacion, crearFuentePago, crearTransaccion, esperarResultadoTransaccion } from '@/lib/pagos';
+import { obtenerTokensAceptacion, crearFuentePago, crearTransaccion, esperarResultadoTransaccion, anularTransaccion } from '@/lib/pagos';
 // Reglas de negocio compartidas con la vía de mostrador (POST /api/admin/reservas).
 // Ver lib/reserva-core.ts: ahí viven mínimo de noches, documentos (incluido el
 // contraste del pasaporte contra el tipo de documento registrado), lugares,
@@ -20,7 +21,7 @@ import { obtenerTokensAceptacion, crearFuentePago, crearTransaccion, esperarResu
 // (solo rol 'usuario', gates de correo verificado y perfil completo, cobro
 // inmediato con Wompi justo antes de insertar, y correo de "solicitud recibida").
 import {
-  validarNochesMinimasCliente, consumirAutorizacionDiaSuelto, validarDocumentosReserva, resolverDocumentosIdentidad, validarLugaresReserva,
+  validarNochesMinimasCliente, consumirAutorizacionDiaSuelto, validarFormatoFechas, MIN_NOCHES_POR_VIA, validarDocumentosReserva, resolverDocumentosIdentidad, validarLugaresReserva,
   cargarVehiculoReservable, validarDisponibilidadFechas,
   leerPerfilOperacion, resolverDatosOperacion, guardarDatosOperacionEnPerfil,
   precargarDocumentosEnPerfil, calcularCobroReserva, insertarReserva,
@@ -132,7 +133,23 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ reservas, stats });
 }
 
+/**
+ * Cuántas solicitudes puede tener un cliente a la vez sin pagar ni confirmar.
+ *
+ * Existe desde que se puede reservar en efectivo: una reserva pendiente bloquea el
+ * vehículo en el calendario, y sin cobro de por medio no había nada que impidiera a
+ * una cuenta bloquear toda la flota. 3 es holgado para un cliente real (puede estar
+ * comparando fechas o carros) y corta el abuso en seco.
+ */
+const MAX_RESERVAS_PENDIENTES_SIN_PAGAR = 3;
+
 export async function POST(req: NextRequest) {
+  // Mismo blindaje que el resto de rutas mutantes. Importa más desde que reservar ya
+  // no exige token de tarjeta: sin él, un form cross-site podía crear reservas a
+  // nombre de cualquiera que tuviera sesión abierta.
+  const csrf = bloqueadoPorCsrf(req);
+  if (csrf) return csrf;
+
   const user = await getCurrentUser();
   if (!user || user.rol !== 'usuario') {
     return NextResponse.json({ error: 'Solo usuarios pueden reservar' }, { status: 403 });
@@ -171,10 +188,10 @@ export async function POST(req: NextRequest) {
   if (!vehiculo_id || !fecha_inicio || !fecha_fin) {
     return NextResponse.json({ error: 'Faltan datos' }, { status: 400 });
   }
-  // Cómo dice el cliente que va a pagar. NO es un cobro: la reserva nace
-  // `pago_estado: 'pendiente'` en los tres casos y la plata entra fuera de la
-  // plataforma. Un valor desconocido cae a 'tarjeta', que es lo único que se podía
-  // elegir antes de que existiera el selector.
+  // Cómo va a pagar el cliente. OJO, cambió con la pasarela: con 'tarjeta' SÍ se cobra
+  // acá mismo y la reserva puede quedar `pago_estado: 'pagado'`; con 'efectivo' o
+  // 'transferencia' no se pasa por Wompi y queda 'pendiente'. Un valor desconocido cae
+  // a 'tarjeta', que es el comportamiento más exigente de los tres.
   const metodoPagoWeb = esMetodoPagoWeb(metodo_pago) ? metodo_pago : 'tarjeta';
 
   const documentosBody = {
@@ -196,6 +213,34 @@ export async function POST(req: NextRequest) {
   }
 
   const db = getDb();
+
+  // ⚠️ FORMATO DE FECHAS — esto NO puede faltar acá. La vía pública nunca lo validó
+  // (ver la nota de `validarFormatoFechas`): una fecha basura daba `noches = NaN`, y
+  // como `NaN < 2` es `false`, se colaba por el mínimo de noches. Mientras el cobro con
+  // tarjeta era obligatorio el daño se cortaba solo —`Math.round(NaN*100)` hacía fallar
+  // la pasarela antes del INSERT—, pero desde que se puede pagar en efectivo esa barrera
+  // ya no existe: la reserva entraba con `total` NULL (better-sqlite3 liga NaN como
+  // NULL), saltándose el mínimo y bloqueando el vehículo. Mostrador ya lo validaba.
+  const errFormato = validarFormatoFechas(fecha_inicio, fecha_fin);
+  if (errFormato) return NextResponse.json({ error: errFormato.error }, { status: errFormato.status });
+
+  // ── Tope de reservas pendientes sin pagar ──────────────────────────────
+  // Una reserva `pendiente` YA bloquea el vehículo (el solapamiento y el calendario
+  // público cuentan todo lo que no esté cancelado). Mientras el cobro con tarjeta era
+  // obligatorio eso tenía un costo real; desde que se puede reservar en efectivo, una
+  // sola cuenta podría sacar la flota entera del mercado en un bucle, gratis. El tope
+  // es por CLIENTE y solo mira lo que sigue pendiente de pago y sin confirmar: quien
+  // paga, o a quien le confirman la reserva, puede seguir reservando sin límite.
+  const pendientesSinPagar = db.prepare(`
+    SELECT COUNT(*) AS n FROM reservas
+    WHERE usuario_id = ? AND estado = 'pendiente' AND pago_estado = 'pendiente'
+  `).get(user.id) as { n: number };
+  if ((Number(pendientesSinPagar?.n) || 0) >= MAX_RESERVAS_PENDIENTES_SIN_PAGAR) {
+    return NextResponse.json({
+      error: `Tienes ${MAX_RESERVAS_PENDIENTES_SIN_PAGAR} solicitudes de reserva sin pagar todavía. `
+        + 'Espera a que las confirmemos o cancela alguna antes de pedir otra.',
+    }, { status: 429 });
+  }
 
   // Vía 'publica' = el mínimo real del negocio (MIN_NOCHES_RESERVA, hoy 2 noches).
   // Quien reserva por la web no tiene a nadie del equipo evaluando el caso, así que el
@@ -292,7 +337,22 @@ export async function POST(req: NextRequest) {
   let cardBrand = '';
   let cardLast4 = '';
 
-  if (metodoPagoWeb === 'tarjeta') {
+  // Devuelve los créditos de referido que se consumieron arriba. Se llama en TODOS los
+  // caminos de error del cobro: sin esto, un cliente con créditos al que el banco le
+  // rechaza la tarjeta se quedaba sin reserva Y sin créditos.
+  const devolverCreditos = () => {
+    if (creditosUsados > 0) {
+      try { db.prepare('UPDATE usuarios SET creditos_referido = creditos_referido + ? WHERE id = ?').run(creditosUsados, user.id); }
+      catch (e) { console.error('[reservas] No se pudieron devolver los créditos:', e instanceof Error ? e.message : e); }
+    }
+  };
+
+  // Total 0 (los créditos cubren todo, o todos los días son de pico y placa sin
+  // recargo): no hay nada que cobrar. Se salta la pasarela, que rechaza un monto de 0
+  // y devolvía un 502 quemando de paso los créditos del cliente.
+  if (metodoPagoWeb === 'tarjeta' && total <= 0) {
+    pagoEstado = 'pagado';
+  } else if (metodoPagoWeb === 'tarjeta') {
     try {
       const { acceptanceToken, personalAuthToken } = await obtenerTokensAceptacion();
       const fuente = await crearFuentePago({
@@ -316,12 +376,14 @@ export async function POST(req: NextRequest) {
       cardLast4 = final.payment_method?.extra?.last_four || '';
       if (final.status === 'APPROVED') pagoEstado = 'pagado';
       else if (final.status === 'DECLINED' || final.status === 'ERROR' || final.status === 'VOIDED') {
+        devolverCreditos();
         return NextResponse.json({ error: 'El pago fue rechazado. Verifica los datos de tu tarjeta e intenta de nuevo.' }, { status: 402 });
       }
       // Si sigue en PENDING tras esperar, dejamos pago_estado='pendiente' y el
       // webhook de Wompi confirmará el resultado final más adelante.
     } catch (e) {
       console.error('[pagos] Error al cobrar el alquiler:', e instanceof Error ? e.message : e);
+      devolverCreditos();
       return NextResponse.json({ error: 'No se pudo procesar el pago con la pasarela. Intenta de nuevo.' }, { status: 502 });
     }
   }
@@ -333,26 +395,53 @@ export async function POST(req: NextRequest) {
   // una de las dos gane.
   const noches = Math.ceil((new Date(fecha_fin).getTime() - new Date(fecha_inicio).getTime()) / 86400000);
   let autorizacionConsumida = false;
-  const reservaId = db.transaction(() => {
-    const id = insertarReserva(db, {
-      usuarioId: user.id,
-      vehiculoId: Number(vehiculo_id),
-      fechaInicio: fecha_inicio,
-      fechaFin: fecha_fin,
-      total,
-      estado: 'pendiente',
-      pagoEstado,
-      documentos,
-      firmaContrato: firma_contrato || '{}',
-      recogida: recogidaL,
-      entrega: entregaL,
-      recargo,
-      creditosUsados,
-      metodoPago: metodoPagoWeb,
-    });
-    autorizacionConsumida = consumirAutorizacionDiaSuelto(db, user.id, id, noches, 'publica');
-    return id;
-  })();
+  let reservaId: number;
+  try {
+    reservaId = db.transaction(() => {
+      const id = insertarReserva(db, {
+        usuarioId: user.id,
+        vehiculoId: Number(vehiculo_id),
+        fechaInicio: fecha_inicio,
+        fechaFin: fecha_fin,
+        total,
+        estado: 'pendiente',
+        pagoEstado,
+        documentos,
+        firmaContrato: firma_contrato || '{}',
+        recogida: recogidaL,
+        entrega: entregaL,
+        recargo,
+        creditosUsados,
+        metodoPago: metodoPagoWeb,
+      });
+      autorizacionConsumida = consumirAutorizacionDiaSuelto(db, user.id, id, noches, 'publica');
+      // Si esta reserva estaba por debajo del mínimo, la autorización TIENE que haberse
+      // consumido aquí. Que no se consuma significa que otra petición se la llevó entre
+      // el chequeo de arriba y esta transacción: entonces esta reserva no tiene permiso y
+      // se revierte entera. Sin esto, el «un solo uso» no era una garantía sino una
+      // intención: la segunda petición se insertaba igual.
+      if (noches < MIN_NOCHES_POR_VIA['publica'] && !autorizacionConsumida) {
+        throw new Error('La autorización de día suelto ya fue utilizada.');
+      }
+      return id;
+    })();
+  } catch (e) {
+    // El cobro ya se hizo y la reserva NO se pudo crear: lo peor que puede pasar acá.
+    // Se anula la transacción en Wompi y se devuelven los créditos antes de responder,
+    // para que el cliente no quede pagando algo que no existe. Antes, cualquier fallo
+    // en este tramo devolvía un 500 con el cargo aprobado y sin anular.
+    console.error('[reservas] Falló el INSERT tras el cobro:', e instanceof Error ? e.message : e);
+    if (transaccionId) {
+      try { await anularTransaccion(transaccionId); }
+      catch (err) { console.error(`[pagos] ⚠️ NO se pudo anular la transacción ${transaccionId} — revisar a mano en Wompi:`, err instanceof Error ? err.message : err); }
+    }
+    devolverCreditos();
+    const yaUsada = e instanceof Error && e.message.includes('autorización de día suelto');
+    return NextResponse.json(
+      { error: yaUsada ? 'La autorización para alquilar un día ya fue utilizada.' : 'No se pudo crear la reserva. Si te cobraron, el cargo fue anulado.' },
+      { status: yaUsada ? 409 : 500 },
+    );
+  }
 
   if (autorizacionConsumida) {
     console.log(`[reservas] Reserva ${reservaId}: consumida la autorización de día suelto del usuario ${user.id}.`);

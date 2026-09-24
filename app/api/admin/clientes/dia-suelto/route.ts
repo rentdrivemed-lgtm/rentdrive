@@ -30,6 +30,7 @@ import type Database from 'better-sqlite3';
 import { guardArea } from '@/lib/guard';
 import { bloqueadoPorCsrf } from '@/lib/csrf';
 import { registrarAuditoriaEstricta } from '@/lib/permisos';
+import { consumirIntento } from '@/lib/limite-tasa';
 
 const MAX_MOTIVO = 300;
 
@@ -50,6 +51,13 @@ export async function POST(req: NextRequest) {
   const g = await guardArea('usuarios');
   if ('error' in g) return g.error;
   const { db, user, nivel } = g;
+
+  // Tope por EMPLEADO: autorizar es una excepción caso por caso, no algo que se haga
+  // en lote. Sin esto, una sesión (o una robada) podía autorizar a toda la base.
+  const espera = consumirIntento(`dia-suelto:${user.id}`, 20, 60 * 60 * 1000);
+  if (espera !== null) {
+    return NextResponse.json({ error: 'Demasiadas autorizaciones seguidas. Intenta de nuevo más tarde.' }, { status: 429 });
+  }
 
   const body = await req.json().catch(() => ({})) as { usuario_id?: unknown; motivo?: unknown };
   const usuarioId = Number(body.usuario_id);

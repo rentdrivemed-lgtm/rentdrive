@@ -6,12 +6,14 @@
 // equipo sepa qué esperar cuando vaya a confirmarla.
 //
 // ── Por qué existe (sep-2026) ───────────────────────────────────────────────
-// Hasta ahora el checkout EXIGÍA tarjeta de crédito —16 dígitos, titular, vencimiento
-// y CVV— para poder reservar, y eso dejaba fuera a quien paga en efectivo, que es buena
-// parte de los clientes. Además esos campos NUNCA viajaron al servidor: no hay pasarela
-// conectada, así que el formulario validaba el formato de una tarjeta que nadie cobraba
-// y la reserva quedaba igual de pendiente de pago que con cualquier otro método. El
-// cobro ocurre fuera de la plataforma en los tres casos.
+// El checkout EXIGÍA tarjeta para poder reservar, y eso dejaba fuera a quien paga en
+// efectivo, que es buena parte de los clientes.
+//
+// ⚠️ NO son tres métodos equivalentes, y la diferencia es dinero: con 'tarjeta' se cobra
+// DE VERDAD en el momento, a través de Wompi, y la reserva puede quedar
+// `pago_estado: 'pagado'` (ver app/api/reservas/route.ts). Con 'efectivo' y
+// 'transferencia' no se pasa por la pasarela y la reserva queda 'pendiente': la plata
+// entra al recoger el vehículo o por consignación, fuera de la plataforma.
 //
 // ⚠️ Módulo PURO, y por eso vive aparte de lib/reserva-core.ts: lo importa el checkout,
 // que es un componente 'use client', y reserva-core es server-only (better-sqlite3).

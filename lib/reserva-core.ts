@@ -788,6 +788,14 @@ export type NuevaReserva = {
 };
 
 export function insertarReserva(db: DB, r: NuevaReserva): number {
+  // Barrera de último recurso contra un total corrupto. `better-sqlite3` liga `NaN`
+  // como NULL sin quejarse, así que una reserva con el total en NaN entraba a la tabla
+  // con `total` NULL y nadie se enteraba hasta facturar. Quien llame ya debería haber
+  // validado las fechas (`validarFormatoFechas`), que es de donde salía el NaN; esto
+  // está aquí para que NINGUNA vía pueda volver a escribir una reserva sin importe.
+  if (!Number.isFinite(r.total) || r.total < 0) {
+    throw new Error(`Total de reserva inválido (${r.total}): no se inserta.`);
+  }
   const d = r.documentos;
   const result = db.prepare(`
     INSERT INTO reservas (

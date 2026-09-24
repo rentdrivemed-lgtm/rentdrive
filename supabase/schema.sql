@@ -43,6 +43,16 @@ CREATE TABLE IF NOT EXISTS usuarios (
   correo_codigo_expira      TEXT DEFAULT '',
   correo_codigo_generado_at TEXT DEFAULT '',
   correo_codigo_intentos    INTEGER DEFAULT 0,
+  -- Autorización para alquilar UN SOLO DÍA por la web (ver lib/reserva-core.ts).
+  -- Por la web el mínimo son 2 noches; el equipo levanta esa regla para un cliente
+  -- concreto. Es DE UN SOLO USO: se consume al crear la reserva.
+  dia_suelto_autorizado            INTEGER DEFAULT 0,
+  dia_suelto_autorizado_por        INTEGER REFERENCES usuarios(id),
+  dia_suelto_autorizado_por_nombre TEXT DEFAULT '',
+  dia_suelto_autorizado_en         TEXT DEFAULT '',
+  dia_suelto_motivo                TEXT DEFAULT '',
+  dia_suelto_usado_en              TEXT DEFAULT '',
+  dia_suelto_reserva_id            INTEGER,
   created_at            TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
 );
 -- ⚠️ Nota (paridad SQLite↔Supabase): `usuarios.licencia_url` / `usuarios.licencia_url_dorso`
@@ -446,13 +456,18 @@ CREATE TABLE IF NOT EXISTS actas_servicio (
 --     FOREIGN KEY (reserva_id) REFERENCES reservas(id);
 CREATE TABLE IF NOT EXISTS contratos (
   id                  SERIAL PRIMARY KEY,
-  reserva_id          INTEGER NOT NULL,
-  vehiculo_id         INTEGER NOT NULL REFERENCES vehiculos(id),
+  -- Opcionales desde sep-2026: los contratos de VINCULACIÓN (los que se firman al
+  -- crear la cuenta) no tienen reserva ni vehículo. Ver lib/db.ts →
+  -- migrarContratosVinculacion. Para los otros seis tipos siguen llegando llenos.
+  reserva_id          INTEGER,
+  vehiculo_id         INTEGER REFERENCES vehiculos(id),
   -- Partes congeladas: quién era el propietario y quién el cliente EN EL MOMENTO de
   -- emitir. Un cambio de dueño del vehículo no reescribe quién firmó.
-  propietario_id      INTEGER NOT NULL REFERENCES usuarios(id),
-  cliente_id          INTEGER NOT NULL REFERENCES usuarios(id),
-  tipo                TEXT NOT NULL CHECK (tipo IN ('agencia','otrosi-agencia','arrendamiento','otrosi-arrendamiento','acta-entrega','pagare')),
+  -- También opcionales: en un contrato de vinculación solo hay UNA parte además de
+  -- DrivePass — el titular va en `cliente_id` o en `propietario_id` según el tipo.
+  propietario_id      INTEGER REFERENCES usuarios(id),
+  cliente_id          INTEGER REFERENCES usuarios(id),
+  tipo                TEXT NOT NULL CHECK (tipo IN ('agencia','otrosi-agencia','arrendamiento','otrosi-arrendamiento','acta-entrega','pagare','vinculacion-cliente','vinculacion-propietario')),
   -- Consecutivo propio del archivo (CAR-000012, CAR-000012-R2…). Distinto del número
   -- que el texto del documento cita en sus cláusulas.
   numero              TEXT NOT NULL DEFAULT '',
@@ -491,6 +506,16 @@ CREATE TABLE IF NOT EXISTS contratos (
 CREATE INDEX IF NOT EXISTS idx_contratos_reserva ON contratos(reserva_id);
 CREATE INDEX IF NOT EXISTS idx_contratos_cliente ON contratos(cliente_id);
 CREATE INDEX IF NOT EXISTS idx_contratos_propietario ON contratos(propietario_id);
+-- Un titular no puede tener DOS veces el mismo documento de VINCULACIÓN en la misma
+-- versión. El UNIQUE(reserva_id, tipo, version) de la tabla no sirve para estos: con
+-- `reserva_id` NULL, dos NULL nunca colisionan. Parciales y separados, uno por cada
+-- forma de titular. Espejo de lib/db.ts → migrarContratosVinculacion.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_contratos_vinculacion_cliente
+  ON contratos(tipo, version, cliente_id)
+  WHERE reserva_id IS NULL AND cliente_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_contratos_vinculacion_propietario
+  ON contratos(tipo, version, propietario_id)
+  WHERE reserva_id IS NULL AND propietario_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS contrato_firmas (
   id                      SERIAL PRIMARY KEY,
@@ -516,6 +541,10 @@ CREATE TABLE IF NOT EXISTS contrato_firmas (
   firma_metodo            TEXT DEFAULT '',
   firma_ip                TEXT DEFAULT '',
   firma_user_agent        TEXT DEFAULT '',
+  -- Cuenta del equipo que presenció la firma en el mostrador (NULL = la persona firmó
+  -- sola desde su dispositivo). NO sustituye al firmante.
+  asistida_por_id         INTEGER REFERENCES usuarios(id),
+  asistida_por_nombre     TEXT DEFAULT '',
   -- Sello HMAC-SHA256 ('cf1:<hex>'). Ver lib/contratos-firma.ts → calcularSelloFirma.
   firma_hash              TEXT DEFAULT '',
   created_at              TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),

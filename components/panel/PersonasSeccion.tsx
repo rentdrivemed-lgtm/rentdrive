@@ -276,17 +276,21 @@ export default function PersonasSeccion({ miNivel, miId }: { miNivel: AdminNivel
   // se gasta al crear la reserva (ver `consumirAutorizacionDiaSuelto`). El motivo es
   // obligatorio porque es una excepción a una regla del negocio y queda en la bitácora
   // a nombre de quien la concede.
-  const [diaSueltoMotivo, setDiaSueltoMotivo] = useState('');
+  // Un motivo POR CLIENTE: con un solo string, el motivo escrito en una ficha se
+  // enviaba con la autorización de otra si había dos abiertas, y el motivo es la
+  // única justificación auditable de la excepción.
+  const [diaSueltoMotivo, setDiaSueltoMotivo] = useState<Record<number, string>>({});
   const [diaSueltoGuardando, setDiaSueltoGuardando] = useState<number | null>(null);
 
   const cambiarDiaSuelto = async (u: Usuario, autorizar: boolean) => {
-    if (autorizar && !diaSueltoMotivo.trim()) return;
+    const motivo = (diaSueltoMotivo[u.id] || '').trim();
+    if (autorizar && !motivo) return;
     setDiaSueltoGuardando(u.id);
     try {
       const res = await fetch('/api/admin/clientes/dia-suelto', {
         method: autorizar ? 'POST' : 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(autorizar ? { usuario_id: u.id, motivo: diaSueltoMotivo.trim() } : { usuario_id: u.id }),
+        body: JSON.stringify(autorizar ? { usuario_id: u.id, motivo } : { usuario_id: u.id }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { alert(data.error || 'No se pudo cambiar la autorización.'); return; }
@@ -294,10 +298,10 @@ export default function PersonasSeccion({ miNivel, miId }: { miNivel: AdminNivel
       setUsuarios(prev => prev.map(x => x.id === u.id ? {
         ...x,
         dia_suelto_autorizado: autorizar ? 1 : 0,
-        dia_suelto_motivo: autorizar ? diaSueltoMotivo.trim() : '',
+        dia_suelto_motivo: autorizar ? motivo : '',
         dia_suelto_autorizado_por_nombre: autorizar ? (x.dia_suelto_autorizado_por_nombre || '') : '',
       } : x));
-      if (autorizar) setDiaSueltoMotivo('');
+      if (autorizar) setDiaSueltoMotivo(prev => ({ ...prev, [u.id]: '' }));
     } finally {
       setDiaSueltoGuardando(null);
     }
@@ -883,15 +887,15 @@ export default function PersonasSeccion({ miNivel, miId }: { miNivel: AdminNivel
                           </p>
                           <input
                             type="text"
-                            value={diaSueltoMotivo}
-                            onChange={e => setDiaSueltoMotivo(e.target.value.slice(0, 300))}
+                            value={diaSueltoMotivo[u.id] || ''}
+                            onChange={e => setDiaSueltoMotivo(prev => ({ ...prev, [u.id]: e.target.value.slice(0, 300) }))}
                             placeholder="Motivo (obligatorio)"
                             className="w-full border border-border rounded-lg px-2.5 py-1.5 text-xs bg-surface-2 text-ink"
                           />
                           <button
                             type="button"
                             onClick={() => cambiarDiaSuelto(u, true)}
-                            disabled={diaSueltoGuardando === u.id || !diaSueltoMotivo.trim()}
+                            disabled={diaSueltoGuardando === u.id || !(diaSueltoMotivo[u.id] || '').trim()}
                             className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-accent text-white hover:opacity-90 disabled:opacity-50"
                           >
                             {diaSueltoGuardando === u.id ? 'Autorizando…' : 'Autorizar 1 día'}

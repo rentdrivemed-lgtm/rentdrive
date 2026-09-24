@@ -376,7 +376,7 @@ function PagoContent() {
           </div>
 
           {/* Desglose con recargo y créditos */}
-          {(recargo > 0 || creditosDisponibles > 0) && (
+          {(recargo > 0 || creditosDisponibles > 0 || diasPicoPlaca.length > 0 || descuentoDuracion > 0) && (
             <div className="mt-2 pt-2 border-t border-border text-xs space-y-0.5">
               <div className="flex justify-between text-ink/50"><span>Subtotal ({diasCobrados} día{diasCobrados !== 1 ? 's' : ''})</span><span>${subtotalSinDescuento.toLocaleString('es-CO')}</span></div>
               {diasPicoPlaca.length > 0 && (
