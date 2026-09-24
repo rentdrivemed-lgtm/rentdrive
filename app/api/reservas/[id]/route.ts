@@ -9,6 +9,7 @@ import {
 } from '@/lib/cancelacion';
 import { procesarPagoConfirmado } from '@/lib/contabilidad';
 import { procesarRecompensaReferido } from '@/lib/referidos';
+import { anularTransaccion } from '@/lib/pagos';
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
@@ -75,10 +76,13 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
   // ── Qué puede escribir cada rol ───────────────────────────────────────────
   //
-  // ⚠️ CRÍTICO: en esta app NO hay pasarela de pago. Que un administrador apruebe la
-  // reserva (`estado: 'confirmada'` + `pago_estado: 'pagado'`) ES el registro de que
-  // el pago entró: dispara la factura, la liquidación al propietario, la recompensa
-  // del referido y la creación de la operación logística (el carro sale a la calle).
+  // ⚠️ CRÍTICO: `pago_estado` refleja el cobro real (Wompi al crear la reserva desde
+  // la web, el webhook, o la anulación de abajo) — nunca un valor que mande el
+  // cliente. Que un administrador escriba `pago_estado: 'pagado'` a mano sigue
+  // existiendo para las reservas de mostrador (pago en efectivo/transferencia/
+  // datafono, sin pasarela) y ES el registro de que el pago entró: dispara la
+  // factura, la liquidación al propietario, la recompensa del referido y la
+  // creación de la operación logística (el carro sale a la calle).
   // Antes, `estado` y `pago_estado` estaban en una sola lista `allowed` común a todos
   // los roles, así que el propio arrendatario —o el propietario del vehículo— podía
   // hacer PUT {estado:'confirmada', pago_estado:'pagado'} sobre su propia reserva y
@@ -144,6 +148,24 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     }
   }
 
+  // Al RECHAZAR (admin) una reserva que ya se había cobrado EN LÍNEA con Wompi
+  // (nace con wompi_transaccion_id, ver app/api/reservas/route.ts), intentamos
+  // reversar el cobro en la pasarela. Si la reversa falla (p. ej. fuera de la
+  // ventana permitida), dejamos pago_estado como estaba y el admin debe reembolsar
+  // manualmente. No aplica a reservas de mostrador (sin wompi_transaccion_id): esas
+  // se pagan en efectivo/transferencia/datafono y no hay nada que reversar acá.
+  const anulacion: { intentada: boolean; ok: boolean } = { intentada: false, ok: false };
+  if (user.rol === 'admin' && body.estado === 'cancelada' && reserva.pago_estado === 'pagado' && reserva.wompi_transaccion_id) {
+    anulacion.intentada = true;
+    try {
+      await anularTransaccion(String(reserva.wompi_transaccion_id));
+      db.prepare(`UPDATE reservas SET pago_estado = 'cancelado' WHERE id = ?`).run(Number(id));
+      anulacion.ok = true;
+    } catch (e) {
+      console.error('[pagos] No se pudo anular el cobro al rechazar la reserva:', e instanceof Error ? e.message : e);
+    }
+  }
+
   // Al confirmarse el pago (nunca antes): factura + liquidación al propietario,
   // y si el cliente fue referido, la recompensa a quien lo invitó.
   // Aislado en try/catch — un fallo aquí no debe romper la confirmación del pago.
@@ -204,5 +226,9 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     await crearOperacionYNotificar(db, Number(id));
   }
 
-  return NextResponse.json({ ok: true, ...(politicaAplicada ? { cancelacion_pct: politicaAplicada.pct, cancelacion_motivo: politicaAplicada.motivo } : {}) });
+  return NextResponse.json({
+    ok: true,
+    ...(politicaAplicada ? { cancelacion_pct: politicaAplicada.pct, cancelacion_motivo: politicaAplicada.motivo } : {}),
+    ...(anulacion.intentada ? { pago_anulado: anulacion.ok } : {}),
+  });
 }

@@ -11,13 +11,14 @@ import { correoNoVerificado, CODIGO_CORREO_NO_VERIFICADO } from '@/lib/verificac
 import { vinculacionAlDia } from '@/lib/contratos-vinculacion';
 import { CODIGO_VINCULACION_PENDIENTE } from '@/lib/contratos-vinculacion-texto';
 import { esMetodoPagoWeb } from '@/lib/metodo-pago-web';
+import { obtenerTokensAceptacion, crearFuentePago, crearTransaccion, esperarResultadoTransaccion } from '@/lib/pagos';
 // Reglas de negocio compartidas con la vía de mostrador (POST /api/admin/reservas).
 // Ver lib/reserva-core.ts: ahí viven mínimo de noches, documentos (incluido el
 // contraste del pasaporte contra el tipo de documento registrado), lugares,
 // vehículo reservable, solapamiento, calendario del propietario, datos de la
 // operación, cobro e INSERT. Esta ruta conserva TODO lo que es propio de ella
-// (solo rol 'usuario', gates de correo verificado y perfil completo, reserva que
-// nace pendiente y correo de "solicitud recibida").
+// (solo rol 'usuario', gates de correo verificado y perfil completo, cobro
+// inmediato con Wompi justo antes de insertar, y correo de "solicitud recibida").
 import {
   validarNochesMinimasCliente, consumirAutorizacionDiaSuelto, validarDocumentosReserva, resolverDocumentosIdentidad, validarLugaresReserva,
   cargarVehiculoReservable, validarDisponibilidadFechas,
@@ -165,7 +166,7 @@ export async function POST(req: NextRequest) {
     licencia_url, licencia_url_dorso,
     firma_contrato, recogida, entrega, usar_creditos,
     direccion, ciudad, emergencia_nombre, emergencia_tel,
-    metodo_pago,
+    metodo_pago, card_token,
   } = await req.json();
   if (!vehiculo_id || !fecha_inicio || !fecha_fin) {
     return NextResponse.json({ error: 'Faltan datos' }, { status: 400 });
@@ -186,6 +187,13 @@ export async function POST(req: NextRequest) {
   const errDocs = validarDocumentosReserva(documentosBody);
   if (errDocs) return NextResponse.json({ error: errDocs.error }, { status: errDocs.status });
   if (!firma_contrato) return NextResponse.json({ error: 'Debes aceptar el contrato.' }, { status: 400 });
+  // El token de la tarjeta SOLO se exige a quien eligió pagar con tarjeta. Quien paga
+  // en efectivo o por transferencia no pasa por la pasarela: su reserva nace pendiente
+  // de pago y la plata entra al recoger el vehículo. Antes se exigía siempre, y eso
+  // dejaba sin poder reservar a todo el que no tuviera tarjeta.
+  if (metodoPagoWeb === 'tarjeta' && !card_token) {
+    return NextResponse.json({ error: 'Falta el token de la tarjeta.' }, { status: 400 });
+  }
 
   const db = getDb();
 
@@ -269,11 +277,60 @@ export async function POST(req: NextRequest) {
   const creditosUsados = usar_creditos ? consumirCreditos(db, user.id, totalBruto) : 0;
   const total = totalBruto - creditosUsados;
 
+  // ── Cobro ───────────────────────────────────────────────────────────────
+  //
+  // Con TARJETA se cobra ANTES de insertar la reserva: si el banco rechaza, no se
+  // crea nada. Con EFECTIVO o TRANSFERENCIA no hay nada que cobrar acá — la reserva
+  // nace `pago_estado: 'pendiente'` y la plata entra al recoger el vehículo o por
+  // consignación, como venía pasando antes de que existiera la pasarela.
+  let fuentePagoId: number | undefined;
+  let transaccionId = '';
+  let pagoEstado: 'pagado' | 'pendiente' = 'pendiente';
+  // Marca/últimos 4 salen de la respuesta de Wompi, no del navegador: desde que
+  // el checkout usa su widget para tokenizar, nunca vemos el número de la
+  // tarjeta como para derivarlos nosotros.
+  let cardBrand = '';
+  let cardLast4 = '';
+
+  if (metodoPagoWeb === 'tarjeta') {
+    try {
+      const { acceptanceToken, personalAuthToken } = await obtenerTokensAceptacion();
+      const fuente = await crearFuentePago({
+        token: card_token, correo: user.correo, acceptanceToken, personalAuthToken,
+      });
+      fuentePagoId = fuente.id;
+
+      const transaccion = await crearTransaccion({
+        montoEnCentavos: Math.round(total * 100),
+        referencia: `alquiler-${user.id}-${Date.now()}`,
+        correo: user.correo,
+        acceptanceToken,
+        fuentePagoId: fuente.id,
+      });
+      const final = transaccion.status === 'PENDING'
+        ? await esperarResultadoTransaccion(transaccion.id)
+        : transaccion;
+
+      transaccionId = final.id;
+      cardBrand = final.payment_method?.extra?.brand || '';
+      cardLast4 = final.payment_method?.extra?.last_four || '';
+      if (final.status === 'APPROVED') pagoEstado = 'pagado';
+      else if (final.status === 'DECLINED' || final.status === 'ERROR' || final.status === 'VOIDED') {
+        return NextResponse.json({ error: 'El pago fue rechazado. Verifica los datos de tu tarjeta e intenta de nuevo.' }, { status: 402 });
+      }
+      // Si sigue en PENDING tras esperar, dejamos pago_estado='pendiente' y el
+      // webhook de Wompi confirmará el resultado final más adelante.
+    } catch (e) {
+      console.error('[pagos] Error al cobrar el alquiler:', e instanceof Error ? e.message : e);
+      return NextResponse.json({ error: 'No se pudo procesar el pago con la pasarela. Intenta de nuevo.' }, { status: 502 });
+    }
+  }
+
   // El INSERT y el consumo de la autorización de día suelto van en la MISMA
   // transacción: si se consumiera aparte, dos peticiones simultáneas del mismo cliente
-  // podrían pasar las dos la validación de arriba y gastar una sola autorización en dos
-  // reservas de un día. El `WHERE dia_suelto_autorizado = 1` del UPDATE es lo que hace
-  // que solo una de las dos gane.
+  // podrían pasar las dos la validación y gastar una sola autorización en dos reservas
+  // de un día. El `WHERE dia_suelto_autorizado = 1` del UPDATE es lo que hace que solo
+  // una de las dos gane.
   const noches = Math.ceil((new Date(fecha_fin).getTime() - new Date(fecha_inicio).getTime()) / 86400000);
   let autorizacionConsumida = false;
   const reservaId = db.transaction(() => {
@@ -284,7 +341,7 @@ export async function POST(req: NextRequest) {
       fechaFin: fecha_fin,
       total,
       estado: 'pendiente',
-      pagoEstado: 'pendiente',
+      pagoEstado,
       documentos,
       firmaContrato: firma_contrato || '{}',
       recogida: recogidaL,
@@ -299,6 +356,19 @@ export async function POST(req: NextRequest) {
 
   if (autorizacionConsumida) {
     console.log(`[reservas] Reserva ${reservaId}: consumida la autorización de día suelto del usuario ${user.id}.`);
+  }
+
+  // `wompi_transaccion_id` es propio de esta vía (no existe en NuevaReserva /
+  // insertarReserva, que también sirve al mostrador): se fija en un UPDATE aparte.
+  if (transaccionId) {
+    db.prepare('UPDATE reservas SET wompi_transaccion_id = ? WHERE id = ?').run(transaccionId, reservaId);
+  }
+
+  if (fuentePagoId) {
+    db.prepare(`
+      INSERT INTO fuentes_pago (usuario_id, wompi_fuente_id, marca, ultimos4)
+      VALUES (?, ?, ?, ?)
+    `).run(user.id, fuentePagoId, cardBrand, cardLast4);
   }
 
   try {
@@ -316,5 +386,5 @@ export async function POST(req: NextRequest) {
     console.error('[contabilidad] No se pudo generar la cotización:', e instanceof Error ? e.message : e);
   }
 
-  return NextResponse.json({ id: reservaId, total, recargo, creditos_usados: creditosUsados }, { status: 201 });
+  return NextResponse.json({ id: reservaId, total, recargo, creditos_usados: creditosUsados, pago_estado: pagoEstado }, { status: 201 });
 }

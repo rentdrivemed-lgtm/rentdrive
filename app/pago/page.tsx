@@ -9,6 +9,7 @@ import { validarDireccion, validarCiudad, validarNombreContacto, validarTelefono
 import { diasRestringidosEnRango, parsePicoPlaca, picoPlacaVacio, type PicoPlaca } from '@/lib/pico-placa';
 import { factorDuracion, DESCUENTO_DURACION_PCT } from '@/lib/rentabilidad';
 import { METODOS_PAGO_WEB, METODO_PAGO_WEB_LABEL, METODO_PAGO_WEB_AYUDA, type MetodoPagoWeb } from '@/lib/metodo-pago-web';
+import { openCardTokenizer } from '@/lib/wompi-widget-client';
 
 type Vehiculo = {
   id: number; marca: string; modelo: string; anio: number;
@@ -22,23 +23,6 @@ type User = {
   tipo_documento?: string;
   cedula_url?: string; cedula_url_dorso?: string; licencia_url?: string;
 };
-
-function detectarTarjeta(num: string) {
-  const n = num.replace(/\s/g, '');
-  if (/^4/.test(n)) return 'Visa';
-  if (/^5[1-5]/.test(n) || /^2[2-7]\d{2}/.test(n)) return 'Mastercard';
-  if (/^3[47]/.test(n)) return 'Amex';
-  return null;
-}
-
-function formatNumero(v: string) {
-  return v.replace(/\D/g, '').slice(0, 16).replace(/(.{4})/g, '$1 ').trim();
-}
-
-function formatVence(v: string) {
-  const c = v.replace(/\D/g, '').slice(0, 4);
-  return c.length >= 3 ? c.slice(0, 2) + '/' + c.slice(2) : c;
-}
 
 function PagoContent() {
   const params = useSearchParams();
@@ -88,17 +72,13 @@ function PagoContent() {
   const [firmaNombre, setFirmaNombre] = useState('');
   const [aceptado, setAceptado] = useState(false);
 
-  // Step 3 — Pago
-  const [numero, setNumero] = useState('');
-  // Cómo va a pagar el cliente. Hasta sep-2026 el checkout EXIGÍA tarjeta (16
-  // dígitos, titular, vencimiento y CVV) para poder reservar, y eso dejaba fuera a
-  // quien paga en efectivo. Los datos de la tarjeta nunca viajaron al servidor —no
-  // hay pasarela conectada—, así que la reserva nace `pago_estado: 'pendiente'` con
-  // cualquiera de las tres opciones y el cobro ocurre fuera de la plataforma.
+  // Step 3 — Pago (el número/CVV los captura el widget de Wompi, nunca este componente).
+  //
+  // Cómo va a pagar el cliente. Con 'tarjeta' se abre el widget de Wompi y se cobra en
+  // el momento; con 'efectivo' o 'transferencia' no se pasa por la pasarela y la reserva
+  // nace pendiente de pago. La tarjeta dejó de ser obligatoria porque hay clientes que
+  // pagan en efectivo, y exigirla los dejaba sin poder reservar.
   const [metodoPago, setMetodoPago] = useState<MetodoPagoWeb>('tarjeta');
-  const [nombreTarjeta, setNombreTarjeta] = useState('');
-  const [vence, setVence] = useState('');
-  const [cvv, setCvv] = useState('');
   const [usarCreditos, setUsarCreditos] = useState(true);
 
   const cargarInicial = () => {
@@ -202,34 +182,12 @@ function PagoContent() {
   const creditosDisponibles = user?.creditos_referido || 0;
   const creditosAplicados = usarCreditos ? Math.min(creditosDisponibles, totalBruto) : 0;
   const total = totalBruto - creditosAplicados;
-  const tipoTarj = detectarTarjeta(numero);
-  const bgTarjeta = tipoTarj === 'Visa'
-    ? 'from-brand to-brand/80'
-    : tipoTarj === 'Mastercard'
-    ? 'from-danger to-orange-500'
-    : 'from-brand to-accent';
 
-  const pagar = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-
-    // Los datos de la tarjeta solo se exigen si el cliente eligió pagar con tarjeta.
-    if (metodoPago === 'tarjeta') {
-      const limpio = numero.replace(/\s/g, '');
-      if (limpio.length !== 16) { setError('El número de tarjeta debe tener 16 dígitos.'); return; }
-      if (!nombreTarjeta.trim()) { setError('Ingresa el nombre del titular de la tarjeta.'); return; }
-
-      const [mm, aa] = vence.split('/').map(Number);
-      const ahora = new Date();
-      const expAnio = 2000 + (aa || 0);
-      if (!mm || mm < 1 || mm > 12 || !aa ||
-          expAnio < ahora.getFullYear() ||
-          (expAnio === ahora.getFullYear() && mm < ahora.getMonth() + 1)) {
-        setError('Fecha de vencimiento inválida.'); return;
-      }
-      if (cvv.length < 3) { setError('CVV inválido.'); return; }
-    }
-
+  // Con el token que devuelve el widget de Wompi, crear la reserva: el backend
+  // cobra el alquiler completo de una vez y guarda la tarjeta tokenizada para
+  // cargos futuros (marca/últimos 4 los deriva el propio backend de la
+  // respuesta de Wompi — el navegador ya no ve el número de la tarjeta).
+  const crearReserva = async (cardToken: string) => {
     setLoading(true);
     try {
       const res = await fetch('/api/reservas', {
@@ -252,6 +210,7 @@ function PagoContent() {
           metodo_pago: metodoPago,
           recogida,
           entrega,
+          card_token: cardToken,
           firma_contrato: JSON.stringify({
             nombre: firmaNombre,
             fecha: new Date().toISOString(),
@@ -288,6 +247,35 @@ function PagoContent() {
     }
   };
 
+  // Abre el formulario de tarjeta de Wompi (modal propio, nada del número/CVV
+  // pasa por nuestra página). Si la persona lo cierra sin pagar, Wompi no
+  // avisa — por eso, al recuperar el foco la ventana, si no llegó el token en
+  // ese ratito, se libera el botón para que pueda reintentar.
+  const pagar = async () => {
+    setError('');
+    // Sin tarjeta no hay nada que tokenizar: se crea la reserva directamente y queda
+    // pendiente de pago, para cobrarla al recoger el vehículo o por transferencia.
+    if (metodoPago !== 'tarjeta') { await crearReserva(''); return; }
+    setLoading(true);
+    let tokenRecibido = false;
+    const liberarSiCierraSinPagar = () => {
+      window.removeEventListener('focus', liberarSiCierraSinPagar);
+      setTimeout(() => { if (!tokenRecibido) setLoading(false); }, 500);
+    };
+    try {
+      const publicKey = process.env.NEXT_PUBLIC_WOMPI_PUBLIC_KEY || '';
+      await openCardTokenizer(publicKey, (source) => {
+        tokenRecibido = true;
+        window.removeEventListener('focus', liberarSiCierraSinPagar);
+        crearReserva(source.token);
+      });
+      window.addEventListener('focus', liberarSiCierraSinPagar);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo abrir el formulario de pago. Intenta de nuevo.');
+      setLoading(false);
+    }
+  };
+
   /* ── ÉXITO ── */
   if (exito) {
     return (
@@ -296,7 +284,9 @@ function PagoContent() {
           <div className="w-16 h-16 rounded-full bg-warning/15 flex items-center justify-center mx-auto mb-4">
             <span className="text-3xl">⏳</span>
           </div>
-          <h1 className="text-2xl font-bold text-ink mb-1">¡Solicitud enviada!</h1>
+          <h1 className="text-2xl font-bold text-ink mb-1">
+            {metodoPago === 'tarjeta' ? '¡Pago exitoso!' : '¡Reserva registrada!'}
+          </h1>
           <p className="text-ink/50 mb-0.5">{vehiculo?.marca} {vehiculo?.modelo} {vehiculo?.anio}</p>
           <p className="text-ink/50 text-sm mb-4">{fecha_inicio} → {fecha_fin} · {dias} día{dias !== 1 ? 's' : ''}</p>
           <p className="text-accent font-bold text-2xl mb-5">${total.toLocaleString('es-CO')}</p>
@@ -304,8 +294,15 @@ function PagoContent() {
           <div className="bg-warning/10 border border-warning/25 rounded-2xl px-5 py-4 text-left mb-4">
             <p className="text-xs font-bold text-warning mb-1.5 uppercase tracking-wide">¿Qué sigue?</p>
             <p className="text-sm text-warning">
-              Tu solicitud está <strong>pendiente de aprobación</strong> por el equipo DrivePass.
-              Recibirás una notificación en tu chat cuando sea aprobada o rechazada, normalmente en menos de 24 horas.
+              {metodoPago === 'tarjeta'
+                ? 'Ya cobramos el valor del alquiler a tu tarjeta. '
+                : metodoPago === 'efectivo'
+                  ? 'El pago lo haces en efectivo al recoger el vehículo. '
+                  : 'Te enviamos los datos de la cuenta para la transferencia. '}
+              Tu reserva está <strong>pendiente de aprobación operativa</strong>
+              (documentos y disponibilidad) por el equipo DrivePass. Recibirás una notificación en tu chat cuando sea aprobada o rechazada,
+              normalmente en menos de 24 horas.
+              {metodoPago === 'tarjeta' && ' Si se rechaza, el cobro se anula automáticamente.'}
             </p>
           </div>
 
@@ -670,8 +667,10 @@ function PagoContent() {
           <p className="text-[10px] font-bold text-ink/50 uppercase tracking-widest mb-4">Paso 3 de 3 — Cómo vas a pagar</p>
 
           {/* Selector de método. La tarjeta dejó de ser obligatoria: hay clientes que
-              pagan en efectivo. En los tres casos la reserva queda PENDIENTE DE PAGO y
-              el cobro se hace fuera de la plataforma. */}
+              pagan en efectivo, y exigirla los dejaba sin poder reservar. Con 'tarjeta'
+              se abre el widget de Wompi y se cobra en el momento; con 'efectivo' o
+              'transferencia' no se pasa por la pasarela y la reserva queda pendiente
+              de pago, para cobrarla al recoger el vehículo. */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mb-5">
             {METODOS_PAGO_WEB.map(m => (
               <button
@@ -701,87 +700,24 @@ function PagoContent() {
             </div>
           )}
 
-          <div className={`relative rounded-2xl p-5 mb-5 bg-gradient-to-br ${bgTarjeta} text-white overflow-hidden ${metodoPago === 'tarjeta' ? '' : 'hidden'}`}
+          <div className={`relative rounded-2xl p-5 mb-5 bg-gradient-to-br from-brand to-accent text-white overflow-hidden ${metodoPago === 'tarjeta' ? '' : 'hidden'}`}
             style={{ minHeight: 130 }}>
             <div className="absolute -top-8 -right-8 w-32 h-32 rounded-full bg-white/10" />
             <div className="absolute -bottom-6 -left-6 w-24 h-24 rounded-full bg-white/10" />
-            <p className="text-[10px] uppercase tracking-widest opacity-60 mb-4 relative z-10">
-              {tipoTarj || 'Tarjeta de crédito'}
-            </p>
-            <p className="text-lg font-mono tracking-widest mb-4 relative z-10">
-              {numero || '•••• •••• •••• ••••'}
-            </p>
-            <div className="flex justify-between items-end relative z-10">
-              <div>
-                <p className="text-[9px] uppercase opacity-50 mb-0.5">Titular</p>
-                <p className="text-sm font-semibold tracking-wide">{nombreTarjeta || 'NOMBRE APELLIDO'}</p>
-              </div>
-              <div className="text-right">
-                <p className="text-[9px] uppercase opacity-50 mb-0.5">Vence</p>
-                <p className="text-sm font-mono">{vence || 'MM/AA'}</p>
-              </div>
+            <div className="relative z-10 h-full flex flex-col justify-center items-center text-center gap-2 py-4">
+              <IconShield size={28} />
+              <p className="text-sm font-semibold">Vas a ingresar los datos de tu tarjeta directo en el formulario seguro de Wompi</p>
+              <p className="text-[11px] opacity-75">Nunca pasan por nuestra página — se abre en su propio formulario protegido</p>
             </div>
           </div>
 
-          <form onSubmit={pagar} className="space-y-3">
-            {/* Los datos de la tarjeta solo se piden —y solo se validan— cuando el
-                cliente eligió pagar con tarjeta. Ver `pagar()` más arriba. */}
-            <div className={metodoPago === 'tarjeta' ? 'space-y-3' : 'hidden'}>
-            <div>
-              <label className="text-xs font-semibold text-ink/60 block mb-1.5 uppercase tracking-wide">
-                Número de tarjeta
-              </label>
-              <input
-                type="text" inputMode="numeric"
-                placeholder="1234 5678 9012 3456"
-                value={numero}
-                onChange={e => setNumero(formatNumero(e.target.value))}
-                maxLength={19}
-                className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink font-mono bg-surface-2 focus:outline-none focus:ring-2 focus:ring-accent/40"
-              />
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-ink/60 block mb-1.5 uppercase tracking-wide">
-                Nombre en la tarjeta
-              </label>
-              <input
-                type="text"
-                placeholder="Como aparece en la tarjeta"
-                value={nombreTarjeta}
-                onChange={e => setNombreTarjeta(e.target.value.toUpperCase())}
-                className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink font-mono uppercase bg-surface-2 focus:outline-none focus:ring-2 focus:ring-accent/40"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-semibold text-ink/60 block mb-1.5 uppercase tracking-wide">
-                  Vencimiento
-                </label>
-                <input
-                  type="text" inputMode="numeric"
-                  placeholder="MM/AA"
-                  value={vence}
-                  onChange={e => setVence(formatVence(e.target.value))}
-                  maxLength={5}
-                  className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink font-mono bg-surface-2 focus:outline-none focus:ring-2 focus:ring-accent/40"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-semibold text-ink/60 block mb-1.5 uppercase tracking-wide">
-                  CVV
-                </label>
-                <input
-                  type="text" inputMode="numeric"
-                  placeholder="•••"
-                  value={cvv}
-                  onChange={e => setCvv(e.target.value.replace(/\D/g, '').slice(0, 4))}
-                  maxLength={4}
-                  className="w-full border border-border rounded-xl px-3 py-2.5 text-sm text-ink font-mono bg-surface-2 focus:outline-none focus:ring-2 focus:ring-accent/40"
-                />
-              </div>
-            </div>
+          <div className="space-y-3">
+            {/* El aviso del titular solo aplica a quien paga con tarjeta. */}
+            <div className={`items-center gap-2 bg-surface rounded-xl px-3 py-2.5 border border-border ${metodoPago === 'tarjeta' ? 'flex' : 'hidden'}`}>
+              <IconShield size={14} className="text-accent flex-shrink-0" />
+              <p className="text-[11px] text-ink/50">
+                La tarjeta debe estar a nombre de la persona que conducirá el vehículo
+              </p>
             </div>
 
             {error && (
@@ -790,19 +726,13 @@ function PagoContent() {
               </div>
             )}
 
-            <div className="flex items-center gap-2 bg-surface rounded-xl px-3 py-2.5 border border-border">
-              <IconShield size={14} className="text-accent flex-shrink-0" />
-              <p className="text-[11px] text-ink/50">
-                La tarjeta debe estar a nombre de la persona que conducirá el vehículo
-              </p>
-            </div>
-
             <div className="flex gap-3 pt-1">
               <button type="button" onClick={() => { setStep(2); setError(''); }}
-                className="flex-none border border-border text-ink/60 font-medium px-4 py-3 rounded-xl text-sm hover:bg-surface transition">
+                disabled={loading}
+                className="flex-none border border-border text-ink/60 font-medium px-4 py-3 rounded-xl text-sm hover:bg-surface transition disabled:opacity-50">
                 ← Atrás
               </button>
-              <button type="submit" disabled={loading || !vehiculo}
+              <button type="button" onClick={pagar} disabled={loading || !vehiculo}
                 className="flex-1 flex items-center justify-center gap-2 bg-accent hover:bg-accent-hover text-white font-bold py-3 rounded-xl transition shadow-md shadow-accent/20 disabled:opacity-60 text-sm">
                 {loading
                   ? 'Procesando…'
@@ -811,7 +741,7 @@ function PagoContent() {
                     : `Confirmar reserva · $${total.toLocaleString('es-CO')}`}
               </button>
             </div>
-          </form>
+          </div>
         </div>
       )}
     </div>
