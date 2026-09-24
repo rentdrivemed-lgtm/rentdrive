@@ -10,23 +10,29 @@ type Props = {
   onChange: (url: string) => void;
   required?: boolean;
   /**
-   * true para documentos que NUNCA son un PDF (cédula/pasaporte, licencia de
-   * conducción: siempre es la foto de una tarjeta física). En ese caso el
-   * input queda como `accept="image/*" capture="environment"` — SIN mezclar
-   * con `application/pdf` — porque en muchos navegadores móviles (sobre todo
-   * Android) un `accept` mixto de imagen+PDF esconde la opción de cámara del
-   * selector nativo y solo deja elegir un archivo ya existente.
+   * `true` en los documentos que casi siempre se fotografían en el momento
+   * (cédula/pasaporte, licencia de conducción: es una tarjeta física). Lo único
+   * que cambia es que el botón «Tomar foto» se pone PRIMERO y más visible.
    *
-   * Cuando es `false` (SOAT/tarjeta de propiedad/tecno-mecánica/seguro todo
-   * riesgo, que sí a veces llegan como PDF escaneado), el recuadro se queda
-   * igual que antes (imagen o PDF, sin `capture`) para no quitarle a nadie la
-   * posibilidad de subir un PDF, pero se agrega un botón aparte de "Tomar
-   * foto" con su propio input de solo cámara.
+   * ⚠️ NO bloquea el PDF, y antes sí lo hacía. El motivo original era de
+   * usabilidad, no de formato: en muchos navegadores móviles (sobre todo
+   * Android) un `accept` mixto de imagen+PDF esconde la opción de cámara del
+   * selector nativo. La solución no era prohibir el PDF, sino la que este
+   * mismo componente ya usaba para SOAT y tarjeta de propiedad: input mixto
+   * para elegir archivo MÁS un botón aparte con su propio input de solo
+   * cámara. Así se conserva la cámara y se acepta el PDF.
+   *
+   * El otro motivo que se daba —que la verificación con IA necesita ver el
+   * documento— tampoco aplica: `lib/verificacion-docs.ts` procesa PDF de forma
+   * nativa desde hace tiempo (lo manda a Claude como `type: 'document'`).
+   *
+   * El dueño lo pidió expresamente: mucha gente descarga su cédula o su
+   * licencia en PDF y no tiene por qué convertirla a foto para poder reservar.
    */
-  soloImagen?: boolean;
+  preferirCamara?: boolean;
 };
 
-export default function DocUpload({ label, value, onChange, required, soloImagen }: Props) {
+export default function DocUpload({ label, value, onChange, required, preferirCamara }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const camaraRef = useRef<HTMLInputElement>(null);
   const [subiendo, setSubiendo] = useState(false);
@@ -44,13 +50,10 @@ export default function DocUpload({ label, value, onChange, required, soloImagen
     try {
       const fd = new FormData();
       fd.append('file', file, nombreArchivo);
-      // `soloImagen` ya identifica en este componente los documentos que NUNCA son un
-      // PDF (cédula/pasaporte, licencia — ver el comentario del prop arriba). Se manda
-      // también al servidor para que /api/upload/documento pueda rechazar un PDF real
-      // (por bytes mágicos, no por el Content-Type que declare el archivo) cuando el
-      // documento es de este tipo — antes solo se restringía en el `accept` del input,
-      // que no impide nada del lado del servidor.
-      fd.append('soloImagen', soloImagen ? 'true' : 'false');
+      // Ya no se manda `soloImagen`: ningún documento rechaza PDF. El servidor sigue
+      // comprobando por BYTES MÁGICOS que el archivo sea de verdad lo que dice ser
+      // (imagen o PDF), que es la validación que importa y que no depende de lo que
+      // declare el cliente.
       const res = await fetch('/api/upload/documento', { method: 'POST', body: fd });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setError(data.error || 'Error al subir'); return; }
@@ -99,19 +102,23 @@ export default function DocUpload({ label, value, onChange, required, soloImagen
         <label className="text-xs font-semibold text-ink/60 uppercase tracking-wide">
           {label} {required && <span className="text-accent">*</span>}
         </label>
-        {/* SOAT/tarjeta/tecno/seguro: el recuadro de abajo sigue aceptando PDF (sin
-            `capture`), así que se ofrece la cámara aparte con este botón — ver el
-            comentario de `soloImagen` en el tipo Props. */}
-        {!soloImagen && (
-          <button
-            type="button"
-            onClick={() => camaraRef.current?.click()}
-            disabled={subiendo}
-            className="inline-flex items-center gap-1 text-[10px] font-semibold text-accent hover:text-accent-hover disabled:opacity-50 transition flex-shrink-0"
-          >
-            <IconPhoto size={11} /> Tomar foto
-          </button>
-        )}
+        {/* El recuadro de abajo acepta imagen o PDF (sin `capture`), así que la cámara
+            se ofrece SIEMPRE aparte con este botón. Es lo que permite aceptar PDF sin
+            perder la foto en móvil — ver el comentario de `preferirCamara` en Props. */}
+        <button
+          type="button"
+          onClick={() => camaraRef.current?.click()}
+          disabled={subiendo}
+          className={`inline-flex items-center gap-1 font-semibold disabled:opacity-50 transition flex-shrink-0 ${
+            preferirCamara
+              // Cédula y licencia: es una tarjeta física que casi siempre se
+              // fotografía ahí mismo, así que la cámara se ofrece destacada.
+              ? 'text-[11px] text-white bg-accent hover:bg-accent-hover px-2.5 py-1 rounded-lg'
+              : 'text-[10px] text-accent hover:text-accent-hover'
+          }`}
+        >
+          <IconPhoto size={preferirCamara ? 12 : 11} /> Tomar foto
+        </button>
       </div>
       <div
         role="button" tabIndex={0} aria-label={`Subir ${label}`}
@@ -167,21 +174,18 @@ export default function DocUpload({ label, value, onChange, required, soloImagen
       <input
         ref={inputRef}
         type="file"
-        accept={soloImagen ? 'image/*' : 'image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf'}
-        capture={soloImagen ? 'environment' : undefined}
+        accept="image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf"
         className="hidden"
         onChange={handleFile}
       />
-      {!soloImagen && (
-        <input
-          ref={camaraRef}
-          type="file"
-          accept="image/*"
-          capture="environment"
-          className="hidden"
-          onChange={handleFile}
-        />
-      )}
+      <input
+        ref={camaraRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={handleFile}
+      />
       {recorteUrl && (
         // `key` para que cada foto entre al editor con el estado limpio (zoom,
         // giro y proporción) aunque se reemplace la imagen sin desmontar.

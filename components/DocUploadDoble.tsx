@@ -33,7 +33,7 @@ type Props = {
   /** Para cédula/pasaporte: si es pasaporte, el dorso no aplica (solo la página con la foto). */
   soloUnLado?: boolean;
   /** Ver el mismo prop en DocUpload — para documentos que nunca son un PDF (cédula/licencia). */
-  soloImagen?: boolean;
+  preferirCamara?: boolean;
   /**
    * Con `required`, muestra debajo qué lado falta en vez de dejar solo el
    * asterisco. Opcional para no cambiarle el aspecto a los usos que ya existían.
@@ -41,15 +41,15 @@ type Props = {
   mostrarFaltantes?: boolean;
 };
 
-export default function DocUploadDoble({ label, valueFrente, valueDorso, onChangeFrente, onChangeDorso, required, soloUnLado, soloImagen, mostrarFaltantes }: Props) {
+export default function DocUploadDoble({ label, valueFrente, valueDorso, onChangeFrente, onChangeDorso, required, soloUnLado, preferirCamara, mostrarFaltantes }: Props) {
   const faltan = required && mostrarFaltantes ? ladosFaltantes(valueFrente, valueDorso, soloUnLado) : [];
 
   return (
     <div className="flex flex-col gap-1.5">
       <div className="grid grid-cols-2 gap-3">
-        <DocUpload label={soloUnLado ? label : `${label} (frente)`} value={valueFrente} onChange={onChangeFrente} required={required} soloImagen={soloImagen} />
+        <DocUpload label={soloUnLado ? label : `${label} (frente)`} value={valueFrente} onChange={onChangeFrente} required={required} preferirCamara={preferirCamara} />
         {!soloUnLado && (
-          <DocUpload label={`${label} (dorso)`} value={valueDorso} onChange={onChangeDorso} required={required} soloImagen={soloImagen} />
+          <DocUpload label={`${label} (dorso)`} value={valueDorso} onChange={onChangeDorso} required={required} preferirCamara={preferirCamara} />
         )}
       </div>
       {/* Sin repetir la etiqueta: el mensaje va justo debajo de los dos recuadros,

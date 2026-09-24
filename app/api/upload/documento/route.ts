@@ -14,23 +14,28 @@ export async function POST(req: NextRequest) {
   const file = formData.get('file') as File | null;
   if (!file) return NextResponse.json({ error: 'No se recibió archivo' }, { status: 400 });
 
-  // Marcado por el cliente (components/DocUpload.tsx, prop `soloImagen`) para
-  // documentos que NUNCA son un PDF: cédula/pasaporte y licencia de conducción.
-  // El `accept` del input ya restringe esto en el navegador, pero eso es
-  // cosmético — no impide nada si se le pega directo al endpoint (curl, DevTools,
-  // un archivo renombrado). Por eso se refuerza acá, del lado del servidor, con
-  // el tipo MIME REAL (bytes mágicos vía `tipoRealImagen`, no el `file.type` que
-  // declara el cliente y se falsifica trivialmente).
-  const soloImagen = String(formData.get('soloImagen') || '') === 'true';
-
-  const permitidos = soloImagen
-    ? ['image/jpeg', 'image/png', 'image/webp']
-    : ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+  // El `accept` del input del navegador es cosmético: no impide nada si se le pega
+  // directo al endpoint (curl, DevTools, un archivo renombrado). Lo que de verdad
+  // valida es lo de abajo, con el tipo MIME REAL leído de los bytes mágicos — nunca
+  // el `file.type`, que lo declara el cliente y se falsifica trivialmente.
+  // TODOS los documentos aceptan PDF, incluidos cédula, pasaporte y licencia.
+  //
+  // Antes la cédula y la licencia lo rechazaban (`soloImagen`), y se daban dos razones
+  // que ya no se sostienen:
+  //
+  //  · «la verificación con IA necesita ver el documento» — `lib/verificacion-docs.ts`
+  //    procesa PDF de forma nativa: comprueba la cabecera `%PDF-` y se lo manda a Claude
+  //    como `type: 'document'`. Lee un PDF igual de bien que una foto.
+  //  · «en móvil, un accept mixto esconde la cámara» — cierto, pero eso se arregla con
+  //    un botón de cámara aparte (lo que ya hacía este mismo flujo para el SOAT), no
+  //    prohibiendo el formato. Ver `preferirCamara` en components/DocUpload.tsx.
+  //
+  // Mucha gente descarga su cédula o su licencia en PDF y no tiene por qué convertirla
+  // a foto para poder reservar. Lo que sí se sigue exigiendo, más abajo, es que el
+  // archivo SEA de verdad lo que dice ser: eso se comprueba por bytes mágicos.
+  const permitidos = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
   if (!permitidos.includes(file.type)) {
-    return NextResponse.json(
-      { error: soloImagen ? 'Solo se aceptan fotos en JPG, PNG o WebP para este documento.' : 'Solo JPG, PNG, WebP o PDF' },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: 'Solo JPG, PNG, WebP o PDF' }, { status: 400 });
   }
   if (file.size > 15 * 1024 * 1024) {
     return NextResponse.json({ error: 'Máximo 15 MB' }, { status: 400 });
@@ -45,14 +50,13 @@ export async function POST(req: NextRequest) {
     const imagenTypes = ['image/jpeg', 'image/png', 'image/webp'];
     let buffer: Buffer = Buffer.from(await file.arrayBuffer());
     if (imagenTypes.includes(file.type)) {
-      // Reforzado por bytes mágicos (no el Content-Type declarado): si esto es
-      // un documento `soloImagen` (cédula/licencia) pero los bytes reales no son
-      // ninguno de los 3 formatos de imagen soportados (p. ej. un PDF renombrado
-      // a .jpg con Content-Type falsificado), se rechaza acá — antes de subir
-      // nada a Cloudinary o de normalizar orientación sobre datos que no son
-      // realmente una imagen.
-      if (soloImagen && !tipoRealImagen(buffer)) {
-        return NextResponse.json({ error: 'Solo se aceptan fotos en JPG, PNG o WebP para este documento.' }, { status: 400 });
+      // Dice ser imagen: que lo sea. Si los bytes reales no son ninguno de los 3
+      // formatos soportados (p. ej. un PDF renombrado a .jpg con el Content-Type
+      // falsificado), se rechaza acá — antes de subir nada a Cloudinary o de
+      // normalizar la orientación sobre datos que no son una imagen. El caso
+      // simétrico, «dice ser PDF pero no lo es», se comprueba justo debajo.
+      if (!tipoRealImagen(buffer)) {
+        return NextResponse.json({ error: 'El archivo no es una imagen válida en JPG, PNG o WebP.' }, { status: 400 });
       }
       // Normaliza la orientación EXIF (fotos de celular) para que el
       // documento no quede "de lado" en la galería ni al mostrarlo. Si no

@@ -486,13 +486,13 @@ export default function ReservaMostradorModal({
                 label={esPasaporte ? 'Pasaporte' : 'Documento de identidad'}
                 valueFrente={docIdUrl} valueDorso={docIdUrlDorso}
                 onChangeFrente={setDocIdUrl} onChangeDorso={setDocIdUrlDorso}
-                soloUnLado={esPasaporte} required soloImagen
+                soloUnLado={esPasaporte} required preferirCamara
               />
               <DocUploadDoble
                 label="Licencia de conducción"
                 valueFrente={licenciaUrl} valueDorso={licenciaUrlDorso}
                 onChangeFrente={setLicenciaUrl} onChangeDorso={setLicenciaUrlDorso}
-                required soloImagen
+                required preferirCamara
               />
             </div>
           </Seccion>

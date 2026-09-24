@@ -2217,7 +2217,7 @@ function DashboardPropietarioInner() {
                 onChangeFrente={url => setPerfil(p => ({ ...p, cedula_url: url }))}
                 onChangeDorso={url => setPerfil(p => ({ ...p, cedula_url_dorso: url }))}
                 soloUnLado={perfil.tipo_documento === 'pasaporte'}
-                soloImagen required mostrarFaltantes />
+                preferirCamara required mostrarFaltantes />
               <p className="text-[11px] text-ink/50 mt-1">
                 Foto clara (cámara o galería){perfil.tipo_documento === 'pasaporte' ? '' : ', por el frente y por el dorso'}. Obligatoria: sin ella no podemos
                 validar que la tarjeta de propiedad de tus vehículos esté a tu nombre. Solo la vemos para eso.

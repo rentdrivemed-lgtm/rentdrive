@@ -472,14 +472,14 @@ function PagoContent() {
               valueFrente={docIdUrl} valueDorso={docIdUrlDorso}
               onChangeFrente={setDocIdUrl} onChangeDorso={setDocIdUrlDorso}
               soloUnLado={esPasaporte}
-              soloImagen
+              preferirCamara
               required
             />
             <DocUploadDoble
               label="Licencia de conducción"
               valueFrente={licenciaUrl} valueDorso={licenciaUrlDorso}
               onChangeFrente={setLicenciaUrl} onChangeDorso={setLicenciaUrlDorso}
-              soloImagen
+              preferirCamara
               required
             />
           </div>
