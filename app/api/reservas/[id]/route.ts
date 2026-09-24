@@ -10,6 +10,8 @@ import {
 import { procesarPagoConfirmado } from '@/lib/contabilidad';
 import { procesarRecompensaReferido } from '@/lib/referidos';
 import { anularTransaccion } from '@/lib/pagos';
+import { documentarOperacionConfirmada, bloqueoParaEntregar } from '@/lib/contratos-operacion';
+import { nivelDe } from '@/lib/permisos';
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
@@ -115,6 +117,25 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         { error: 'Solo un administrador puede cambiar la reserva a ese estado. Desde tu cuenta solo puedes cancelarla.' },
         { status: 403 },
       );
+    }
+
+    // Entregar el vehículo con los papeles de la operación sin firmar es exactamente lo
+    // que esos documentos existen para evitar. Se comprueba en el SERVIDOR y no solo en
+    // el botón del panel: la transición no tenía ninguna validación previa —ni pago, ni
+    // operación creada, ni contrato— y bastaba un PUT para saltársela.
+    //
+    // Solo las firmas de SUSCRIPCIÓN. Las del acta se recogen en la entrega y en la
+    // devolución, que son después; exigirlas aquí impediría entregar el vehículo por no
+    // tener firmada su propia devolución.
+    if (body.estado === 'en_curso') {
+      const bloqueo = bloqueoParaEntregar(db, Number(id));
+      if (bloqueo) {
+        return NextResponse.json({
+          error: bloqueo.motivo,
+          codigo: 'firmas_pendientes',
+          pendientes: bloqueo.pendientes,
+        }, { status: 409 });
+      }
     }
   }
   if (body.pago_estado !== undefined) {
@@ -224,6 +245,22 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   // (POST /api/admin/reservas), para que ambas vías creen la operación igual.
   if (user.rol === 'admin' && body.estado === 'confirmada') {
     await crearOperacionYNotificar(db, Number(id));
+
+    // Y los CUATRO documentos de la operación: los dos marcos —si el vehículo o este
+    // cliente todavía no los tienen— y los dos otrosíes encadenados a ellos. La
+    // sociedad suscribe sus bloques con el sello institucional; a propietario y cliente
+    // les queda su firma, y cada uno recibe el aviso en SU campana.
+    //
+    // Antes esto lo hacía una persona desde el panel, uno por uno. La emisión manual
+    // sigue existiendo como respaldo (POST /api/contratos), para reemitir un documento
+    // anulado. Es idempotente: reconfirmar no duplica nada.
+    //
+    // No revierte la confirmación si falla: la reserva ya está cobrada, y quedarse sin
+    // reserva por no poder emitir un papel sería peor que emitirlo un minuto después.
+    documentarOperacionConfirmada(db, Number(id), {
+      id: user.id, nombre: user.nombre, correo: user.correo,
+      nivel: nivelDe(db, user.id) || 'admin',
+    });
   }
 
   return NextResponse.json({

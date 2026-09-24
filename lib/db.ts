@@ -1417,16 +1417,36 @@ function migrarContratosVinculacion(db: Database.Database) {
       console.log('[db] Migración: contratos admite la autorización de datos del registro.');
     }
 
-    // Un titular no puede tener DOS veces el mismo documento de vinculación en la misma
-    // versión. Parciales y separados (en vez de uno solo sobre COALESCE) para que cada
-    // índice cubra exactamente una de las dos formas y se lea sin ambigüedad.
+    // Unicidad de los documentos SIN reserva. Cada familia tiene su propia IDENTIDAD, y
+    // por eso son tres índices y no uno: mezclarlas hacía chocar documentos legítimos.
+    //
+    //   · autorizacion-datos → una por titular. No tiene vehículo, así que la identidad
+    //     es la persona (en cliente_id o en propietario_id, según su rol).
+    //   · agencia            → uno por VEHÍCULO. El propietario se deduce del vehículo;
+    //     incluirlo en la clave no añade nada.
+    //   · arrendamiento      → uno por vehículo y CLIENTE. El marco nombra la placa, así
+    //     que un cliente que alquile dos carros suscribe dos marcos, y dos clientes del
+    //     MISMO carro suscriben uno cada uno. Esto último es lo que rompía la versión
+    //     anterior de estos índices, que solo miraba al propietario.
     db.exec(`
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_contratos_vinculacion_cliente
+      DROP INDEX IF EXISTS idx_contratos_vinculacion_cliente;
+      DROP INDEX IF EXISTS idx_contratos_vinculacion_propietario;
+      DROP INDEX IF EXISTS idx_contratos_sin_reserva_cliente;
+      DROP INDEX IF EXISTS idx_contratos_sin_reserva_propietario;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_contratos_autorizacion_cliente
         ON contratos(tipo, version, cliente_id)
-        WHERE reserva_id IS NULL AND cliente_id IS NOT NULL;
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_contratos_vinculacion_propietario
+        WHERE reserva_id IS NULL AND tipo = 'autorizacion-datos' AND cliente_id IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_contratos_autorizacion_propietario
         ON contratos(tipo, version, propietario_id)
-        WHERE reserva_id IS NULL AND propietario_id IS NOT NULL;
+        WHERE reserva_id IS NULL AND tipo = 'autorizacion-datos' AND propietario_id IS NOT NULL;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_contratos_marco_agencia
+        ON contratos(version, vehiculo_id)
+        WHERE reserva_id IS NULL AND tipo = 'agencia';
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_contratos_marco_arrendamiento
+        ON contratos(version, vehiculo_id, cliente_id)
+        WHERE reserva_id IS NULL AND tipo = 'arrendamiento';
     `);
   } catch (e) {
     console.error('[db] Migración contratos de vinculación falló:', e instanceof Error ? e.message : e);

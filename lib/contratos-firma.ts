@@ -29,7 +29,7 @@ import type Database from 'better-sqlite3';
 import { TITULOS_VINCULACION } from './contratos-vinculacion-texto';
 import { createHash } from 'crypto';
 import { igualesEnTiempoConstante, sellarHmac } from './firma-sello';
-import { armarDatosContrato, generarDocumento } from './contratos';
+import { type OpcionesContrato, armarDatosContrato, generarDocumento } from './contratos';
 import {
   TIPOS_DOCUMENTO, TITULOS_DOCUMENTO,
   type CampoFaltante, type DatosContrato, type TipoDocumento,
@@ -378,8 +378,39 @@ export type GenerarOk = { ok: true; contrato: ContratoRow; firmas: FirmaContrato
  * se rechaza. Para cambiarlo hay que anularlo primero (`anularContrato`), y la
  * emisión siguiente queda como versión +1 conservando la anterior íntegra.
  */
+/**
+ * Tipos que son MARCO: se suscriben una vez y muchas operaciones cuelgan de ellos.
+ *
+ * Lo dicen las propias plantillas del abogado: `contratoAgencia` y
+ * `contratoArrendamiento` nombran la placa pero NO llevan fechas ni canon, mientras
+ * los dos otrosíes sí. O sea, el marco fija la relación y cada otrosí documenta una
+ * operación concreta bajo aquel.
+ *
+ * Su alcance no es la reserva, así que se guardan con `reserva_id` en NULL:
+ *   · agencia       → uno por VEHÍCULO (propietario ↔ DrivePass);
+ *   · arrendamiento → uno por vehículo y CLIENTE (el marco nombra la placa, así que
+ *     un cliente que alquile dos carros suscribe dos marcos).
+ */
+export const TIPOS_MARCO: readonly TipoDocumento[] = ['agencia', 'arrendamiento'];
+
+export function esTipoMarco(tipo: TipoDocumento): boolean {
+  return TIPOS_MARCO.includes(tipo);
+}
+
+export type OpcionesGenerar = {
+  /**
+   * Emitir como MARCO: sin reserva, identificado por vehículo (y cliente, en el
+   * arrendamiento). La reserva que se pasa sigue siendo la fuente del snapshot —de ahí
+   * salen el vehículo, el propietario y el cliente— pero no queda atada al documento.
+   */
+  marco?: boolean;
+  /** Marcos ya suscritos a los que encadenar este documento. Ver OpcionesContrato. */
+  marcos?: OpcionesContrato['marcos'];
+};
+
 export function generarContrato(
   db: DB, tipo: TipoDocumento, reservaId: number, actor: ActorContrato,
+  opts: OpcionesGenerar = {},
 ): GenerarOk | ErrorOperacion {
   const reserva = db.prepare(`
     SELECT r.id, r.estado, r.usuario_id, r.vehiculo_id, v.propietario_id
@@ -391,20 +422,33 @@ export function generarContrato(
     return err(409, 'Solo se pueden emitir documentos de reservas confirmadas, en curso o completadas.');
   }
 
+  // Un MARCO no pertenece a la reserva: se identifica por vehículo (y por cliente, en
+  // el arrendamiento). La reserva solo aporta el snapshot del que sale el texto.
+  const comoMarco = !!opts.marco;
+  if (comoMarco && !esTipoMarco(tipo)) {
+    return err(409, 'Este tipo de documento no es un contrato marco.');
+  }
+  const ambito = comoMarco
+    ? { where: `reserva_id IS NULL AND vehiculo_id = ? AND ${tipo === 'arrendamiento' ? 'cliente_id = ?' : 'propietario_id = ?'}`,
+        params: [reserva.vehiculo_id, tipo === 'arrendamiento' ? reserva.usuario_id : reserva.propietario_id] }
+    : { where: 'reserva_id = ?', params: [reservaId] };
+
   const vigente = db.prepare(
-    "SELECT id, numero FROM contratos WHERE reserva_id = ? AND tipo = ? AND estado <> 'anulado' ORDER BY version DESC LIMIT 1"
-  ).get(reservaId, tipo) as { id: number; numero: string } | undefined;
+    `SELECT id, numero FROM contratos WHERE ${ambito.where} AND tipo = ? AND estado <> 'anulado' ORDER BY version DESC LIMIT 1`
+  ).get(...ambito.params, tipo) as { id: number; numero: string } | undefined;
   if (vigente) {
-    return err(409, `Ya existe un documento vigente de este tipo para la reserva (${vigente.numero}). Anúlalo antes de emitir otro.`);
+    return err(409, comoMarco
+      ? `Ya existe un contrato marco vigente de este tipo (${vigente.numero}). Anúlalo antes de emitir otro.`
+      : `Ya existe un documento vigente de este tipo para la reserva (${vigente.numero}). Anúlalo antes de emitir otro.`);
   }
 
-  const datos = armarDatosContrato(db, reservaId);
+  const datos = armarDatosContrato(db, reservaId, { marcos: opts.marcos });
   // Solo devuelve null si la reserva no existe, y eso ya se comprobó arriba.
   if (!datos) return err(404, 'La reserva no existe.');
   const doc = generarDocumento(tipo, datos);
   const faltantes = faltantesCongelados(doc.faltantes);
-  const previa = db.prepare('SELECT MAX(version) AS v FROM contratos WHERE reserva_id = ? AND tipo = ?')
-    .get(reservaId, tipo) as { v: number | null };
+  const previa = db.prepare(`SELECT MAX(version) AS v FROM contratos WHERE ${ambito.where} AND tipo = ?`)
+    .get(...ambito.params, tipo) as { v: number | null };
   const version = (Number(previa?.v) || 0) + 1;
 
   const bloques = bloquesDe(tipo, doc.datos.operacion.conductores.map(c => c.nombre));
@@ -416,15 +460,18 @@ export function generarContrato(
         texto, datos_json, faltantes_json, generado_por, generado_por_nombre
       ) VALUES (?, ?, ?, ?, ?, '', ?, 'pendiente', ?, ?, ?, ?, ?)
     `).run(
-      reservaId, reserva.vehiculo_id, reserva.propietario_id, reserva.usuario_id, tipo, version,
+      // Un marco NO pertenece a la reserva: se identifica por vehículo (y por cliente,
+      // en el arrendamiento). La reserva solo aportó el snapshot del que salió el texto.
+      comoMarco ? null : reservaId,
+      reserva.vehiculo_id, reserva.propietario_id, reserva.usuario_id, tipo, version,
       doc.texto, JSON.stringify(doc.datos), JSON.stringify(faltantes),
       actor.id, actor.nombre || '',
     );
     const id = Number(res.lastInsertRowid);
     // La raíz de la familia: en la versión 1 es esta misma fila; en una reemisión, la
     // del original anulado.
-    const raiz = db.prepare('SELECT id FROM contratos WHERE reserva_id = ? AND tipo = ? ORDER BY version ASC LIMIT 1')
-      .get(reservaId, tipo) as { id: number };
+    const raiz = db.prepare(`SELECT id FROM contratos WHERE ${ambito.where} AND tipo = ? ORDER BY version ASC LIMIT 1`)
+      .get(...ambito.params, tipo) as { id: number };
     const numero = numeroContrato(tipo, Number(raiz?.id) || id, version);
     db.prepare('UPDATE contratos SET numero = ? WHERE id = ?').run(numero, id);
 
@@ -443,7 +490,8 @@ export function generarContrato(
     // se revierte la emisión entera.
     registrarAuditoriaEstricta(db, { id: actor.id, nombre: actor.nombre, correo: actor.correo, nivel: actor.nivel }, {
       area: 'contratos', accion: 'emitir_contrato', entidad: 'contrato', entidad_id: id,
-      detalle: `Emitió ${TITULOS_DOCUMENTO[tipo]} ${numero} de la reserva #${reservaId}`
+      detalle: `Emitió ${TITULOS_DOCUMENTO[tipo]} ${numero} `
+        + (comoMarco ? `como MARCO del vehículo #${reserva.vehiculo_id}` : `de la reserva #${reservaId}`)
         + (faltantes.length ? ` · ${faltantes.length} campo(s) en blanco` : ''),
     });
     return id;

@@ -203,6 +203,20 @@ export type OpcionesContrato = {
    * Ver lib/contratos-campos.ts y lib/contratos-edicion.ts.
    */
   overrides?: OverridesContrato;
+  /**
+   * Los contratos MARCO ya suscritos a los que este documento se encadena.
+   *
+   * Los otrosíes no son documentos sueltos: dicen «el [fecha] las partes celebraron EL
+   * CONTRATO» y modifican aquel. Sin esto, la fecha citada era la de HOY y el número un
+   * consecutivo calculado a partir de la reserva —o sea, el otrosí afirmaba que su
+   * contrato padre se firmó el mismo día, y citaba un número que no era el de ningún
+   * documento existente—. Lo rellena `lib/contratos-operacion.ts`, que es quien
+   * localiza o emite los marcos antes de los otrosíes.
+   */
+  marcos?: {
+    agencia?: { numero: string; fecha: string };
+    arrendamiento?: { numero: string; fecha: string };
+  };
 };
 
 /**
@@ -288,8 +302,10 @@ export function armarDatosContrato(db: DB, reservaId: number, op: OpcionesContra
 
   return {
     fecha,
-    fechaContratoArrendamiento: fecha,
-    fechaContratoAgencia: fecha,
+    // La fecha del marco, cuando se conoce; si no, hoy — que es lo que había siempre y
+    // sigue siendo lo correcto para una vista previa sin marcos todavía emitidos.
+    fechaContratoArrendamiento: op.marcos?.arrendamiento?.fecha || fecha,
+    fechaContratoAgencia: op.marcos?.agencia?.fecha || fecha,
     ciudad: CIUDAD_CONTRATO,
     propietario: armarPersona({
       nombre: row.p_nombre, correo: row.p_correo, documento_identidad: row.p_documento,
@@ -359,9 +375,12 @@ export function armarDatosContrato(db: DB, reservaId: number, op: OpcionesContra
       fotosDevolucion: parseFotosServicio(row.fotos_entrada).length,
     },
     numeros: {
-      contratoArrendamiento: consecutivo('AR', row.reserva_id),
+      // Los dos marcos citan su número REAL cuando ya existen. El consecutivo calculado
+      // queda solo como respaldo para la vista previa de un documento que todavía no
+      // tiene marco emitido.
+      contratoArrendamiento: op.marcos?.arrendamiento?.numero || consecutivo('AR', row.reserva_id),
       otrosiArrendamiento: '1',
-      contratoAgencia: consecutivo('AG', row.vehiculo_id),
+      contratoAgencia: op.marcos?.agencia?.numero || consecutivo('AG', row.vehiculo_id),
       otrosiAgencia: String((Number(previas?.n) || 0) + 1),
       acta: consecutivo('AC', row.reserva_id),
     },
