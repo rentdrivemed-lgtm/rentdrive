@@ -485,7 +485,7 @@ function PagoContent() {
           </div>
 
           <div className="bg-surface border border-border rounded-xl px-4 py-3 mb-4">
-            <p className="text-xs text-ink/50">Foto clara (cámara o galería) — JPG, PNG o WebP · Máximo 15 MB por archivo</p>
+            <p className="text-xs text-ink/50">Foto clara o PDF — JPG, PNG, WebP o PDF · Máximo 15 MB por archivo. Si tu archivo ya trae las dos caras, marca la casilla y súbelo una sola vez.</p>
           </div>
 
           {/* Datos de la operación — solo para quien no los tiene guardados o los tiene guardados pero inválidos (legacy) */}

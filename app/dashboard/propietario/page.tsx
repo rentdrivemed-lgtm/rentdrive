@@ -2219,7 +2219,7 @@ function DashboardPropietarioInner() {
                 soloUnLado={perfil.tipo_documento === 'pasaporte'}
                 preferirCamara required mostrarFaltantes />
               <p className="text-[11px] text-ink/50 mt-1">
-                Foto clara (cámara o galería){perfil.tipo_documento === 'pasaporte' ? '' : ', por el frente y por el dorso'}. Obligatoria: sin ella no podemos
+                Foto clara o PDF{perfil.tipo_documento === 'pasaporte' ? '' : ', por el frente y por el dorso (o un solo archivo con las dos caras)'}. Obligatoria: sin ella no podemos
                 validar que la tarjeta de propiedad de tus vehículos esté a tu nombre. Solo la vemos para eso.
               </p>
             </div>
