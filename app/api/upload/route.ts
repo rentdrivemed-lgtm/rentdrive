@@ -31,6 +31,30 @@ const FOTO_IA_VENTANA_MS = 60 * 60 * 1000;
 // contra una cuenta `propietario` autoregistrable sin verificar correo.
 const FOTO_VISION_MAX_HORA = 60;
 
+/**
+ * ¿Se tapa la placa AUTOMÁTICAMENTE con IA al subir la foto?
+ *
+ * En `false` (decisión del dueño, sep-2026) por dos motivos que van juntos:
+ *
+ *  1. **La original queda limpia.** Hasta ahora esta ruta estampaba el sello ANTES de
+ *     subir a Cloudinary, así que la foto sin tapar no existía en ninguna parte. Si la
+ *     IA tapaba donde no era, NO había forma de corregirlo: el tapado manual se deriva
+ *     de `fotos_moderacion.placa_origen_url`, que en esas fotos ya venía con el sello
+ *     mal puesto, así que marcar de nuevo solo APILABA otro logo encima. Pasó de verdad
+ *     (vehículo 13, tres sellos superpuestos) y la única salida era volver a subir la
+ *     foto. Con la original intacta, cada tapado se deriva de ella y se puede rehacer o
+ *     deshacer cuantas veces haga falta.
+ *  2. **No gasta créditos de IA.** Cada foto costaba una llamada a Claude vision.
+ *
+ * ⚠️ Lo que NO se puede perder al desactivarlo: esa misma llamada hacía TAMBIÉN la
+ * moderación de contenido inapropiado. Por eso, con el tapado automático apagado, toda
+ * foto subida entra a la cola de revisión manual (`contenidoSospechoso = true`) y el
+ * vehículo NO se publica hasta que alguien del equipo la mire, tape la placa y apruebe.
+ * Es el mismo camino fail-closed que ya existía para cuando se agotaba el límite de IA.
+ * Sin ese gate, apagar esto publicaría placas legibles.
+ */
+const TAPADO_AUTOMATICO_PLACA = false;
+
 // Victor pidió explícitamente suspender temporalmente la estandarización con IA
 // (quitar fondo + mejorar calidad vía remove.bg, `estandarizarFotoVehiculo`) para toda
 // foto de vehículo. La moderación/difuminado de placa (arriba) NO se ve afectada por
@@ -111,9 +135,21 @@ export async function POST(req: NextRequest) {
       // Rate-limit dedicado ANTES de gastar la llamada cara a Claude vision — si ya se
       // superó, no tiene sentido llamar a detectarYDifuminarPlaca sabiendo que la foto se
       // va a mandar a revisión manual de todos modos (ver FOTO_VISION_MAX_HORA arriba).
-      const excedioVision = consumirIntento(`foto-vision:${user.id}`, FOTO_VISION_MAX_HORA, FOTO_IA_VENTANA_MS) !== null;
+      // Con el tapado automático apagado no se gasta ni una llamada: no se consume
+      // intento, no se llama a la IA, y la foto va derecho a revisión manual.
+      const excedioVision = TAPADO_AUTOMATICO_PLACA
+        && consumirIntento(`foto-vision:${user.id}`, FOTO_VISION_MAX_HORA, FOTO_IA_VENTANA_MS) !== null;
 
-      if (excedioVision) {
+      if (!TAPADO_AUTOMATICO_PLACA) {
+        // La foto se sube TAL CUAL (original limpia, sin sello) y el vehículo queda en la
+        // cola de revisión de contenido: no se publica hasta que alguien del equipo tape
+        // la placa a mano (components/TaparPlacaManual.tsx) y apruebe. Ver el comentario
+        // de TAPADO_AUTOMATICO_PLACA: esto es lo que permite corregir y deshacer un
+        // tapado, y lo que evita que una placa legible llegue a la vitrina.
+        contenidoSospechoso = true;
+        motivoSospechoso    = 'Pendiente de tapar la placa a mano y de revisar el contenido.';
+        seEjecutoModeracion = true;
+      } else if (excedioVision) {
         // A diferencia del paso puramente cosmético de remove.bg (que si se salta, la foto
         // simplemente no se "embellece"), saltar la detección de placa completa dejaría
         // potencialmente una placa real SIN difuminar y sin ningún control — inaceptable
