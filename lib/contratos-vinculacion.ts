@@ -22,21 +22,41 @@ import { registrarAuditoriaEstricta } from './permisos';
 import { notificarUsuarios } from './panel';
 import { sellarBloquesDelAgente } from './contratos-sello-agente';
 import {
-  PREFIJO_VINCULACION, ROL_TITULAR, TITULOS_VINCULACION, VINCULACION_REVISADA_POR_ABOGADO,
-  generarTextoVinculacion, type DatosVinculacion, type TipoVinculacion,
-} from './contratos-vinculacion-texto';
+  PREFIJO_REGISTRO, TIPO_REGISTRO, TITULO_REGISTRO, REGISTRO_REVISADO_POR_ABOGADO,
+  generarTextoRegistro, type ConsentimientosRegistro, type DatosRegistro, type TipoRegistro,
+} from './contratos-registro-texto';
 
 type DB = Database.Database;
 
-/** Qué documento le toca a cada rol de cuenta. Un admin no firma vinculación. */
-export const VINCULACION_POR_ROL: Record<string, TipoVinculacion | null> = {
-  usuario: 'vinculacion-cliente',
-  propietario: 'vinculacion-propietario',
-  admin: null,
-};
+/**
+ * Qué documento le toca a cada rol de cuenta.
+ *
+ * Desde sep-2026 es UNO SOLO y el mismo para clientes y propietarios: la autorización
+ * de tratamiento de datos. Los dos contratos marco que había antes se solapaban con el
+ * de agencia comercial y el de arrendamiento, que el abogado sí redactó y que se
+ * suscriben en la primera operación. Ver lib/contratos-registro-texto.ts.
+ *
+ * Un admin no firma ninguno: no es titular de datos tratados como cliente.
+ */
+export function vinculacionQueLeToca(rol: string): TipoRegistro | null {
+  const r = (rol || '').trim();
+  return (r === 'usuario' || r === 'propietario') ? TIPO_REGISTRO : null;
+}
 
-export function vinculacionQueLeToca(rol: string): TipoVinculacion | null {
-  return VINCULACION_POR_ROL[(rol || '').trim()] ?? null;
+/**
+ * En qué columna de `contratos` va el titular.
+ *
+ * Antes lo decidía el TIPO de documento (había uno por rol); ahora que el documento es
+ * único lo decide el ROL DE LA CUENTA. Se conserva la separación cliente_id /
+ * propietario_id para no tocar el esquema ni las consultas que ya la usan.
+ */
+export function rolTitularDeCuenta(rol: string): 'cliente' | 'propietario' {
+  return (rol || '').trim() === 'propietario' ? 'propietario' : 'cliente';
+}
+
+/** La calidad en que firma, que es la casilla «Arrendatario / Propietario» del texto. */
+function calidadDe(rol: string): 'Arrendatario' | 'Propietario' {
+  return rolTitularDeCuenta(rol) === 'propietario' ? 'Propietario' : 'Arrendatario';
 }
 
 // ── Bloques de firma ────────────────────────────────────────────────────────
@@ -49,20 +69,22 @@ export type DefBloqueVinculacion = {
   clave: string; etiqueta: string; rol: 'cliente' | 'propietario' | 'agente'; orden: number;
 };
 
-export const BLOQUES_VINCULACION: Record<TipoVinculacion, DefBloqueVinculacion[]> = {
-  'vinculacion-cliente': [
-    { clave: 'usuario', etiqueta: 'EL USUARIO', rol: 'cliente', orden: 1 },
-    { clave: 'agente', etiqueta: 'LA PLATAFORMA', rol: 'agente', orden: 2 },
-  ],
-  'vinculacion-propietario': [
-    { clave: 'propietario', etiqueta: 'EL PROPIETARIO', rol: 'propietario', orden: 1 },
-    { clave: 'agente', etiqueta: 'LA PLATAFORMA', rol: 'agente', orden: 2 },
-  ],
-};
+export function bloquesDelRegistro(rolCuenta: string): DefBloqueVinculacion[] {
+  const esPropietario = rolTitularDeCuenta(rolCuenta) === 'propietario';
+  return [
+    {
+      clave: esPropietario ? 'propietario' : 'usuario',
+      etiqueta: 'EL TITULAR DE LOS DATOS',
+      rol: esPropietario ? 'propietario' : 'cliente',
+      orden: 1,
+    },
+    { clave: 'agente', etiqueta: 'EL RESPONSABLE', rol: 'agente', orden: 2 },
+  ];
+}
 
 // ── Datos ───────────────────────────────────────────────────────────────────
 
-export function armarDatosVinculacion(db: DB, usuarioId: number): DatosVinculacion | null {
+export function armarDatosVinculacion(db: DB, usuarioId: number, rolCuenta: string): DatosRegistro | null {
   const titular = personaDeUsuario(db, usuarioId);
   if (!titular) return null;
   return {
@@ -70,6 +92,7 @@ export function armarDatosVinculacion(db: DB, usuarioId: number): DatosVinculaci
     ciudad: CIUDAD_CONTRATO,
     titular,
     agente: AGENTE,
+    calidad: calidadDe(rolCuenta),
     origen: { usuarioId: Number(usuarioId) },
   };
 }
@@ -82,7 +105,7 @@ export function armarDatosVinculacion(db: DB, usuarioId: number): DatosVinculaci
  * Es la diferencia con los contratos de operación, donde hay faltantes estructurales
  * que solo se advierten (ver faltantesDe en lib/contratos-datos.ts).
  */
-export function faltantesVinculacion(d: DatosVinculacion): CampoFaltante[] {
+export function faltantesVinculacion(d: DatosRegistro): CampoFaltante[] {
   // Mismo tipo que los faltantes de los contratos de operación (`CampoFaltante`), para
   // que la pantalla de firma pueda pintarlos con el componente que ya existe. Van todos
   // con `enBD: true` porque todos bloquean, y con `documentos: []` porque ese campo
@@ -116,22 +139,22 @@ function err(status: number, error: string): EmisionError {
  * que nadie validó. En desarrollo sí se emite, para poder probar el flujo completo.
  */
 export function puedeEmitirVinculacion(): { ok: true } | EmisionError {
-  if (!VINCULACION_REVISADA_POR_ABOGADO && process.env.NODE_ENV === 'production') {
+  if (!REGISTRO_REVISADO_POR_ABOGADO && process.env.NODE_ENV === 'production') {
     return err(503, 'El contrato de vinculación todavía está pendiente de revisión legal y no se puede emitir.');
   }
   return { ok: true };
 }
 
 /** El documento de vinculación VIGENTE (no anulado) de una cuenta, si lo hay. */
-export function vinculacionVigente(db: DB, usuarioId: number, tipo: TipoVinculacion): {
+export function vinculacionVigente(db: DB, usuarioId: number, rolCuenta: string): {
   id: number; numero: string; estado: string; version: number;
 } | null {
-  const columna = ROL_TITULAR[tipo] === 'cliente' ? 'cliente_id' : 'propietario_id';
+  const columna = rolTitularDeCuenta(rolCuenta) === 'cliente' ? 'cliente_id' : 'propietario_id';
   return (db.prepare(`
     SELECT id, numero, estado, version FROM contratos
     WHERE reserva_id IS NULL AND tipo = ? AND ${columna} = ? AND estado <> 'anulado'
     ORDER BY version DESC LIMIT 1
-  `).get(tipo, Number(usuarioId)) as { id: number; numero: string; estado: string; version: number } | undefined) ?? null;
+  `).get(TIPO_REGISTRO, Number(usuarioId)) as { id: number; numero: string; estado: string; version: number } | undefined) ?? null;
 }
 
 /**
@@ -141,7 +164,8 @@ export function vinculacionVigente(db: DB, usuarioId: number, tipo: TipoVinculac
  * parcial de la tabla es la última línea de defensa.
  */
 export function generarContratoVinculacion(
-  db: DB, usuarioId: number, tipo: TipoVinculacion, actor: ActorVinculacion,
+  db: DB, usuarioId: number, rolCuenta: string, actor: ActorVinculacion,
+  consentimientos: ConsentimientosRegistro,
 ): EmisionOk | EmisionError {
   const puerta = puedeEmitirVinculacion();
   if (!puerta.ok) return puerta;
@@ -150,22 +174,43 @@ export function generarContratoVinculacion(
     .get(Number(usuarioId)) as { id: number; rol: string; estado_cuenta: string } | undefined;
   if (!cuenta) return err(404, 'La cuenta no existe.');
   if (cuenta.estado_cuenta === 'archivada') return err(409, 'La cuenta está archivada.');
-  if (vinculacionQueLeToca(cuenta.rol) !== tipo) {
-    return err(409, `Este documento no corresponde al rol de la cuenta (${cuenta.rol}).`);
+  if (!vinculacionQueLeToca(cuenta.rol)) {
+    return err(409, `A una cuenta de rol «${cuenta.rol}» no le corresponde este documento.`);
   }
 
-  const vigente = vinculacionVigente(db, usuarioId, tipo);
+  // El consentimiento general y el reforzado de la cláusula CUARTA son condición para
+  // tener cuenta (decisión del dueño, sep-2026). Se comprueba también acá y no solo en
+  // el registro: esta función la llaman además el panel y la reemisión.
+  //
+  // ⚖️ REVISAR: el texto del abogado declara en su cláusula TERCERA que «ninguna
+  // actividad se condiciona a la entrega de datos sensibles» y en la CUARTA informa de
+  // que es facultativo. Exigirlos contradice esas dos cláusulas. Pendiente de que el
+  // abogado las reformule para decir que sin esa autorización no se puede verificar la
+  // identidad y por tanto no se puede prestar el servicio.
+  if (!consentimientos.general) return err(400, 'Falta la autorización de tratamiento de datos.');
+  if (!consentimientos.datosSensibles) {
+    return err(400, 'Falta la autorización para tratar las imágenes de tus documentos de identidad.');
+  }
+
+  // El rol de la CUENTA manda, no el que traiga quien llama: es lo que decide en qué
+  // columna queda el titular y en qué calidad firma.
+  const rolCuentaReal = cuenta.rol;
+  const esPropietario = rolTitularDeCuenta(rolCuentaReal) === 'propietario';
+  const columna = esPropietario ? 'propietario_id' : 'cliente_id';
+
+  const vigente = vinculacionVigente(db, usuarioId, rolCuentaReal);
   if (vigente) return { ok: true, contratoId: vigente.id, numero: vigente.numero, yaExistia: true };
 
-  const datos = armarDatosVinculacion(db, usuarioId);
+  const datos = armarDatosVinculacion(db, usuarioId, rolCuentaReal);
   if (!datos) return err(404, 'La cuenta no existe.');
-  const texto = generarTextoVinculacion(tipo, datos);
+  // Los consentimientos van DENTRO del texto: el sello HMAC se calcula sobre él, así
+  // que una vez firmado no se puede cambiar después lo que la persona autorizó.
+  const texto = generarTextoRegistro(datos, consentimientos);
   const faltantes = faltantesVinculacion(datos);
 
-  const columna = ROL_TITULAR[tipo] === 'cliente' ? 'cliente_id' : 'propietario_id';
   const previa = db.prepare(
     `SELECT MAX(version) AS v FROM contratos WHERE reserva_id IS NULL AND tipo = ? AND ${columna} = ?`
-  ).get(tipo, Number(usuarioId)) as { v: number | null };
+  ).get(TIPO_REGISTRO, Number(usuarioId)) as { v: number | null };
   const version = (Number(previa?.v) || 0) + 1;
 
   try {
@@ -176,19 +221,24 @@ export function generarContratoVinculacion(
           texto, datos_json, faltantes_json, generado_por, generado_por_nombre
         ) VALUES (NULL, NULL, ?, ?, ?, '', ?, 'pendiente', ?, ?, ?, ?, ?)
       `).run(
-        ROL_TITULAR[tipo] === 'propietario' ? Number(usuarioId) : null,
-        ROL_TITULAR[tipo] === 'cliente' ? Number(usuarioId) : null,
-        tipo, version, texto, JSON.stringify(datos), JSON.stringify(faltantes),
+        esPropietario ? Number(usuarioId) : null,
+        esPropietario ? null : Number(usuarioId),
+        TIPO_REGISTRO, version, texto,
+        // Los consentimientos se guardan también en el snapshot, aparte del texto:
+        // el texto es la prueba, esto es lo consultable (p. ej. a quién se le puede
+        // escribir con comunicaciones comerciales) sin tener que leer el documento.
+        JSON.stringify({ ...datos, consentimientos }),
+        JSON.stringify(faltantes),
         actor.id, actor.nombre || '',
       );
       const id = Number(res.lastInsertRowid);
 
       // Igual que en los contratos de operación: toda la familia comparte el número
-      // base y la reemisión añade el sufijo de versión (VUS-000012-R2).
+      // base y la reemisión añade el sufijo de versión (ADP-000012-R2).
       const raiz = db.prepare(
         `SELECT id FROM contratos WHERE reserva_id IS NULL AND tipo = ? AND ${columna} = ? ORDER BY version ASC LIMIT 1`
-      ).get(tipo, Number(usuarioId)) as { id: number } | undefined;
-      const base = `${PREFIJO_VINCULACION[tipo]}-${String(Number(raiz?.id) || id).padStart(6, '0')}`;
+      ).get(TIPO_REGISTRO, Number(usuarioId)) as { id: number } | undefined;
+      const base = `${PREFIJO_REGISTRO}-${String(Number(raiz?.id) || id).padStart(6, '0')}`;
       const numero = version > 1 ? `${base}-R${version}` : base;
       db.prepare('UPDATE contratos SET numero = ? WHERE id = ?').run(numero, id);
 
@@ -198,9 +248,9 @@ export function generarContratoVinculacion(
           usuario_esperado_id, nombre_esperado, documento_esperado
         ) VALUES (?, ?, ?, ?, 'suscripcion', ?, ?, ?, ?)
       `);
-      for (const b of BLOQUES_VINCULACION[tipo]) {
-        // EL AGENTE no tiene cuenta esperada: lo suscribe cualquier admin con el
-        // permiso `contratos_firmar_agente`, igual que en el resto del módulo.
+      for (const b of bloquesDelRegistro(rolCuentaReal)) {
+        // EL RESPONSABLE no tiene cuenta esperada: lo suscribe el sello institucional
+        // de la sociedad (lib/contratos-sello-agente.ts).
         const esAgente = b.rol === 'agente';
         insFirma.run(
           id, b.clave, b.etiqueta, b.rol, b.orden,
@@ -217,7 +267,8 @@ export function generarContratoVinculacion(
         { id: actor.id, nombre: actor.nombre, correo: actor.correo, nivel: actor.nivel },
         {
           area: 'contratos', accion: 'emitir_vinculacion', entidad: 'contrato', entidad_id: id,
-          detalle: `Emitió ${TITULOS_VINCULACION[tipo]} ${numero} de la cuenta #${usuarioId}`
+          detalle: `Emitió ${TITULO_REGISTRO} ${numero} de la cuenta #${usuarioId}`
+            + ` · datos sensibles: sí · comerciales: ${consentimientos.comunicacionesComerciales ? 'sí' : 'no'}`
             + (faltantes.length ? ` · ${faltantes.length} dato(s) del perfil en blanco` : ''),
         },
       );
@@ -225,11 +276,11 @@ export function generarContratoVinculacion(
     })();
     return { ok: true, contratoId: crear.id, numero: crear.numero, yaExistia: false };
   } catch (e) {
-    // Carrera entre dos emisiones simultáneas (el registro y un clic de "habilitar"):
-    // el índice único parcial la corta y acá se devuelve el que ganó.
-    const ya = vinculacionVigente(db, usuarioId, tipo);
+    // Carrera entre dos emisiones simultáneas: el índice único parcial la corta y acá
+    // se devuelve el que ganó.
+    const ya = vinculacionVigente(db, usuarioId, cuenta.rol);
     if (ya) return { ok: true, contratoId: ya.id, numero: ya.numero, yaExistia: true };
-    return err(500, e instanceof Error ? e.message : 'No se pudo emitir el contrato de vinculación.');
+    return err(500, e instanceof Error ? e.message : 'No se pudo emitir la autorización de datos.');
   }
 }
 
@@ -243,11 +294,11 @@ export function generarContratoVinculacion(
  */
 export function emitirYNotificarVinculacion(
   db: DB, usuarioId: number, rol: string, actor: ActorVinculacion,
+  consentimientos: ConsentimientosRegistro,
 ): EmisionOk | EmisionError | null {
-  const tipo = vinculacionQueLeToca(rol);
-  if (!tipo) return null;                       // a un admin no le toca ninguno
+  if (!vinculacionQueLeToca(rol)) return null;  // a un admin no le toca ninguno
   try {
-    const r = generarContratoVinculacion(db, usuarioId, tipo, actor);
+    const r = generarContratoVinculacion(db, usuarioId, rol, actor, consentimientos);
     if (!r.ok || r.yaExistia) return r;         // no se re-notifica lo ya notificado
 
     // La sociedad suscribe su bloque en el acto. Antes quedaba esperando a que un
@@ -259,17 +310,20 @@ export function emitirYNotificarVinculacion(
     // panel. Quedarse sin contrato por no poder sellar sería peor.
     const sello = sellarBloquesDelAgente(db, r.contratoId, {
       momento: 'suscripcion',
-      motivo: `emisión automática de vinculación de la cuenta #${usuarioId}`,
+      motivo: `emisión automática al registrarse la cuenta #${usuarioId}`,
     });
     if (!sello.ok) {
       console.error('[vinculacion] Emitido sin sello de la sociedad:', r.numero, sello.error);
     }
+    // Notificación por PERSONA (tabla `notificaciones`), no por el chat compartido
+    // entre propietario y cliente: un aviso de firma pendiente es asunto de su
+    // destinatario y nadie más tiene por qué leerlo.
     notificarUsuarios(db, [Number(usuarioId)], {
       tipo: 'contrato_vinculacion',
-      titulo: 'Tienes un contrato pendiente de firma',
-      mensaje: `Para poder ${tipo === 'vinculacion-cliente' ? 'reservar un vehículo' : 'publicar tu vehículo'} `
-        + `necesitas firmar tu ${TITULOS_VINCULACION[tipo].toLowerCase()} (${r.numero}). `
-        + 'Puedes firmarlo desde tu perfil, en cualquier momento.',
+      titulo: 'Tienes un documento pendiente de firma',
+      mensaje: `Para poder ${rolTitularDeCuenta(rol) === 'propietario' ? 'publicar tu vehículo' : 'reservar un vehículo'} `
+        + `necesitas firmar tu ${TITULO_REGISTRO.toLowerCase()} (${r.numero}). `
+        + 'Puedes firmarla desde tu perfil, en cualquier momento.',
       referencia_id: r.contratoId,
       referencia_tipo: 'contrato',
     });
@@ -281,41 +335,26 @@ export function emitirYNotificarVinculacion(
 }
 
 /**
- * Emite la vinculación de una cuenta que todavía no la tiene, SOLO si su perfil ya
- * tiene los cinco datos que el documento necesita para identificar al titular.
+ * ¿Hay que pedirle a esta cuenta que autorice, porque todavía no tiene documento?
  *
- * Es lo que se llama en cada visita autenticada, para que las cuentas anteriores a
- * esta función acaben teniendo su contrato sin que nadie las procese a mano.
+ * SUSTITUYE a la emisión automática que había antes. Ya no se puede emitir sola: el
+ * documento recoge consentimientos —el general y el reforzado de la cláusula CUARTA—
+ * y un consentimiento no se puede fabricar en nombre de nadie. Las cuentas anteriores
+ * a esta función tienen que pasar por la pantalla de autorización y marcarlos ellas.
  *
- * POR QUÉ ESPERA AL PERFIL COMPLETO
- * Emitir antes deja un contrato que su titular NO PUEDE FIRMAR NUNCA: los faltantes se
- * congelan en `faltantes_json` al emitir, y `firmarBloqueContrato` los rechaza pidiendo
- * anular y reemitir —algo que solo puede hacer un administrador—. Completar el perfil
- * después no descongela nada. Así que quien aún no tenga dirección y ciudad no recibe
- * contrato todavía: recibe el aviso de completar el perfil, y el contrato se le emite
- * en la visita siguiente, ya correcto.
- *
- * Barata de llamar: si ya hay contrato vigente, una sola consulta y se va.
+ * Solo dice si hay que pedirlo; no emite nada.
  */
-export function emitirVinculacionSiProcede(
-  db: DB, usuarioId: number, rol: string, actor: ActorVinculacion,
-): EmisionOk | EmisionError | null {
-  const tipo = vinculacionQueLeToca(rol);
-  if (!tipo) return null;
-  if (vinculacionVigente(db, usuarioId, tipo)) return null;   // ya lo tiene
-  if (!puedeEmitirVinculacion().ok) return null;              // texto pendiente de revisión legal
-
-  const datos = armarDatosVinculacion(db, usuarioId);
-  if (!datos || faltantesVinculacion(datos).length > 0) return null;
-
-  return emitirYNotificarVinculacion(db, usuarioId, rol, actor);
+export function faltaAutorizacionDeDatos(db: DB, usuarioId: number, rol: string): boolean {
+  if (!vinculacionQueLeToca(rol)) return false;
+  if (!puedeEmitirVinculacion().ok) return false;    // texto pendiente de revisión legal
+  return vinculacionVigente(db, usuarioId, rol) === null;
 }
 
 // ── Estado de una cuenta ────────────────────────────────────────────────────
 
 export type EstadoVinculacion = {
   /** `null` cuando al rol no le toca ninguno (admin). */
-  tipo: TipoVinculacion | null;
+  tipo: TipoRegistro | null;
   titulo: string;
   /** El documento vigente, si ya se emitió. */
   contratoId: number | null;
@@ -326,6 +365,11 @@ export type EstadoVinculacion = {
   completo: boolean;
   /** Datos del perfil que faltan y que impiden firmar. */
   faltantes: CampoFaltante[];
+  /**
+   * ¿Queda algo por hacer? Cubre los DOS casos: que no se haya emitido todavía
+   * (hay que autorizar) y que esté emitido sin firmar (hay que firmar).
+   */
+  pendiente: boolean;
 };
 
 /**
@@ -339,20 +383,26 @@ export type EstadoVinculacion = {
 export function estadoVinculacion(db: DB, usuarioId: number, rol: string): EstadoVinculacion {
   const tipo = vinculacionQueLeToca(rol);
   if (!tipo) {
-    return { tipo: null, titulo: '', contratoId: null, numero: '', firmadoPorTitular: true, completo: true, faltantes: [] };
+    return {
+      tipo: null, titulo: '', contratoId: null, numero: '',
+      firmadoPorTitular: true, completo: true, faltantes: [], pendiente: false,
+    };
   }
-  const vigente = vinculacionVigente(db, usuarioId, tipo);
-  const datos = armarDatosVinculacion(db, usuarioId);
+  const vigente = vinculacionVigente(db, usuarioId, rol);
+  const datos = armarDatosVinculacion(db, usuarioId, rol);
   const faltantes = datos ? faltantesVinculacion(datos) : [];
 
   if (!vigente) {
     return {
-      tipo, titulo: TITULOS_VINCULACION[tipo], contratoId: null, numero: '',
+      tipo, titulo: TITULO_REGISTRO, contratoId: null, numero: '',
       firmadoPorTitular: false, completo: false, faltantes,
+      // Sin emitir: pendiente solo si de verdad se puede emitir hoy. Con el texto en
+      // revisión legal no hay nada que pedirle a nadie.
+      pendiente: puedeEmitirVinculacion().ok,
     };
   }
 
-  const bloqueTitular = ROL_TITULAR[tipo];
+  const bloqueTitular = rolTitularDeCuenta(rol);
   const fila = db.prepare(
     "SELECT COUNT(*) AS n FROM contrato_firmas WHERE contrato_id = ? AND rol = ? AND firmada_en <> ''"
   ).get(vigente.id, bloqueTitular) as { n: number };
@@ -360,11 +410,13 @@ export function estadoVinculacion(db: DB, usuarioId: number, rol: string): Estad
     "SELECT COUNT(*) AS n FROM contrato_firmas WHERE contrato_id = ? AND firmada_en = ''"
   ).get(vigente.id) as { n: number };
 
+  const firmadoPorTitular = (Number(fila?.n) || 0) > 0;
   return {
-    tipo, titulo: TITULOS_VINCULACION[tipo], contratoId: vigente.id, numero: vigente.numero,
-    firmadoPorTitular: (Number(fila?.n) || 0) > 0,
+    tipo, titulo: TITULO_REGISTRO, contratoId: vigente.id, numero: vigente.numero,
+    firmadoPorTitular,
     completo: (Number(pendientes?.n) || 0) === 0,
     faltantes,
+    pendiente: !firmadoPorTitular,
   };
 }
 
@@ -383,7 +435,7 @@ export function estadoVinculacion(db: DB, usuarioId: number, rol: string): Estad
  *     una, les emitiera el documento. Se les emite desde el panel y, desde ese
  *     momento, sí se les exige.
  *   · Mientras el texto esté pendiente de revisión legal
- *     (`VINCULACION_REVISADA_POR_ABOGADO`), en producción no se emite nada — así que
+ *     (`REGISTRO_REVISADO_POR_ABOGADO`), en producción no se emite nada — así que
  *     nadie tiene contrato y nadie queda bloqueado.
  *
  * O sea: la exigencia entra en vigor cuenta por cuenta, a medida que se les emite el

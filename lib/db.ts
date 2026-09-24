@@ -1342,7 +1342,7 @@ function migrarContratosVinculacion(db: Database.Database) {
   try {
     const tabla = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='contratos'").get() as { sql?: string } | undefined;
     if (!tabla?.sql) return;                                   // la tabla todavía no existe
-    if (!/vinculacion-cliente/.test(tabla.sql)) {
+    if (!/autorizacion-datos/.test(tabla.sql)) {
       // Columnas BASE reescritas a mano (conservan sus constraints reales); el resto
       // —las añadidas por ALTER a lo largo de las sesiones: via_firma, papel_*,
       // datos_revision— se copian dinámicamente, igual que en la migración de
@@ -1381,7 +1381,11 @@ function migrarContratosVinculacion(db: Database.Database) {
             -- además de DrivePass (el cliente o el propietario, según el tipo).
             propietario_id INTEGER REFERENCES usuarios(id),
             cliente_id INTEGER REFERENCES usuarios(id),
-            tipo TEXT NOT NULL CHECK(tipo IN ('agencia','otrosi-agencia','arrendamiento','otrosi-arrendamiento','acta-entrega','pagare','vinculacion-cliente','vinculacion-propietario')),
+            -- Los dos 'vinculacion-*' ya no se emiten (los sustituyó 'autorizacion-datos',
+            -- ver lib/contratos-registro-texto.ts) pero SIGUEN en la lista: quitarlos
+            -- haría fallar la copia de cualquier base que tenga uno emitido, y esta
+            -- migración no puede perder documentos.
+            tipo TEXT NOT NULL CHECK(tipo IN ('agencia','otrosi-agencia','arrendamiento','otrosi-arrendamiento','acta-entrega','pagare','vinculacion-cliente','vinculacion-propietario','autorizacion-datos')),
             numero TEXT NOT NULL DEFAULT '',
             version INTEGER NOT NULL DEFAULT 1,
             estado TEXT NOT NULL DEFAULT 'pendiente' CHECK(estado IN ('pendiente','firmado','anulado')),
@@ -1410,7 +1414,7 @@ function migrarContratosVinculacion(db: Database.Database) {
         `);
       });
       reconstruir();
-      console.log('[db] Migración: contratos admite documentos de vinculación (sin reserva ni vehículo).');
+      console.log('[db] Migración: contratos admite la autorización de datos del registro.');
     }
 
     // Un titular no puede tener DOS veces el mismo documento de vinculación en la misma
@@ -1618,14 +1622,21 @@ function crearTablasContratos(db: Database.Database) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS contratos (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      reserva_id INTEGER NOT NULL REFERENCES reservas(id),
-      vehiculo_id INTEGER NOT NULL REFERENCES vehiculos(id),
+      -- Opcionales desde sep-2026, y la razón está en la autorización de tratamiento
+      -- de datos que se firma AL CREAR LA CUENTA: no tiene reserva, ni vehículo, ni
+      -- dos partes. Para los seis documentos de operación siguen llegando siempre
+      -- llenos. Misma forma que deja migrarContratosVinculacion en las bases que ya
+      -- existían; si acá volviera a ponerse NOT NULL, una base nueva y una migrada
+      -- tendrían esquemas distintos.
+      reserva_id INTEGER REFERENCES reservas(id),
+      vehiculo_id INTEGER REFERENCES vehiculos(id),
       -- Partes congeladas: quién era el propietario y quién el cliente EN EL MOMENTO
       -- de emitir. Se guardan aquí (y no se recalculan desde la reserva) para que un
-      -- cambio de dueño del vehículo no reescriba quién firmó.
-      propietario_id INTEGER NOT NULL REFERENCES usuarios(id),
-      cliente_id INTEGER NOT NULL REFERENCES usuarios(id),
-      tipo TEXT NOT NULL CHECK(tipo IN ('agencia','otrosi-agencia','arrendamiento','otrosi-arrendamiento','acta-entrega','pagare')),
+      -- cambio de dueño del vehículo no reescriba quién firmó. En la autorización de
+      -- datos solo va una de las dos, según el rol de la cuenta.
+      propietario_id INTEGER REFERENCES usuarios(id),
+      cliente_id INTEGER REFERENCES usuarios(id),
+      tipo TEXT NOT NULL CHECK(tipo IN ('agencia','otrosi-agencia','arrendamiento','otrosi-arrendamiento','acta-entrega','pagare','vinculacion-cliente','vinculacion-propietario','autorizacion-datos')),
       -- Consecutivo propio del archivo (CAR-000012, CAR-000012-R2…). Es distinto del
       -- número que el texto del documento cita en sus cláusulas.
       numero TEXT NOT NULL DEFAULT '',

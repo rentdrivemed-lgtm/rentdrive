@@ -62,7 +62,10 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
 
   const db = getDb();
-  const body = await req.json().catch(() => ({})) as { usuario_id?: unknown };
+  const body = await req.json().catch(() => ({})) as {
+    usuario_id?: unknown;
+    autoriza_datos?: unknown; autoriza_datos_sensibles?: unknown; autoriza_comerciales?: unknown;
+  };
   const pedido = Number(body.usuario_id || 0);
   const esPropio = !pedido || pedido === Number(user.id);
 
@@ -84,8 +87,22 @@ export async function POST(req: NextRequest) {
   const puerta = puedeEmitirVinculacion();
   if (!puerta.ok) return NextResponse.json({ error: puerta.error }, { status: puerta.status });
 
+  // Los consentimientos los marca la PERSONA. Cuando esta ruta la usa el equipo para
+  // una cuenta ajena (mostrador), lo que hace es DEJAR CONSTANCIA de lo que el titular
+  // acaba de autorizar delante de quien lo atiende — de ahí que también acá haya que
+  // mandarlos explícitamente y no se asuman. Quién los registró queda en la bitácora.
+  if (body.autoriza_datos !== true || body.autoriza_datos_sensibles !== true) {
+    return NextResponse.json({
+      error: 'Falta la autorización de tratamiento de datos, incluidas las imágenes de los documentos de identidad.',
+    }, { status: 400 });
+  }
+
   const r = emitirYNotificarVinculacion(db, fila.id, fila.rol, {
     id: user.id, nombre: user.nombre, correo: user.correo,
+  }, {
+    general: true,
+    datosSensibles: true,
+    comunicacionesComerciales: body.autoriza_comerciales === true,
   });
   if (!r) return NextResponse.json({ error: 'No se pudo emitir el contrato.' }, { status: 500 });
   if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.status });

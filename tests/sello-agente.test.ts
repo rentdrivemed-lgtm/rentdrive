@@ -14,10 +14,11 @@ process.env.FIRMA_SECRET = 'secreto-de-prueba-suficientemente-largo';
 
 const ACTOR = { id: null, nombre: 'Registro automático', nivel: 'sistema' };
 
+const CONSIENTE = { general: true, datosSensibles: true, comunicacionesComerciales: false };
+
 function contratoDeVinculacion(db: DB, rol: 'usuario' | 'propietario' = 'usuario'): number {
   const usuarioId = crearUsuario(db, { rol });
-  const tipo = rol === 'usuario' ? 'vinculacion-cliente' : 'vinculacion-propietario';
-  const r = generarContratoVinculacion(db, usuarioId, tipo, ACTOR);
+  const r = generarContratoVinculacion(db, usuarioId, rol, ACTOR, CONSIENTE);
   if (!r.ok) throw new Error(`no se pudo emitir: ${r.error}`);
   return r.contratoId;
 }

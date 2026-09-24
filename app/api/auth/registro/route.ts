@@ -55,6 +55,7 @@ export async function POST(req: NextRequest) {
     tipo_documento, documento_identidad, fecha_nacimiento,
     celular, celular_indicativo, numero_licencia, direccion, ciudad,
     codigo_referido, cedula_url, cedula_url_dorso, licencia_url,
+    autoriza_datos, autoriza_datos_sensibles, autoriza_comerciales,
   } = await req.json();
 
   if (!nombre || !correo || !password) {
@@ -75,6 +76,27 @@ export async function POST(req: NextRequest) {
   if (errDir) return NextResponse.json({ error: errDir }, { status: 400 });
   const errCiudad = validarCiudad(ciudad || '');
   if (errCiudad) return NextResponse.json({ error: errCiudad }, { status: 400 });
+
+  // Sin autorización de datos no hay cuenta. Decisión del dueño (sep-2026): quien no
+  // autoriza el tratamiento de las imágenes de sus documentos no puede registrarse,
+  // porque sin verificar identidad no hay operación posible.
+  //
+  // ⚖️ REVISAR: el texto del abogado dice en su cláusula TERCERA que «ninguna actividad
+  // se condiciona a la entrega de datos sensibles» y en la CUARTA que es facultativo.
+  // Exigirlos contradice ambas. Pendiente de que las reformule para decir que sin esa
+  // autorización no se puede verificar la identidad y por tanto no se presta el servicio.
+  if (autoriza_datos !== true) {
+    return NextResponse.json(
+      { error: 'Para crear tu cuenta necesitas autorizar el tratamiento de tus datos personales.' },
+      { status: 400 },
+    );
+  }
+  if (autoriza_datos_sensibles !== true) {
+    return NextResponse.json(
+      { error: 'Para crear tu cuenta necesitas autorizar el tratamiento de las imágenes de tu documento de identidad y tu licencia. Sin ellas no podemos verificar tu identidad.' },
+      { status: 400 },
+    );
+  }
 
   // La mayoría de edad NO se relaja: es requisito real para alquilar un vehículo.
   if (!fecha_nacimiento || calcularEdad(fecha_nacimiento) < 18) {
@@ -169,7 +191,12 @@ export async function POST(req: NextRequest) {
   // `emitirYNotificarVinculacion` no lanza: si falla, la cuenta queda creada igual y el
   // documento se puede emitir después desde el panel. Perder un registro por esto sería
   // peor que emitir el contrato un minuto más tarde.
-  emitirYNotificarVinculacion(db, nuevoId, rolFinal, { id: nuevoId, nombre, correo });
+  emitirYNotificarVinculacion(db, nuevoId, rolFinal, { id: nuevoId, nombre, correo }, {
+    general: true,
+    datosSensibles: true,
+    // El único de los tres que es de verdad opcional.
+    comunicacionesComerciales: autoriza_comerciales === true,
+  });
 
   // El correo de bienvenida y el código de activación van en el mismo envío (evita
   // mandar dos correos separados). El registro NUNCA se bloquea si el envío falla —

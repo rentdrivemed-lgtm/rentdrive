@@ -115,6 +115,14 @@ function RegistroForm() {
     ciudad: '',
   });
 
+  // Autorización de tratamiento de datos (Ley 1581 de 2012). Las dos primeras son
+  // condición para crear la cuenta; la tercera es de verdad opcional. Se recogen acá
+  // —y no al firmar— porque quedan escritas DENTRO del documento que se emite al
+  // terminar el registro, y el sello de la firma se calcula sobre ese texto.
+  const [autorizaDatos, setAutorizaDatos] = useState(false);
+  const [autorizaSensibles, setAutorizaSensibles] = useState(false);
+  const [autorizaComerciales, setAutorizaComerciales] = useState(false);
+
   /* ── Atajo opcional: leer la foto del documento ──
      Es SIEMPRE opcional. Quien no tenga el documento a mano (o simplemente no
      quiera subirlo) llena el formulario a mano exactamente como antes.
@@ -264,6 +272,10 @@ function RegistroForm() {
     if (errDir) return errDir;
     const errCiudad = validarCiudad(perfil.ciudad);
     if (errCiudad) return errCiudad;
+    if (!autorizaDatos) return 'Necesitas autorizar el tratamiento de tus datos personales para crear la cuenta.';
+    if (!autorizaSensibles) {
+      return 'Necesitas autorizar el tratamiento de las imágenes de tu documento de identidad y tu licencia: sin ellas no podemos verificar tu identidad.';
+    }
     return '';
   };
 
@@ -324,6 +336,9 @@ function RegistroForm() {
           // Opcionales: solo se mandan si la persona usó el atajo de foto y el
           // servidor logró guardarla (ver leerDocumento). Quien llenó el
           // formulario a mano simplemente no manda estos campos.
+          autoriza_datos: autorizaDatos,
+          autoriza_datos_sensibles: autorizaSensibles,
+          autoriza_comerciales: autorizaComerciales,
           ...(cedulaUrlGuardada ? { cedula_url: cedulaUrlGuardada } : {}),
           ...(cedulaDorsoUrlGuardada ? { cedula_url_dorso: cedulaDorsoUrlGuardada } : {}),
           ...(licenciaUrlGuardada ? { licencia_url: licenciaUrlGuardada } : {}),
@@ -734,6 +749,48 @@ function RegistroForm() {
                   </p>
                 </div>
               )}
+
+              {/* Autorización de tratamiento de datos (Ley 1581 de 2012). El documento
+                  completo se emite y se firma al terminar el registro; acá se recogen
+                  los consentimientos porque quedan escritos dentro de su texto.
+                  Las dos primeras son obligatorias, la tercera no. */}
+              <div className="rounded-xl border border-border bg-surface/60 p-4 space-y-3">
+                <p className="text-xs font-semibold text-ink/60 uppercase tracking-wide">
+                  Tratamiento de tus datos
+                </p>
+
+                <label className="flex items-start gap-2.5 text-xs text-ink/80 cursor-pointer">
+                  <input type="checkbox" className="mt-0.5 shrink-0" checked={autorizaDatos}
+                    onChange={e => setAutorizaDatos(e.target.checked)} />
+                  <span>
+                    Autorizo a DRIVEPASS COL S.A.S. a tratar mis datos personales para verificar mi
+                    identidad, gestionar mis alquileres y cumplir sus obligaciones legales.
+                    <span className="text-accent ml-1">*</span>
+                  </span>
+                </label>
+
+                <label className="flex items-start gap-2.5 text-xs text-ink/80 cursor-pointer">
+                  <input type="checkbox" className="mt-0.5 shrink-0" checked={autorizaSensibles}
+                    onChange={e => setAutorizaSensibles(e.target.checked)} />
+                  <span>
+                    Autorizo el tratamiento de las imágenes de mi documento de identidad y mi
+                    licencia de conducción, únicamente para verificar quién soy y prevenir fraude.
+                    <span className="text-accent ml-1">*</span>
+                  </span>
+                </label>
+
+                <label className="flex items-start gap-2.5 text-xs text-ink/80 cursor-pointer">
+                  <input type="checkbox" className="mt-0.5 shrink-0" checked={autorizaComerciales}
+                    onChange={e => setAutorizaComerciales(e.target.checked)} />
+                  <span>Quiero recibir novedades y promociones. <span className="text-ink/45">(Opcional)</span></span>
+                </label>
+
+                <p className="text-[11px] text-ink/50 leading-relaxed">
+                  Sin las dos primeras no podemos verificar tu identidad y, por tanto, no podemos
+                  crearte la cuenta. Puedes conocer, actualizar, rectificar o suprimir tus datos, y
+                  revocar esta autorización, escribiendo a nuestro correo de habeas data.
+                </p>
+              </div>
 
               {/* Botones */}
               <div className="flex gap-3 pt-1">
