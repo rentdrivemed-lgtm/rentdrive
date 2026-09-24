@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
 import { uploadFile } from '@/lib/storage';
 import { normalizarOrientacion } from '@/lib/blur-placas';
-import { tipoRealImagen } from '@/lib/subida-imagen';
+import { tipoRealDocumento, tipoRealImagen } from '@/lib/subida-imagen';
 
 export const runtime = 'nodejs';
 
@@ -60,6 +60,13 @@ export async function POST(req: NextRequest) {
       // re-codificar (importante para que la verificación con IA de
       // `lib/verificacion-docs.ts` lea el documento con la máxima nitidez).
       buffer = await normalizarOrientacion(buffer, file.type as 'image/jpeg' | 'image/png' | 'image/webp');
+    } else if (file.type === 'application/pdf' && tipoRealDocumento(buffer) !== 'application/pdf') {
+      // Mismo criterio que arriba, ahora también para el PDF: el Content-Type lo
+      // declara el cliente y se falsifica cambiando la extensión. Sin esto se podía
+      // guardar un HTML (o cualquier cosa) como si fuera un documento PDF. Quien lo
+      // abriera después no lo vería como PDF, y el proxy tendría que decidir con un
+      // archivo que no es lo que dice ser.
+      return NextResponse.json({ error: 'El archivo no es un PDF válido.' }, { status: 400 });
     }
     const { url } = await uploadFile(nombre, file.type, buffer);
     return NextResponse.json({ url, tipo: ext });

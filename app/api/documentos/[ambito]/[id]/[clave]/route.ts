@@ -24,6 +24,7 @@ import { nivelDe } from '@/lib/permisos';
 import { esAmbitoDocumento } from '@/lib/documentos-ref';
 import { resolverDocumento, registrarAccesoDocumento, bytesDeDocumento } from '@/lib/documentos-acceso';
 import { nombreDescargaDocumento } from '@/lib/documento-tipo';
+import { tipoRealDocumento } from '@/lib/subida-imagen';
 import { consumirIntento } from '@/lib/limite-tasa';
 
 export const dynamic = 'force-dynamic';
@@ -96,7 +97,22 @@ export async function GET(
     return NextResponse.json({ error: traido.error }, { status: 502 });
   }
 
-  const tipoCrudo = (traido.contentType || tipoDesdeNombre(res.url) || '').toLowerCase();
+  // ── De qué tipo es ESTE archivo ───────────────────────────────────────────
+  //
+  // Los BYTES mandan, y en este proyecto son la única señal fiable para los PDF:
+  //
+  //   · el NOMBRE no sirve — `uploadFile` sube los PDF sin extensión a propósito
+  //     (la cuenta de Cloudinary tiene restringida la entrega de archivos con
+  //     `.pdf`: 401 con extensión, 200 sin ella — ver lib/storage.ts);
+  //   · el CONTENT-TYPE de Cloudinary tampoco — los `raw` los entrega como
+  //     `application/octet-stream`.
+  //
+  // Con solo esas dos señales, todo PDF caía fuera de `TIPOS_EN_LINEA`, se servía
+  // como binario y el navegador lo descargaba en vez de mostrarlo. Era el «los sube
+  // pero no los muestra» que se reportó. Se mira primero el contenido real y solo
+  // se cae a las otras dos señales si los bytes no dicen nada reconocible.
+  const tipoReal = tipoRealDocumento(traido.buffer);
+  const tipoCrudo = (tipoReal || traido.contentType || tipoDesdeNombre(res.url) || '').toLowerCase();
   const enLinea = TIPOS_EN_LINEA.has(tipoCrudo);
   const contentType = enLinea ? tipoCrudo : 'application/octet-stream';
   const nombre = nombreDescargaDocumento(res.url, `${res.titular.nombre || ambito}-${clave}`);

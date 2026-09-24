@@ -20,6 +20,35 @@ export function tipoRealImagen(buf: Buffer): MediaTypeImagen | null {
 }
 
 /**
+ * Como `tipoRealImagen`, pero incluyendo PDF y GIF: el tipo REAL de un documento
+ * guardado, leído de sus bytes.
+ *
+ * Existe porque con los PDF de este proyecto no hay ninguna otra señal fiable:
+ * `uploadFile` los sube a Cloudinary como `resource_type: 'raw'` y SIN extensión
+ * (la cuenta tiene restringida la entrega de archivos reconocidos como PDF: con
+ * `.pdf` responde 401, sin extensión 200 — ver lib/storage.ts). Así que la URL no
+ * dice que sea un PDF, y Cloudinary entrega los `raw` como
+ * `application/octet-stream`. Mirando solo esas dos señales, un PDF perfectamente
+ * válido acababa sirviéndose como binario y el navegador lo descargaba en vez de
+ * mostrarlo — que es justo lo que el dueño reportó como «los sube pero no los
+ * muestra».
+ *
+ * Los bytes no mienten y no dependen ni del nombre, ni de Cloudinary, ni de lo que
+ * declare quien sube el archivo.
+ */
+export type MediaTypeDocumento = MediaTypeImagen | 'image/gif' | 'application/pdf';
+
+export function tipoRealDocumento(buf: Buffer): MediaTypeDocumento | null {
+  if (buf.length < 12) return null;
+  // `%PDF-` puede no estar en el byte 0: el estándar admite basura delante y los
+  // lectores la toleran, así que se busca en los primeros 1024 bytes.
+  const cabecera = buf.subarray(0, Math.min(buf.length, 1024)).toString('latin1');
+  if (cabecera.includes('%PDF-')) return 'application/pdf';
+  if (buf.toString('ascii', 0, 3) === 'GIF') return 'image/gif';
+  return tipoRealImagen(buf);
+}
+
+/**
  * Lee el body multipart como STREAM, cortando en cuanto se supera `maxBytes`, en
  * vez de esperar a que `req.formData()` termine de bufferizar todo el cuerpo.
  *
