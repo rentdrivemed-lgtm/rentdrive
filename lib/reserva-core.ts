@@ -298,15 +298,16 @@ export function validarDocumentosReserva(d: DocumentosReserva): ErrorReserva | n
  * de cédula del perfil.
  *
  * `descartarDorsoSiPasaporte` (lo usa el mostrador): si el titular es de pasaporte,
- * el dorso se guarda vacío en vez de arrastrar lo que viniera en el body. Esa ruta
- * exige que cada URL guardada sea una subida nuestra y al dorso de un pasaporte no
- * se le exige nada, así que si no se descarta quedaría persistida una URL que nada
- * validó. La vía pública NO lo usa: conserva el comportamiento que tiene hoy.
+ * el dorso se guarda vacío en vez de arrastrar lo que viniera en el body. Al dorso de
+ * un pasaporte no se le exige nada, así que si no se descarta quedaría persistida una
+ * URL que nada validó. La vía pública NO lo usa: conserva el comportamiento que tiene hoy.
+ *
+ * `urlsExentas`: ver `urlsDocumentosGuardadas`.
  */
 export function resolverDocumentosIdentidad(
   d: DocumentosReserva,
   tipoDocumentoRegistrado: unknown,
-  opts: { descartarDorsoSiPasaporte?: boolean } = {},
+  opts: { descartarDorsoSiPasaporte?: boolean; urlsExentas?: string[] } = {},
 ): { documentos: DocumentosValidados } | { error: ErrorReserva } {
   const esPasaporte = String(tipoDocumentoRegistrado ?? '').trim() === TIPO_DOCUMENTO_SIN_DORSO;
 
@@ -319,6 +320,19 @@ export function resolverDocumentosIdentidad(
   }
   if (!esPasaporte && !d.documento_id_url_dorso) {
     return { error: { error: 'Falta el dorso de tu documento de identidad.', status: 400 } };
+  }
+
+  // Procedencia. Vivía SOLO en la vía de mostrador, así que por la vía pública entraba
+  // a `reservas` cualquier cadena: una petición armada a mano dejaba guardado como
+  // "documento del cliente" un enlace externo que después el equipo abre desde el panel.
+  // Se comprueba con el `esPasaporte` YA contrastado: creyéndole al del body, marcar la
+  // casilla sacaba el dorso de esta verificación.
+  const exentas = new Set(opts.urlsExentas ?? []);
+  const deProcedenciaDudosa = [d.documento_id_url, d.licencia_url, d.licencia_url_dorso]
+    .concat(esPasaporte ? [] : [d.documento_id_url_dorso])
+    .some(u => !(typeof u === 'string' && exentas.has(u)) && !esUrlDeStorageValida(u));
+  if (deProcedenciaDudosa) {
+    return { error: { error: 'Los documentos deben subirse desde este formulario.', status: 400 } };
   }
 
   return { documentos: {
@@ -483,6 +497,31 @@ export type DatosOperacion = { direccion: string; ciudad: string; emergenciaNomb
 export function leerPerfilOperacion(db: DB, usuarioId: number): PerfilOperacion | undefined {
   return db.prepare('SELECT tipo_documento, direccion, ciudad, contacto_emergencia FROM usuarios WHERE id = ?')
     .get(usuarioId) as PerfilOperacion | undefined;
+}
+
+/**
+ * URLs de documentos que este usuario YA tiene guardadas en su perfil.
+ *
+ * Son la exención al validar la procedencia en `resolverDocumentosIdentidad`: una URL
+ * que ya estaba persistida se aceptó en su momento y no se vuelve a juzgar con las
+ * reglas de hoy.
+ *
+ * Sin esto la validación deja gente atascada para siempre, y no en teoría: /pago
+ * PRECARGA en el formulario los documentos guardados del perfil y el navegador los
+ * reenvía tal cual, así que cualquiera con una URL anterior a Cloudinary (rutas
+ * `/uploads/...`) vería "los documentos deben subirse desde este formulario" sobre un
+ * campo que la propia página rellenó. Es exactamente el atasco que ya dejó vehículos
+ * imposibles de guardar (ver el comentario de `documentosConUrlsValidas` en storage.ts).
+ *
+ * Y no debilita nada: la lista sale de la BASE DE DATOS y de la fila de ESTE usuario,
+ * nunca del body, así que nadie puede declarar exenta una URL que no tuviera ya.
+ */
+export function urlsDocumentosGuardadas(db: DB, usuarioId: number): string[] {
+  const fila = db.prepare(
+    'SELECT cedula_url, cedula_url_dorso, licencia_url, licencia_url_dorso FROM usuarios WHERE id = ?'
+  ).get(usuarioId) as Record<string, unknown> | undefined;
+  if (!fila) return [];
+  return Object.values(fila).filter((v): v is string => typeof v === 'string' && v !== '');
 }
 
 /**

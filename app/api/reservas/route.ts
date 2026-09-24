@@ -23,7 +23,7 @@ import { obtenerTokensAceptacion, crearFuentePago, crearTransaccion, esperarResu
 import {
   validarNochesMinimasCliente, consumirAutorizacionDiaSuelto, validarFormatoFechas, MIN_NOCHES_POR_VIA, validarDocumentosReserva, resolverDocumentosIdentidad, validarLugaresReserva,
   cargarVehiculoReservable, validarDisponibilidadFechas,
-  leerPerfilOperacion, resolverDatosOperacion, guardarDatosOperacionEnPerfil,
+  leerPerfilOperacion, urlsDocumentosGuardadas, resolverDatosOperacion, guardarDatosOperacionEnPerfil,
   precargarDocumentosEnPerfil, calcularCobroReserva, insertarReserva,
 } from '@/lib/reserva-core';
 
@@ -281,7 +281,12 @@ export async function POST(req: NextRequest) {
   // (POST /api/admin/reservas) la aplique sobre SU titular con el mismo código, y
   // `documentos` (con el flag ya derivado del tipo REGISTRADO, no del body) es lo
   // único que aceptan `precargarDocumentosEnPerfil` e `insertarReserva`.
-  const identidad = resolverDocumentosIdentidad(documentosBody, perfil?.tipo_documento);
+  // `urlsExentas`: los documentos que esta persona ya tenía guardados se aceptan tal
+  // cual. /pago los precarga en el formulario, así que sin la exención una URL antigua
+  // impediría reservar sobre un campo que la propia página rellenó.
+  const identidad = resolverDocumentosIdentidad(documentosBody, perfil?.tipo_documento, {
+    urlsExentas: urlsDocumentosGuardadas(db, user.id),
+  });
   if ('error' in identidad) return NextResponse.json({ error: identidad.error.error }, { status: identidad.error.status });
   const documentos = identidad.documentos;
 

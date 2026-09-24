@@ -4,7 +4,6 @@ import { guardArea } from '@/lib/guard';
 import { bloqueadoPorCsrf } from '@/lib/csrf';
 import { registrarAuditoria } from '@/lib/permisos';
 import { enviarCorreo } from '@/lib/email';
-import { esUrlDeStorageValida } from '@/lib/storage';
 import { type Lugar, lugarResumen } from '@/lib/lugares';
 import { validarCelular, validarDocumentoIdentidad, PAIS_TEL_DEFAULT } from '@/lib/validacion';
 import { asignarCodigoReferido, consumirCreditos, procesarRecompensaReferido } from '@/lib/referidos';
@@ -13,7 +12,7 @@ import { generarCodigoCorreo, expiraEnMinutos, CODIGO_VIGENCIA_MIN } from '@/lib
 import { crearOperacionYNotificar, avisarPorChat } from '@/lib/reserva-confirmacion';
 import {
   validarNochesMinimas, validarFormatoFechas, validarFechaInicioNoPasada,
-  validarDocumentosReserva, resolverDocumentosIdentidad, validarLugaresReserva,
+  validarDocumentosReserva, resolverDocumentosIdentidad, urlsDocumentosGuardadas, validarLugaresReserva,
   cargarVehiculoReservable, validarDisponibilidadFechas,
   leerPerfilOperacion, resolverDatosOperacion, rellenarDatosOperacionFaltantes,
   precargarDocumentosEnPerfil, calcularCobroReserva, insertarReserva,
@@ -83,10 +82,11 @@ export const dynamic = 'force-dynamic';
 //     `validarFechaInicioNoPasada` en lib/reserva-core.ts). El piso de fecha importa
 //     porque esta vía factura de inmediato: sin él se podían fabricar alquileres
 //     "pagados" del mes pasado.
-//  6. URLs de documentos: acá se exige que sean subidas nuestras
-//     (`esUrlDeStorageValida`) antes de guardarlas en la reserva. El contraste del
-//     dorso/pasaporte SÍ es el mismo de la vía pública (`resolverDocumentosIdentidad`),
-//     solo que contra el tipo de documento del CLIENTE titular, no del empleado.
+//  6. URLs de documentos: ya NO es una diferencia. La exigencia de que sean subidas
+//     nuestras vivía solo acá, así que por la vía pública entraba a `reservas`
+//     cualquier cadena; ahora está dentro de `resolverDocumentosIdentidad` y rige las
+//     dos vías. Lo que sigue siendo propio del mostrador es el contraste del
+//     dorso/pasaporte contra el tipo de documento del CLIENTE titular, no del empleado.
 //  7. Perfil del cliente: en la vía pública el titular es el propio usuario
 //     autenticado, así que la reserva sobrescribe SU perfil sin problema. Acá el
 //     titular lo elige el empleado (`usuario_id`), de modo que sobre una cuenta que
@@ -325,20 +325,17 @@ export async function POST(req: NextRequest) {
     ? crearCuenta.tipoDocumento
     : (patchPerfil?.tipoDocumento || cliente!.tipo_documento);
 
-  const identidad = resolverDocumentosIdentidad(documentosBody, tipoDocumentoTitular, { descartarDorsoSiPasaporte: true });
+  // La exigencia de que las 4 URLs sean subidas NUESTRAS vivía acá suelta; ahora está
+  // dentro de `resolverDocumentosIdentidad`, que es lo que hace que la vía pública la
+  // aplique también (antes no la tenía). Los documentos que el cliente ya tuviera
+  // guardados quedan exentos, igual que en /pago: una URL antigua en su perfil no
+  // puede impedirle al mostrador atenderlo. Cuenta nueva = sin exenciones.
+  const identidad = resolverDocumentosIdentidad(documentosBody, tipoDocumentoTitular, {
+    descartarDorsoSiPasaporte: true,
+    urlsExentas: cliente ? urlsDocumentosGuardadas(db, cliente.id) : [],
+  });
   if ('error' in identidad) return mal(identidad.error.error, identidad.error.status);
   const documentos = identidad.documentos;
-
-  // Endurecimiento propio de esta ruta: las 4 URLs tienen que venir de nuestro
-  // storage (las sube DocUploadDoble → POST /api/upload/documento). Sin esto, una
-  // request armada a mano podría dejar guardado como "documento del cliente"
-  // cualquier enlace externo. Se mira el `documento_es_pasaporte` ya CONTRASTADO: con
-  // el del body, marcar la casilla bastaba para sacar el dorso de esta verificación.
-  const urlsDocs = [documentos.documento_id_url, documentos.licencia_url, documentos.licencia_url_dorso]
-    .concat(documentos.documento_es_pasaporte ? [] : [documentos.documento_id_url_dorso]);
-  if (urlsDocs.some(u => !esUrlDeStorageValida(u as string))) {
-    return mal('Los documentos deben subirse desde este formulario.');
-  }
 
   // ── 4. Vehículo y fechas ──────────────────────────────────────────────────
   const vehiculo = cargarVehiculoReservable(db, vehiculoId);
