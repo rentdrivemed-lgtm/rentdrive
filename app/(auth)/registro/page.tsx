@@ -5,7 +5,8 @@ import Link from 'next/link';
 import { LogoMark } from '@/components/Logo';
 import { IconKey, IconCar, IconUser, IconArrowR, IconArrowL, IconShield, IconPhoto, IconCheck } from '@/components/Icons';
 import { tomarDestino } from '@/lib/lugares';
-import { validarCelular, validarDocumentoIdentidad, PAIS_TEL_DEFAULT } from '@/lib/validacion';
+import { validarCelular, validarCiudad, validarDireccion, validarDocumentoIdentidad, PAIS_TEL_DEFAULT } from '@/lib/validacion';
+import { rutaSiguientePaso } from '@/lib/siguiente-paso';
 import TelefonoInput from '@/components/TelefonoInput';
 import GoogleAuthButton from '@/components/GoogleAuthButton';
 import { useSession } from '@/contexts/SessionContext';
@@ -110,6 +111,8 @@ function RegistroForm() {
     celular: '',
     celular_indicativo: PAIS_TEL_DEFAULT,
     numero_licencia: '',
+    direccion: '',
+    ciudad: '',
   });
 
   /* ── Atajo opcional: leer la foto del documento ──
@@ -256,6 +259,11 @@ function RegistroForm() {
     if (calcularEdad(perfil.fecha_nacimiento) < 18) return 'Debes ser mayor de 18 años para registrarte.';
     const errCel = validarCelular(perfil.celular_indicativo, perfil.celular);
     if (errCel) return errCel;
+    // Mismas reglas que el servidor: si acá pasa, el registro no lo rechaza después.
+    const errDir = validarDireccion(perfil.direccion);
+    if (errDir) return errDir;
+    const errCiudad = validarCiudad(perfil.ciudad);
+    if (errCiudad) return errCiudad;
     return '';
   };
 
@@ -335,10 +343,10 @@ function RegistroForm() {
       try {
         const r = await fetch('/api/auth/me');
         const d = await r.json().catch(() => ({}));
-        if (d?.user && d.user.correo_pendiente === true) {
-          router.push(`/verificar-correo?next=${encodeURIComponent(destinoFinal)}`);
-          return;
-        }
+        // `incluirFirma: true` — a quien acaba de crear su cuenta se le pide firmar el
+        // contrato de vinculación como un paso más del alta, no en una pantalla aparte.
+        router.push(rutaSiguientePaso(d?.user, destinoFinal, { incluirFirma: true }));
+        return;
       } catch { /* seguimos con el flujo normal; el servidor igual bloquea al reservar/publicar */ }
 
       router.push(destinoFinal);
@@ -677,6 +685,31 @@ function RegistroForm() {
                   onChangeIndicativo={dial => setPerfil(f => ({ ...f, celular_indicativo: dial }))}
                   onChangeNumero={num => setPerfil(f => ({ ...f, celular: num }))}
                 />
+              </div>
+
+              {/* Dirección y ciudad. Se piden acá —y no más adelante, en la reserva— porque
+                  el contrato de vinculación que se emite al crear la cuenta identifica al
+                  titular con ellas. Emitirlo sin ellas dejaría un documento que su titular
+                  no podría firmar nunca sin que un administrador lo anule y lo reemita. */}
+              <div>
+                <label className="block text-xs font-semibold text-ink/60 mb-1.5 uppercase tracking-wide">
+                  Dirección de residencia<span className="text-accent ml-1">*</span>
+                </label>
+                <input type="text" required placeholder="Ej: Calle 42 A No. 68 A 10"
+                  className={inputCls} value={perfil.direccion}
+                  onChange={e => setPerfil(f => ({ ...f, direccion: e.target.value }))} />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-ink/60 mb-1.5 uppercase tracking-wide">
+                  Ciudad de residencia<span className="text-accent ml-1">*</span>
+                </label>
+                <input type="text" required placeholder="Ej: Medellín"
+                  className={inputCls} value={perfil.ciudad}
+                  onChange={e => setPerfil(f => ({ ...f, ciudad: e.target.value }))} />
+                <p className="text-[11px] text-ink/50 mt-1">
+                  Van en tu contrato de vinculación, que firmas al terminar el registro.
+                </p>
               </div>
 
               {/* Licencia — SOLO para el arrendatario (rol 'usuario'). Al propietario ya no se

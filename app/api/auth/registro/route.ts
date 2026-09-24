@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { signToken, UserPayload } from '@/lib/auth';
 import { enviarCorreo } from '@/lib/email';
-import { validarCelular, validarDocumentoIdentidad, PAIS_TEL_DEFAULT } from '@/lib/validacion';
+import { validarCelular, validarCiudad, validarDireccion, validarDocumentoIdentidad, PAIS_TEL_DEFAULT } from '@/lib/validacion';
 import { asignarCodigoReferido, vincularReferido } from '@/lib/referidos';
 import { bloqueadoPorCsrf } from '@/lib/csrf';
 import { consumirIntento, ipCliente } from '@/lib/limite-tasa';
@@ -42,14 +42,18 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Registro corto a propósito: aquí solo se piden los datos indispensables para
-  // crear la cuenta. La dirección, la ciudad y el contacto de emergencia se piden
-  // más adelante, en el flujo de reserva (app/api/reservas), que es cuando de
-  // verdad se necesitan para la operación.
+  // El registro pide lo indispensable para crear la cuenta, MÁS dirección y ciudad.
+  // Esas dos no están acá por la operación —el flujo de reserva las pediría igual—
+  // sino porque el contrato de vinculación identifica al titular con ellas y se emite
+  // en este mismo POST. Sin ellas el contrato saldría con los huecos congelados en
+  // `faltantes_json` y su titular no podría firmarlo nunca sin que un administrador lo
+  // anule y lo reemita (ver emitirVinculacionSiProcede en lib/contratos-vinculacion.ts).
+  //
+  // El contacto de emergencia sí se sigue pidiendo en la reserva: no va en el contrato.
   const {
     nombre, correo, password, rol,
     tipo_documento, documento_identidad, fecha_nacimiento,
-    celular, celular_indicativo, numero_licencia,
+    celular, celular_indicativo, numero_licencia, direccion, ciudad,
     codigo_referido, cedula_url, cedula_url_dorso, licencia_url,
   } = await req.json();
 
@@ -64,6 +68,13 @@ export async function POST(req: NextRequest) {
 
   const errCel = validarCelular(celular_indicativo || PAIS_TEL_DEFAULT, celular || '');
   if (errCel) return NextResponse.json({ error: errCel }, { status: 400 });
+
+  // Mismas reglas que aplica el checkout a estos dos campos, para que un dato aceptado
+  // aquí no lo rechace después `resolverDatosOperacion`.
+  const errDir = validarDireccion(direccion || '');
+  if (errDir) return NextResponse.json({ error: errDir }, { status: 400 });
+  const errCiudad = validarCiudad(ciudad || '');
+  if (errCiudad) return NextResponse.json({ error: errCiudad }, { status: 400 });
 
   // La mayoría de edad NO se relaja: es requisito real para alquilar un vehículo.
   if (!fecha_nacimiento || calcularEdad(fecha_nacimiento) < 18) {
@@ -107,9 +118,9 @@ export async function POST(req: NextRequest) {
   const ahora = new Date();
   const codigoExpira = expiraEnMinutos(CODIGO_VIGENCIA_MIN, ahora);
 
-  // direccion, ciudad y contacto_emergencia quedan vacíos a propósito: el flujo de
-  // reserva los detecta vacíos y los pide ahí. Ojo si alguien piensa en poner
-  // 'Medellín' por defecto en ciudad — eso haría que nunca se le pregunte.
+  // contacto_emergencia queda vacío a propósito: el flujo de reserva lo detecta vacío
+  // y lo pide ahí, que es cuando de verdad se necesita. Dirección y ciudad SÍ se
+  // guardan desde acá: van dentro del contrato de vinculación que se emite abajo.
   const result = await db.prepare(`
     INSERT INTO usuarios
       (nombre, correo, password, rol,
@@ -125,8 +136,8 @@ export async function POST(req: NextRequest) {
     fecha_nacimiento || '',
     celular || '',
     celular_indicativo || PAIS_TEL_DEFAULT,
-    '',
-    '',
+    String(direccion || '').trim(),
+    String(ciudad || '').trim(),
     numero_licencia || '',
     '{}',
     cedulaUrlFinal,

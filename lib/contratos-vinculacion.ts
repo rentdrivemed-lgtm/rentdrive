@@ -20,6 +20,7 @@ import { AGENTE, CIUDAD_CONTRATO, esPendiente, type CampoFaltante } from './cont
 import { personaDeUsuario } from './contratos';
 import { registrarAuditoriaEstricta } from './permisos';
 import { notificarUsuarios } from './panel';
+import { sellarBloquesDelAgente } from './contratos-sello-agente';
 import {
   PREFIJO_VINCULACION, ROL_TITULAR, TITULOS_VINCULACION, VINCULACION_REVISADA_POR_ABOGADO,
   generarTextoVinculacion, type DatosVinculacion, type TipoVinculacion,
@@ -248,6 +249,21 @@ export function emitirYNotificarVinculacion(
   try {
     const r = generarContratoVinculacion(db, usuarioId, tipo, actor);
     if (!r.ok || r.yaExistia) return r;         // no se re-notifica lo ya notificado
+
+    // La sociedad suscribe su bloque en el acto. Antes quedaba esperando a que un
+    // administrador firmara documento por documento, y el orden de los bloques hacía
+    // que el titular viera «pendiente de LA PLATAFORMA» en su propio contrato.
+    //
+    // No se revierte la emisión si el sello falla: el contrato existe, el titular ya
+    // puede firmarlo, y el bloque de la sociedad se puede sellar después desde el
+    // panel. Quedarse sin contrato por no poder sellar sería peor.
+    const sello = sellarBloquesDelAgente(db, r.contratoId, {
+      momento: 'suscripcion',
+      motivo: `emisión automática de vinculación de la cuenta #${usuarioId}`,
+    });
+    if (!sello.ok) {
+      console.error('[vinculacion] Emitido sin sello de la sociedad:', r.numero, sello.error);
+    }
     notificarUsuarios(db, [Number(usuarioId)], {
       tipo: 'contrato_vinculacion',
       titulo: 'Tienes un contrato pendiente de firma',
@@ -262,6 +278,37 @@ export function emitirYNotificarVinculacion(
     console.error('[vinculacion] No se pudo emitir/notificar:', e instanceof Error ? e.message : e);
     return null;
   }
+}
+
+/**
+ * Emite la vinculación de una cuenta que todavía no la tiene, SOLO si su perfil ya
+ * tiene los cinco datos que el documento necesita para identificar al titular.
+ *
+ * Es lo que se llama en cada visita autenticada, para que las cuentas anteriores a
+ * esta función acaben teniendo su contrato sin que nadie las procese a mano.
+ *
+ * POR QUÉ ESPERA AL PERFIL COMPLETO
+ * Emitir antes deja un contrato que su titular NO PUEDE FIRMAR NUNCA: los faltantes se
+ * congelan en `faltantes_json` al emitir, y `firmarBloqueContrato` los rechaza pidiendo
+ * anular y reemitir —algo que solo puede hacer un administrador—. Completar el perfil
+ * después no descongela nada. Así que quien aún no tenga dirección y ciudad no recibe
+ * contrato todavía: recibe el aviso de completar el perfil, y el contrato se le emite
+ * en la visita siguiente, ya correcto.
+ *
+ * Barata de llamar: si ya hay contrato vigente, una sola consulta y se va.
+ */
+export function emitirVinculacionSiProcede(
+  db: DB, usuarioId: number, rol: string, actor: ActorVinculacion,
+): EmisionOk | EmisionError | null {
+  const tipo = vinculacionQueLeToca(rol);
+  if (!tipo) return null;
+  if (vinculacionVigente(db, usuarioId, tipo)) return null;   // ya lo tiene
+  if (!puedeEmitirVinculacion().ok) return null;              // texto pendiente de revisión legal
+
+  const datos = armarDatosVinculacion(db, usuarioId);
+  if (!datos || faltantesVinculacion(datos).length > 0) return null;
+
+  return emitirYNotificarVinculacion(db, usuarioId, rol, actor);
 }
 
 // ── Estado de una cuenta ────────────────────────────────────────────────────

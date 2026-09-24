@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { LogoMark } from '@/components/Logo';
 import { IconInbox, IconCheck, IconArrowL } from '@/components/Icons';
 import { useSession } from '@/contexts/SessionContext';
+import { rutaSiguientePaso } from '@/lib/siguiente-paso';
 
 // Pantalla "Verifica tu correo" — se muestra a cuentas nuevas creadas con
 // correo+contraseña (app/api/auth/registro) mientras su correo siga pendiente
@@ -90,8 +91,12 @@ function VerificarCorreoForm() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) { setError(data.error || 'No pudimos verificar el código.'); return; }
+      const recargado = await fetch('/api/auth/me').then(r => r.json()).catch(() => null);
       refetch();
-      router.push(destinoSeguro(searchParams.get('next'), user?.rol || 'usuario'));
+      const destino = destinoSeguro(searchParams.get('next'), recargado?.user?.rol || user?.rol || 'usuario');
+      // Tras verificar el correo sigue la cadena del alta: si le falta firmar su
+      // contrato de vinculación, se le pide acá y no en una pantalla escondida.
+      router.push(rutaSiguientePaso(recargado?.user, destino, { incluirFirma: true }));
     } catch {
       setError('Sin conexión — revisa tu internet e intenta de nuevo.');
     } finally {

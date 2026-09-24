@@ -6,6 +6,7 @@ import Providers from "@/components/Providers";
 import ConditionalShell from "@/components/ConditionalShell";
 import SwRegistrar from "@/components/SwRegistrar";
 import Analytics from "@/components/Analytics";
+import RecordatorioVinculacion from "@/components/RecordatorioVinculacion";
 import {
   CONTACTO_BARRIO,
   CONTACTO_CIUDAD,
@@ -149,6 +150,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Analytics />
         <Providers>
           <SwRegistrar />
+          {/* Dentro de Providers porque lee la sesión, y fuera del shell para que
+              aparezca también en las pantallas que no lo llevan. Se pinta solo si hay
+              un contrato de vinculación sin firmar. */}
+          <RecordatorioVinculacion />
           <ConditionalShell>
             {children}
           </ConditionalShell>

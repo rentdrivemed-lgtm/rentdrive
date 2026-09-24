@@ -21,6 +21,7 @@ import { bloqueadoPorCsrf } from '@/lib/csrf';
 import { accesoContrato } from '@/lib/contratos-acceso';
 import { leerContrato } from '@/lib/contratos-firma';
 import { guardarDatosContrato, leerDatosContrato } from '@/lib/contratos-edicion';
+import { nivelDe } from '@/lib/permisos';
 
 export const dynamic = 'force-dynamic';
 
@@ -102,7 +103,10 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   }
 
   const resultado = guardarDatosContrato(db, contratoId, {
-    id: user.id, nombre: user.nombre, correo: user.correo, nivel: 'admin',
+    id: user.id, nombre: user.nombre, correo: user.correo,
+    // El NIVEL, no la palabra 'admin': la bitácora tiene que distinguir si anuló
+    // el principal, un socio o la secretaría. Mismo patrón que el proxy de documentos.
+    nivel: user.rol === 'admin' ? (nivelDe(db, user.id) || 'admin') : user.rol,
   }, { campos: mapa, conductores: body.conductores, revision });
   if (!resultado.ok) return NextResponse.json({ error: resultado.error }, { status: resultado.status });
 

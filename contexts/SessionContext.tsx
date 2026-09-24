@@ -3,7 +3,20 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import { usePathname } from 'next/navigation';
 import { playMessageSound, isMuted } from '@/lib/sound';
 import type { ReactNode } from 'react';
-type User = { id: number; nombre: string; correo: string; rol: string };
+/** Estado del contrato de vinculación, tal como lo devuelve GET /api/auth/me. */
+export type VinculacionSesion = {
+  pendiente: boolean;
+  contrato_id: number | null;
+  titulo: string;
+  numero: string;
+  /** Datos del perfil que hay que completar ANTES de poder firmar. */
+  faltantes: string[];
+};
+
+type User = {
+  id: number; nombre: string; correo: string; rol: string;
+  vinculacion?: VinculacionSesion;
+};
 type SessionCtx = { user: User | null; setUser: (u: User | null) => void; noLeidos: number; setNoLeidos: (n: number) => void; noNotifs: number; setNoNotifs: (n: number) => void; refetch: () => void; };
 const Ctx = createContext<SessionCtx>({ user: null, setUser: () => {}, noLeidos: 0, setNoLeidos: () => {}, noNotifs: 0, setNoNotifs: () => {}, refetch: () => {} });
 

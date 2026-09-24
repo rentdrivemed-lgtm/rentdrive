@@ -18,6 +18,7 @@ import {
   tituloDocumento, faltantesQueBloquean,
 } from '@/lib/contratos-firma';
 import { TIPOS_DOCUMENTO, TITULOS_DOCUMENTO } from '@/lib/contratos-datos';
+import { nivelDe } from '@/lib/permisos';
 
 export const dynamic = 'force-dynamic';
 
@@ -104,7 +105,10 @@ export async function POST(req: NextRequest) {
   }
 
   const resultado = generarContrato(db, body.tipo, reservaId, {
-    id: user.id, nombre: user.nombre, correo: user.correo, nivel: 'admin',
+    id: user.id, nombre: user.nombre, correo: user.correo,
+    // El NIVEL, no la palabra 'admin': la bitácora tiene que distinguir si anuló
+    // el principal, un socio o la secretaría. Mismo patrón que el proxy de documentos.
+    nivel: user.rol === 'admin' ? (nivelDe(db, user.id) || 'admin') : user.rol,
   });
   if (!resultado.ok) return NextResponse.json({ error: resultado.error }, { status: resultado.status });
 

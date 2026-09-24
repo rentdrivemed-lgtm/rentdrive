@@ -7,7 +7,9 @@
     "build": "node scripts/verificar-env-publicas.mjs && next build",
     "start": "next start",
     "lint": "eslint",
-    "verificar-env": "node scripts/verificar-env-publicas.mjs"
+    "verificar-env": "node scripts/verificar-env-publicas.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.101.0",
@@ -41,6 +43,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^3.2.7"
   }
 }

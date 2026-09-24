@@ -5,6 +5,7 @@ import { LogoMark } from '@/components/Logo';
 import { IconShield, IconPhoto, IconCheck, IconKey } from '@/components/Icons';
 import { validarDocumentoIdentidad } from '@/lib/validacion';
 import { useSession } from '@/contexts/SessionContext';
+import { rutaSiguientePaso } from '@/lib/siguiente-paso';
 
 // Pantalla "Completa tu perfil" — se muestra a cuentas creadas por Google (que
 // entran con password vacía y sin documento/fecha de nacimiento) antes de poder
@@ -250,8 +251,12 @@ function CompletarPerfilForm() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setError(data.error || 'No pudimos guardar tu perfil. Intenta de nuevo.'); return; }
+      const recargado = await fetch('/api/auth/me').then(r => r.json()).catch(() => null);
       refetch();
-      router.push(destinoSeguro(searchParams.get('next'), user?.rol || 'usuario'));
+      const destino = destinoSeguro(searchParams.get('next'), recargado?.user?.rol || user?.rol || 'usuario');
+      // Ya con el perfil completo el contrato se puede emitir y firmar: se recarga
+      // el estado y, si queda pendiente, se sigue hasta la firma.
+      router.push(rutaSiguientePaso(recargado?.user, destino, { incluirFirma: true }));
     } catch {
       setError('Sin conexión — revisa tu internet e intenta de nuevo.');
     } finally {

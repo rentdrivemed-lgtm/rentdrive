@@ -5,6 +5,7 @@ import { validarCelular, validarDireccion, validarDocumentoIdentidad, validarNom
 import { esUrlDeStorageValida } from '@/lib/storage';
 import { referidoHabilitado } from '@/lib/referidos';
 import { correoNoVerificado } from '@/lib/verificacion-correo';
+import { emitirVinculacionSiProcede, estadoVinculacion } from '@/lib/contratos-vinculacion';
 
 // contacto_emergencia se devuelve para que el flujo de reserva sepa si ya lo
 // tiene guardado y no se lo vuelva a pedir. También se puede editar desde acá
@@ -40,8 +41,38 @@ export async function GET() {
   // kill switch de emailHabilitado()===false, que desactiva el gate por completo).
   const correoPendiente = correoNoVerificado(user.id);
 
+  // Vinculación. Acá —y no en el login— porque por esta ruta pasa TODA sesión
+  // autenticada: contraseña, Google y sesión reanudada sin volver a entrar. Así las
+  // cuentas anteriores a la vinculación acaban teniendo su contrato sin que nadie las
+  // procese una por una, y en la primera visita después de completar su perfil.
+  //
+  // Si falla no se rompe nada: el estado se lee igual abajo, y sin contrato emitido
+  // simplemente no hay nada pendiente que avisar.
+  try {
+    emitirVinculacionSiProcede(db, user.id, user.rol, { id: user.id, nombre: user.nombre, correo: user.correo });
+  } catch (e) {
+    console.error('[me] No se pudo emitir la vinculación:', e instanceof Error ? e.message : e);
+  }
+  const vinculacion = estadoVinculacion(db, user.id, user.rol);
+
   return NextResponse.json({
-    user: { ...user, ...(fila || {}), perfil_completo: perfilCompleto, correo_pendiente: correoPendiente, referido_habilitado: referidoHabilitado(db) },
+    user: {
+      ...user, ...(fila || {}),
+      perfil_completo: perfilCompleto,
+      correo_pendiente: correoPendiente,
+      referido_habilitado: referidoHabilitado(db),
+      // Lo consumen el aviso fijo del panel y el recordatorio emergente. `pendiente`
+      // mira la firma DEL TITULAR: a nadie se le insiste por la firma de la empresa.
+      // `faltantes` no va vacío cuando aún no hay contrato porque es lo que el aviso
+      // usa para decir QUÉ hay que completar antes de poder firmar.
+      vinculacion: {
+        pendiente: !!vinculacion.tipo && vinculacion.contratoId !== null && !vinculacion.firmadoPorTitular,
+        contrato_id: vinculacion.contratoId,
+        titulo: vinculacion.titulo,
+        numero: vinculacion.numero,
+        faltantes: vinculacion.faltantes.map(f => f.etiqueta),
+      },
+    },
   });
 }
 

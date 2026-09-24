@@ -27,7 +27,7 @@ import { getDb } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
 import { bloqueadoPorCsrf } from '@/lib/csrf';
 import { consumirIntento, ipCliente } from '@/lib/limite-tasa';
-import { registrarAuditoria } from '@/lib/permisos';
+import { registrarAuditoria, nivelDe } from '@/lib/permisos';
 import { accesoContrato } from '@/lib/contratos-acceso';
 import { leerContrato, tituloDocumento } from '@/lib/contratos-firma';
 import {
@@ -102,7 +102,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     : '';
 
   const resultado = registrarFirmaEnPapel(db, contratoId, {
-    id: user.id, nombre: user.nombre, correo: user.correo, nivel: 'admin',
+    id: user.id, nombre: user.nombre, correo: user.correo,
+    // El NIVEL, no la palabra 'admin': la bitácora tiene que distinguir si anuló
+    // el principal, un socio o la secretaría. Mismo patrón que el proxy de documentos.
+    nivel: user.rol === 'admin' ? (nivelDe(db, user.id) || 'admin') : user.rol,
   }, {
     archivo,
     nombreArchivo,

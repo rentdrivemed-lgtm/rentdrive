@@ -7,6 +7,7 @@ import { IconKey, IconCar } from '@/components/Icons';
 import { useSession } from '@/contexts/SessionContext';
 import { tomarDestino } from '@/lib/lugares';
 import GoogleAuthButton from '@/components/GoogleAuthButton';
+import { rutaSiguientePaso } from '@/lib/siguiente-paso';
 
 type Rol = 'usuario' | 'propietario';
 type SesionUser = { id: number; nombre: string; correo: string; rol: string };
@@ -58,14 +59,12 @@ export default function LoginPage() {
       try {
         const r = await fetch('/api/auth/me');
         const d = await r.json().catch(() => ({}));
-        if (d?.user && d.user.correo_pendiente === true) {
-          router.push(`/verificar-correo?next=${encodeURIComponent(destinoFinal)}`);
-          return;
-        }
-        if (d?.user && d.user.perfil_completo === false) {
-          router.push(`/completar-perfil?next=${encodeURIComponent(destinoFinal)}`);
-          return;
-        }
+        // `incluirFirma: false` a propósito: a quien ya tenía cuenta no se le corta el
+        // paso por el contrato de vinculación. Se le insiste con el recordatorio
+        // emergente y se le exige al reservar o publicar, que es donde el servidor lo
+        // exige de verdad. Ver lib/siguiente-paso.ts.
+        const siguiente = rutaSiguientePaso(d?.user, destinoFinal, { incluirFirma: false });
+        if (siguiente !== destinoFinal) { router.push(siguiente); return; }
       } catch { /* seguimos con el flujo normal */ }
     }
 

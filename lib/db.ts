@@ -20,7 +20,16 @@ export function getDb(): Database.Database {
   return db;
 }
 
-function initDb(db: Database.Database) {
+/**
+ * Crea el esquema completo sobre una conexión ya abierta.
+ *
+ * Exportada para las PRUEBAS: `tests/util/db.ts` abre una base en memoria y la levanta
+ * con esta misma función, de modo que la suite corre contra el esquema real —con sus
+ * CHECK, sus índices únicos parciales y sus migraciones— y no contra una copia a mano
+ * que se desincronizaría al primer ALTER. En la aplicación la sigue llamando `getDb()`
+ * y nadie más debería llamarla.
+ */
+export function initDb(db: Database.Database) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS usuarios (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
