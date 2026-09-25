@@ -301,7 +301,11 @@ export async function POST(req: NextRequest) {
   // y verificados como texto). De acá en adelante se usan esos y NO el objeto crudo
   // del body, para que el recargo que se cobra y el lugar que se guarda sean el
   // mismo dato que se validó.
-  const lugares = validarLugaresReserva(recogida, entrega);
+  // `permitirPorDefecto`: si no eligió NINGUNO de los dos lugares, se toma el punto de
+  // atención. La pantalla ya se lo propuso y lo aceptó antes de llegar acá (ver el
+  // aviso de app/pago/page.tsx); esto es lo que lo hace válido también para una
+  // petición que no pase por ella.
+  const lugares = validarLugaresReserva(recogida, entrega, { permitirPorDefecto: true });
   if ('error' in lugares) return NextResponse.json({ error: lugares.error.error }, { status: lugares.error.status });
   const { recogida: recogidaL, entrega: entregaL } = lugares.lugares;
 
@@ -404,6 +408,9 @@ export async function POST(req: NextRequest) {
   try {
     reservaId = db.transaction(() => {
       const id = insertarReserva(db, {
+        // Queda escrito que el lugar se asignó, no se eligió: si algún día alguien
+        // reclama «yo nunca pedí recoger en San Joaquín», la reserva puede responder.
+        lugaresPorDefecto: lugares.porDefecto,
         usuarioId: user.id,
         vehiculoId: Number(vehiculo_id),
         fechaInicio: fecha_inicio,

@@ -26,7 +26,10 @@
 // Módulo de SERVIDOR (toca better-sqlite3 vía el tipo y hace queries): no
 // importar desde un componente 'use client'.
 import type Database from 'better-sqlite3';
-import { calcularDiasAlquiler, calcularRecargo, getLugar, lugarValido, normalizarLugar, type Lugar } from './lugares';
+import {
+  calcularDiasAlquiler, calcularRecargo, getLugar, lugarValido, lugarPuntoAtencion, lugarSinElegir,
+  normalizarLugar, HORA_PUNTO_ATENCION_DEFECTO, type Lugar,
+} from './lugares';
 import { MIN_NOCHES_RESERVA } from './disponibilidad-reglas';
 import { parsePicoPlaca, diasRestringidosEnRango, placaRestringida } from './pico-placa';
 import { getConfig } from './operaciones';
@@ -376,12 +379,29 @@ export function resolverDocumentosIdentidad(
  */
 export function validarLugaresReserva(
   recogida?: unknown, entrega?: unknown,
-): { lugares: { recogida: Lugar; entrega: Lugar } } | { error: ErrorReserva } {
-  const r = normalizarLugar(recogida);
+  opts: { permitirPorDefecto?: boolean } = {},
+): { lugares: { recogida: Lugar; entrega: Lugar }; porDefecto: boolean } | { error: ErrorReserva } {
+  let r = normalizarLugar(recogida);
+  let e = normalizarLugar(entrega);
+
+  // Si no eligió ninguno de los dos, se toma el PUNTO DE ATENCIÓN. Antes esto era un
+  // 400 seco —«Indica el lugar y la hora de recogida»— sobre una pantalla que ni
+  // siquiera tenía selector, así que el cliente se quedaba sin salida.
+  //
+  // Solo cuando faltan LOS DOS: si eligió uno, el otro vacío es un olvido suyo y hay
+  // que decírselo, no rellenarlo a su espalda. Y solo si quien llama lo permite: la vía
+  // de mostrador no lo usa, porque ahí hay un empleado que pregunta.
+  const faltanLosDos = lugarSinElegir(r) && lugarSinElegir(e);
+  const porDefecto = !!opts.permitirPorDefecto && faltanLosDos;
+  if (porDefecto) {
+    const hora = (normalizarLugar(recogida)?.hora || '').trim() || HORA_PUNTO_ATENCION_DEFECTO;
+    r = lugarPuntoAtencion(hora);
+    e = lugarPuntoAtencion(hora);
+  }
+
   if (!r || !lugarValido(r)) return { error: { error: mensajeLugarInvalido(r, 'recogida'), status: 400 } };
-  const e = normalizarLugar(entrega);
   if (!e || !lugarValido(e)) return { error: { error: mensajeLugarInvalido(e, 'entrega'), status: 400 } };
-  return { lugares: { recogida: r, entrega: e } };
+  return { lugares: { recogida: r, entrega: e }, porDefecto };
 }
 
 /**
@@ -844,6 +864,8 @@ export type NuevaReserva = {
   metodoPago?: string;
   pagoReferencia?: string;
   pagoRegistradoPor?: number | null;
+  /** El lugar no lo eligió el cliente: se le propuso el punto de atención y lo aceptó. */
+  lugaresPorDefecto?: boolean;
 };
 
 export function insertarReserva(db: DB, r: NuevaReserva): number {
@@ -862,9 +884,10 @@ export function insertarReserva(db: DB, r: NuevaReserva): number {
       documento_id_url, documento_id_url_dorso, documento_es_pasaporte,
       licencia_url, licencia_url_dorso,
       firma_contrato, recogida, entrega, recargo, creditos_usados,
-      origen, creada_por_admin_id, metodo_pago, pago_referencia, pago_registrado_por
+      origen, creada_por_admin_id, metodo_pago, pago_referencia, pago_registrado_por,
+      lugares_por_defecto
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     r.usuarioId, r.vehiculoId, r.fechaInicio, r.fechaFin, r.total, r.pagoEstado, r.estado,
     (d.documento_id_url as string) || '', (d.documento_id_url_dorso as string) || '', d.documento_es_pasaporte ? 1 : 0,
@@ -872,6 +895,7 @@ export function insertarReserva(db: DB, r: NuevaReserva): number {
     r.firmaContrato || '{}',
     JSON.stringify(r.recogida ?? null), JSON.stringify(r.entrega ?? null), r.recargo, r.creditosUsados,
     r.origen || '', r.creadaPorAdminId ?? null, r.metodoPago || '', r.pagoReferencia || '', r.pagoRegistradoPor ?? null,
+    r.lugaresPorDefecto ? 1 : 0,
   );
   return Number(result.lastInsertRowid);
 }

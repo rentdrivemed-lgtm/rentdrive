@@ -1021,6 +1021,13 @@ export function initDb(db: Database.Database) {
 
   try { db.exec("ALTER TABLE reservas ADD COLUMN documento_id_url TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE reservas ADD COLUMN licencia_url TEXT DEFAULT ''"); } catch { /* ya existe */ }
+
+  // ¿El lugar lo eligió el cliente o se lo asignamos nosotros?
+  //
+  // Importa para la operación y para una reclamación: si alguien dice «yo nunca pedí
+  // recoger en San Joaquín», la reserva tiene que poder responder si lo eligió o si se
+  // le propuso por defecto y lo aceptó. Sin esta columna las dos cosas se ven igual.
+  try { db.exec("ALTER TABLE reservas ADD COLUMN lugares_por_defecto INTEGER DEFAULT 0"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE reservas ADD COLUMN documento_id_url_dorso TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE reservas ADD COLUMN licencia_url_dorso TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE reservas ADD COLUMN documento_es_pasaporte INTEGER DEFAULT 0"); } catch { /* ya existe */ }

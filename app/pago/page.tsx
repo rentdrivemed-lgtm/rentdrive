@@ -4,12 +4,17 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { IconArrowL, IconShield, IconPin } from '@/components/Icons';
 import DocUploadDoble from '@/components/DocUploadDoble';
-import { LUGAR_VACIO, calcularRecargo, lugarResumen, cargarLugares, type Lugar } from '@/lib/lugares';
+import {
+  LUGAR_VACIO, calcularRecargo, lugarResumen, cargarLugares, guardarLugares,
+  lugarPuntoAtencion, lugarSinElegir, HORA_PUNTO_ATENCION_DEFECTO, DIRECCION_PUNTO_ATENCION,
+  type Lugar,
+} from '@/lib/lugares';
 import { validarDireccion, validarCiudad, validarNombreContacto, validarTelefonoContacto } from '@/lib/validacion';
 import { diasRestringidosEnRango, parsePicoPlaca, picoPlacaVacio, type PicoPlaca } from '@/lib/pico-placa';
 import { factorDuracion, DESCUENTO_DURACION_PCT } from '@/lib/rentabilidad';
 import { METODOS_PAGO_WEB, METODO_PAGO_WEB_LABEL, METODO_PAGO_WEB_AYUDA, type MetodoPagoWeb } from '@/lib/metodo-pago-web';
 import { openCardTokenizer } from '@/lib/wompi-widget-client';
+import AvisoLugarPorDefecto from '@/components/AvisoLugarPorDefecto';
 
 type Vehiculo = {
   id: number; marca: string; modelo: string; anio: number;
@@ -80,6 +85,12 @@ function PagoContent() {
   // pagan en efectivo, y exigirla los dejaba sin poder reservar.
   const [metodoPago, setMetodoPago] = useState<MetodoPagoWeb>('tarjeta');
   const [usarCreditos, setUsarCreditos] = useState(true);
+
+  // Aviso del lugar por defecto. Va aquí y no más abajo porque los hooks tienen que
+  // llamarse SIEMPRE en el mismo orden: este componente tiene returns tempranos
+  // (pantalla de éxito, de carga), y un useState después de uno de ellos se salta en
+  // unos renders y en otros no.
+  const [avisoLugar, setAvisoLugar] = useState(false);
 
   const cargarInicial = () => {
     setErrorCarga('');
@@ -187,6 +198,17 @@ function PagoContent() {
   // cobra el alquiler completo de una vez y guarda la tarjeta tokenizada para
   // cargos futuros (marca/últimos 4 los deriva el propio backend de la
   // respuesta de Wompi — el navegador ya no ve el número de la tarjeta).
+  /** Acepta el punto de atención y sigue con el pago, ya con los lugares puestos. */
+  const aceptarPuntoAtencion = (hora: string) => {
+    const lugar = lugarPuntoAtencion(hora);
+    setRecogida(lugar);
+    setEntrega(lugar);
+    guardarLugares(lugar, lugar);
+    setAvisoLugar(false);
+    // Se continúa en el siguiente render, ya con el estado aplicado.
+    setTimeout(() => { pagar(); }, 0);
+  };
+
   const crearReserva = async (cardToken: string) => {
     setLoading(true);
     try {
@@ -253,6 +275,11 @@ function PagoContent() {
   // ese ratito, se libera el botón para que pueda reintentar.
   const pagar = async () => {
     setError('');
+    // Si no eligió lugar, se le propone el punto de atención ANTES de crear nada. Antes
+    // de esto el servidor devolvía un 400 sobre una pantalla sin selector, así que el
+    // cliente se quedaba sin salida.
+    if (lugarSinElegir(recogida) && lugarSinElegir(entrega)) { setAvisoLugar(true); return; }
+
     // Sin tarjeta no hay nada que tokenizar: se crea la reserva directamente y queda
     // pendiente de pago, para cobrarla al recoger el vehículo o por transferencia.
     if (metodoPago !== 'tarjeta') { await crearReserva(''); return; }
@@ -350,6 +377,17 @@ function PagoContent() {
 
   return (
     <div className="max-w-lg mx-auto px-4 py-8">
+
+      {/* No eligió lugar: se le propone el punto de atención antes de crear nada.
+          «Elegir otro lugar» lo devuelve a la ficha del vehículo, que es la pantalla
+          que SÍ tiene selector — esta nunca lo ha tenido. */}
+      {avisoLugar && (
+        <AvisoLugarPorDefecto
+          direccion={DIRECCION_PUNTO_ATENCION}
+          horaPropuesta={HORA_PUNTO_ATENCION_DEFECTO}
+          onAceptar={aceptarPuntoAtencion}
+          onElegirOtro={() => router.push(`/vehiculos/${vehiculo_id}`)} />
+      )}
 
       {/* Volver */}
       <Link href={`/vehiculos/${vehiculo_id}`}

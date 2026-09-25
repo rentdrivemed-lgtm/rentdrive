@@ -5,6 +5,40 @@ export const LUGAR_VACIO: Lugar = { municipio: '', barrio: '', direccion: '', ho
 export const MUNICIPIO_AEROPUERTO = 'aeropuerto-jmc';
 export const MUNICIPIO_AEROPUERTO_OLAYA = 'aeropuerto-olaya';
 export const MUNICIPIO_PUNTO_ATENCION = 'punto-san-joaquin';
+
+/**
+ * Hora que se propone cuando el cliente no eligió ninguna.
+ *
+ * ⚠️ Es un valor de NEGOCIO, no una constante técnica: compromete a DrivePass a tener
+ * el carro listo a esa hora en el punto de atención. Se eligió 9:00 porque no hay
+ * ningún horario de atención declarado en el código ni en la documentación, y había que
+ * proponer uno para que aceptar el lugar por defecto fuera un solo toque.
+ *
+ * La pantalla la MUESTRA y deja cambiarla: nadie queda comprometido con una hora que no
+ * vio. Si el punto abre a otra hora, se cambia aquí.
+ */
+export const HORA_PUNTO_ATENCION_DEFECTO = '09:00';
+
+/**
+ * El punto de atención como lugar, listo para usar.
+ *
+ * Es el único lugar del catálogo con dirección fija y sin recargo, y por eso es el
+ * predeterminado razonable: no hay que preguntarle al cliente una dirección ni cobrarle
+ * un traslado que no pidió.
+ */
+export function lugarPuntoAtencion(hora: string = HORA_PUNTO_ATENCION_DEFECTO): Lugar {
+  return {
+    municipio: MUNICIPIO_PUNTO_ATENCION,
+    barrio: '',
+    direccion: DIRECCION_PUNTO_ATENCION,
+    hora,
+  };
+}
+
+/** ¿Este lugar está sin elegir? Es lo que dispara la propuesta del punto de atención. */
+export function lugarSinElegir(l: Lugar | null | undefined): boolean {
+  return !l || !l.municipio;
+}
 export const DIRECCION_PUNTO_ATENCION = 'Calle 42A #68A-10';
 
 // ── Catálogo y tarifa ────────────────────────────────────────────────────────

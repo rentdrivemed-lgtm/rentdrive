@@ -33,7 +33,14 @@ type Props = {
   required?: boolean;
   /** Para cédula/pasaporte: si es pasaporte, el dorso no aplica (solo la página con la foto). */
   soloUnLado?: boolean;
-  /** Ver el mismo prop en DocUpload — para documentos que nunca son un PDF (cédula/licencia). */
+  /**
+   * Ver el mismo prop en DocUpload: destaca el botón de cámara, que es como la mayoría
+   * fotografía su cédula desde el celular.
+   *
+   * NO restringe el formato — el comentario anterior decía que era «para documentos que
+   * nunca son un PDF», y eso dejó de ser cierto en sep-2026: la cédula y la licencia
+   * admiten PDF, y la verificación con IA los lee nativos, todas sus páginas.
+   */
   preferirCamara?: boolean;
   /**
    * Con `required`, muestra debajo qué lado falta en vez de dejar solo el
