@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.101.0",
+    "@types/qrcode": "^1.5.6",
     "@types/sharp": "^0.31.1",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.9.0",
@@ -24,6 +25,7 @@
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.7",
     "next": "16.2.6",
+    "qrcode": "^1.5.4",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "react-easy-crop": "^6.1.0",
