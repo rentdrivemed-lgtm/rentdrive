@@ -279,6 +279,80 @@ export function filasChecklist(items: readonly string[]): string {
 }
 
 /**
+ * Quién levantó este reporte, con qué papel y cuándo.
+ *
+ * Va DENTRO del acta y no solo en la bitácora interna porque es parte de lo que el
+ * documento acredita: a veces quien entrega no es quien recibe, y el acta tiene que
+ * decir quién hizo cada cosa. Incluye al mensajero, que no tiene cuenta —su identidad
+ * es el nombre asociado a su enlace—.
+ *
+ * También dice si el cliente confirmó el estado o no, y en el segundo caso POR QUÉ: el
+ * acta prefiere decir la verdad incómoda a afirmar una conformidad que no hubo.
+ */
+export function constanciaIntervenciones(d: DatosContrato): string {
+  const r = d.operacion.reporte;
+  if (!r || r.intervenciones.length === 0) return '';
+
+  const ACCION_TEXTO: Record<string, string> = {
+    fotos: 'tomó el registro fotográfico',
+    inventario: 'levantó el inventario de estado',
+    mediciones: 'registró kilometraje y combustible',
+    confirmacion_cliente: 'confirmó el estado del vehículo',
+    constancia: 'dejó constancia de que el cliente no confirmó',
+  };
+  const FASE_TEXTO: Record<string, string> = { salida: 'la entrega', entrada: 'la devolución' };
+
+  const lineas = r.intervenciones.map(i => {
+    const que = ACCION_TEXTO[i.accion] || i.accion;
+    const donde = FASE_TEXTO[i.fase] ? ` de ${FASE_TEXTO[i.fase]}` : '';
+    const quien = i.rol ? `${i.nombre} (${i.rol})` : i.nombre;
+    return `· ${i.cuando} — ${quien} ${que}${donde}.`;
+  });
+
+  const conformidad: string[] = [];
+  for (const [fase, etiqueta] of [['entrega', 'la entrega'], ['devolucion', 'la devolución']] as const) {
+    const f = r[fase];
+    if (f.confirmadoEn) {
+      conformidad.push(`EL ARRENDATARIO confirmó el estado de ${etiqueta} el ${f.confirmadoEn}.`);
+    } else if (f.constancia) {
+      conformidad.push(`EL ARRENDATARIO no confirmó el estado de ${etiqueta}. Constancia: ${f.constancia}`);
+    }
+  }
+
+  return `INTERVENCIONES EN EL REPORTE
+${lineas.join('\n')}
+${conformidad.join('\n')}
+`;
+}
+
+/**
+ * Las mismas filas, pero con lo que se anotó EN LA APP, no con rayas para llenar a mano.
+ *
+ * Hasta sep-2026 el acta imprimía el inventario en blanco mientras el mensajero tomaba
+ * fotos del mismo vehículo en la aplicación: los mismos datos, dos veces, y uno de los
+ * dos en papel. Ahora el reporte es la fuente (ver lib/reporte-entrega.ts).
+ *
+ * Un ítem sin calificar sigue saliendo con su raya: el acta no inventa un «bueno» que
+ * nadie marcó.
+ */
+export function filasChecklistConValores(
+  items: readonly string[],
+  entrega: Record<string, { estado: string; nota: string }>,
+  devolucion: Record<string, { estado: string; nota: string }>,
+): string {
+  const celda = (v?: { estado: string; nota: string }) => (v?.estado ? v.estado : '___');
+  return items.map(i => {
+    const e = entrega[i];
+    const d = devolucion[i];
+    const notas = [
+      e?.nota ? `entrega: ${e.nota}` : '',
+      d?.nota ? `devolución: ${d.nota}` : '',
+    ].filter(Boolean).join(' · ');
+    return `${i}   ${celda(e)}   ${celda(d)}${notas ? `\n    (${notas})` : ''}\n`;
+  }).join('\n');
+}
+
+/**
  * Bloques de codeudores solidarios del pagaré.
  *
  * Si no hay codeudores NO se imprime el bloque vacío: la carta de instrucciones
@@ -508,15 +582,13 @@ Póliza No. ${d.poliza.numero}, aseguradora ${d.poliza.aseguradora}, deducible $
 
 ESTADO DEL VEHÍCULO
 Califíquese cada ítem con B si está en buen estado, R si es regular y M si es malo. Descríbase en observaciones todo rayón, abolladura, fisura o faltante.
-ÍTEM
-ENTREGA
-DEVOLUCIÓN
-${filasChecklist(ITEMS_ESTADO_VEHICULO)}
+ÍTEM   ENTREGA   DEVOLUCIÓN
+${filasChecklistConValores(ITEMS_ESTADO_VEHICULO, d.operacion.reporte?.entrega.inventario ?? {}, d.operacion.reporte?.devolucion.inventario ?? {})}
 DOCUMENTOS, LLAVES Y MEDICIONES
-CONCEPTO
-ENTREGA
-DEVOLUCIÓN
-${filasChecklist(CONCEPTOS_DOCUMENTOS_ACTA)}
+CONCEPTO   ENTREGA   DEVOLUCIÓN
+${filasChecklist(CONCEPTOS_DOCUMENTOS_ACTA.filter(c => !c.startsWith('Kilometraje') && !c.startsWith('Nivel de combustible')))}
+Kilometraje registrado en el odómetro   ${d.operacion.reporte?.entrega.kilometraje || '___'}   ${d.operacion.reporte?.devolucion.kilometraje || '___'}
+Nivel de combustible   ${d.operacion.reporte?.entrega.combustible || '___'}   ${d.operacion.reporte?.devolucion.combustible || '___'}
 REGISTRO FOTOGRÁFICO Y OBSERVACIONES
 Las partes dejan constancia de que al momento de la entrega se tomaron ${cifraOPendiente(d.operacion.fotosEntrega)} fotografías y al momento de la devolución ${cifraOPendiente(d.operacion.fotosDevolucion)} fotografías, que se anexan y hacen parte de esta acta.
 Observaciones a la entrega:
@@ -527,6 +599,7 @@ Observaciones a la devolución:
 __________________________________________________________________
 __________________________________________________________________
 __________________________________________________________________
+${constanciaIntervenciones(d)}
 DECLARACIONES
 ENTREGA. EL ARRENDATARIO declara que recibe EL VEHÍCULO en el estado descrito en esta acta, que verificó personalmente cada uno de los ítems relacionados, que recibió copia de la carátula y de las condiciones de la póliza, y que conoce y acepta las obligaciones que le impone el contrato, en especial las relativas a la custodia del bien, a los conductores autorizados y al protocolo de siniestros.
 DEVOLUCIÓN. La suscripción de la sección de devolución acredita el estado aparente de EL VEHÍCULO al momento de su entrega material y no constituye paz y salvo ni finiquito. Por consiguiente, no libera a EL ARRENDATARIO de los daños ocultos que se adviertan con posterioridad, ni de las infracciones, sanciones, peajes o cobros causados durante la vigencia del contrato que se notifiquen después de su terminación. Los cargos a su cargo se liquidarán e imputarán al depósito de garantía dentro de los ocho (8) días hábiles siguientes a esta fecha.

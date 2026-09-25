@@ -37,6 +37,7 @@ import {
 import { bloquesDe, type DefBloqueFirma, type RolFirmante } from './contratos-bloques';
 import { validarFirmaPng } from './firma-imagen';
 import { registrarAuditoriaEstricta } from './permisos';
+import { puedeFirmarMomento } from './reporte-entrega';
 
 type DB = Database.Database;
 
@@ -686,6 +687,23 @@ export function firmarBloqueContrato(
     if ((Number(pendientesEntrega?.n) || 0) > 0) {
       return err(409, 'Primero hay que completar las firmas de la entrega.');
     }
+  }
+
+  // Y ninguno de los dos momentos se firma sin su REPORTE. Firmar antes sería suscribir
+  // un inventario que nadie ha levantado: el acta existe para ser el patrón de
+  // comparación entre cómo salió el vehículo y cómo volvió, y sin kilometraje, nivel de
+  // combustible, inventario y fotos no compara nada.
+  //
+  // Que la devolución esté cerrada mientras el carro está alquilado NO es un error: es
+  // el curso normal de la operación, y el acta sigue abierta entre un momento y otro.
+  if (firma.momento === 'entrega' || firma.momento === 'devolucion') {
+    const operacion = db.prepare('SELECT id FROM operaciones WHERE reserva_id = ?')
+      .get(contrato.reserva_id) as { id: number } | undefined;
+    if (!operacion) {
+      return err(409, 'Todavía no hay reporte de esta operación: no se puede firmar el acta.');
+    }
+    const puerta = puedeFirmarMomento(db, operacion.id, firma.momento);
+    if (!puerta.puede) return err(409, puerta.motivo);
   }
 
   // Si alguna firma previa ya no verifica, el texto se tocó después de firmarse: no

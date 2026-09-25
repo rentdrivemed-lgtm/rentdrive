@@ -28,9 +28,11 @@ import { documentoFormateado, enMayusculas } from './contratos-texto';
 import {
   AGENTE, CIUDAD_CONTRATO, LICENCIA_VACIA, PENDIENTE, faltantesDe, oPendiente,
   type CampoFaltante, type DatosContrato, type ExtremoOperacion, type Persona, type TipoDocumento,
+  type ReporteImpreso,
 } from './contratos-datos';
 import { generarTexto } from './contratos-plantillas';
 import type { OverridesContrato } from './contratos-campos';
+import { combustibleTexto, leerIntervenciones, leerReporte } from './reporte-entrega';
 
 type DB = Database.Database;
 
@@ -189,6 +191,7 @@ type FilaContrato = {
   c_nombre: string; c_correo: string; c_documento: string | null; c_tipo_doc: string | null;
   c_ciudad: string | null; c_direccion: string | null; c_celular: string | null; c_indicativo: string | null;
   c_licencia: string | null; c_licencia_categoria: string | null; c_licencia_vence: string | null;
+  operacion_id: number | null;
   fotos_salida: string | null; fotos_entrada: string | null;
 };
 
@@ -226,6 +229,35 @@ export type OpcionesContrato = {
  * Lo que no está en la base queda en `PENDIENTE` (ver lib/contratos-datos.ts):
  * jamás se inventa un número de motor ni un dato de la póliza.
  */
+/**
+ * Pasa el reporte de la operación a la forma que el acta imprime.
+ *
+ * Solo traduce: no decide nada y no inventa valores. Un dato que no se tomó sale vacío,
+ * y la plantilla lo pinta con su raya — el acta no puede afirmar un kilometraje que
+ * nadie leyó.
+ */
+function armarReporteImpreso(db: DB, operacionId: number): DatosContrato['operacion']['reporte'] {
+  const deFase = (fase: 'salida' | 'entrada'): ReporteImpreso => {
+    const r = leerReporte(db, operacionId, fase);
+    if (!r) return { kilometraje: '', combustible: '', inventario: {}, confirmadoEn: '', constancia: '' };
+    return {
+      kilometraje: r.kilometraje === null ? '' : String(r.kilometraje),
+      combustible: combustibleTexto(r.combustible),
+      inventario: r.inventario,
+      confirmadoEn: r.confirmadoEn,
+      constancia: r.constancia,
+    };
+  };
+
+  return {
+    entrega: deFase('salida'),
+    devolucion: deFase('entrada'),
+    intervenciones: leerIntervenciones(db, operacionId).map(i => ({
+      nombre: i.nombre, rol: i.rol, accion: i.accion, fase: i.fase, cuando: i.cuando,
+    })),
+  };
+}
+
 export function armarDatosContrato(db: DB, reservaId: number, op: OpcionesContrato = {}): DatosContrato | null {
   const row = db.prepare(`
     SELECT r.id AS reserva_id, r.fecha_inicio, r.fecha_fin, r.total,
@@ -253,7 +285,7 @@ export function armarDatosContrato(db: DB, reservaId: number, op: OpcionesContra
            c.tipo_documento AS c_tipo_doc, c.ciudad AS c_ciudad, c.direccion AS c_direccion,
            c.celular AS c_celular, c.celular_indicativo AS c_indicativo, c.numero_licencia AS c_licencia,
            c.licencia_categoria AS c_licencia_categoria, c.licencia_vence AS c_licencia_vence,
-           o.fotos_salida, o.fotos_entrada
+           o.id AS operacion_id, o.fotos_salida, o.fotos_entrada
     FROM reservas r
     JOIN vehiculos v ON v.id = r.vehiculo_id
     JOIN usuarios p ON p.id = v.propietario_id
@@ -371,6 +403,9 @@ export function armarDatosContrato(db: DB, reservaId: number, op: OpcionesContra
           vigenciaHasta: oPendiente(c.licenciaVence),
         },
       })),
+      // Lo que se anotó con el vehículo delante, para que el acta lo IMPRIMA en vez de
+      // dejar rayas. Ver lib/reporte-entrega.ts.
+      reporte: row.operacion_id ? armarReporteImpreso(db, Number(row.operacion_id)) : undefined,
       fotosEntrega: parseFotosServicio(row.fotos_salida).length,
       fotosDevolucion: parseFotosServicio(row.fotos_entrada).length,
     },

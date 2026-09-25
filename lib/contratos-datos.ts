@@ -149,6 +149,19 @@ export type OperacionContrato = {
   /** Fotos tomadas a la entrega y a la devolución (acta). */
   fotosEntrega: number;
   fotosDevolucion: number;
+  /**
+   * Lo que el mensajero (o quien entregue) anotó con el vehículo delante, por fase.
+   *
+   * El acta los IMPRIME en vez de dejar rayas para llenar a mano, que es lo que hacía
+   * hasta sep-2026 mientras esos mismos datos se tomaban en la app. Ver
+   * lib/reporte-entrega.ts. Vacío mientras el reporte no exista todavía.
+   */
+  reporte?: {
+    entrega: ReporteImpreso;
+    devolucion: ReporteImpreso;
+    /** Quién intervino, para la constancia al pie del acta. */
+    intervenciones: { nombre: string; rol: string; accion: string; fase: string; cuando: string }[];
+  };
 };
 
 /** Numeración de los documentos. Hoy se deriva de los ids; ver lib/contratos.ts. */
@@ -352,6 +365,18 @@ export const ITEMS_ESTADO_VEHICULO: readonly string[] = [
   'Tapetes y accesorios',
   'Aseo general interior y exterior',
 ] as const;
+
+/** Lo que de un reporte acaba impreso en el acta. */
+export type ReporteImpreso = {
+  kilometraje: string;
+  combustible: string;
+  /** Ítem → 'B' | 'R' | 'M', y la nota si la hay. */
+  inventario: Record<string, { estado: string; nota: string }>;
+  /** '' si el cliente no confirmó. */
+  confirmadoEn: string;
+  /** Por qué no confirmó, si ese fue el caso. */
+  constancia: string;
+};
 
 export const CONCEPTOS_DOCUMENTOS_ACTA: readonly string[] = [
   'Licencia de tránsito',

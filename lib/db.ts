@@ -1084,6 +1084,63 @@ export function initDb(db: Database.Database) {
   try { db.exec("ALTER TABLE operaciones ADD COLUMN entrega_ia TEXT DEFAULT ''"); } catch { /* ya existe */ }
   try { db.exec("ALTER TABLE operaciones ADD COLUMN entrega_estado TEXT DEFAULT 'pendiente'"); } catch { /* ya existe */ }
 
+  // ── El reporte que alimenta el ACTA (sep-2026) ──
+  //
+  // Hasta ahora el acta de entrega y devolución imprimía su inventario, el kilometraje
+  // y el nivel de combustible EN BLANCO, para llenar a mano, mientras el mensajero
+  // tomaba fotos en la app. Los mismos datos, dos veces, y uno de los dos en papel.
+  //
+  // Estas columnas son ese dato, ya estructurado, para que el acta lo imprima en vez de
+  // dejar rayas. Van por FASE —salida = entrega al cliente, entrada = devolución—
+  // igual que las fotos, con las que comparten el momento en que se recogen.
+  //
+  //   · kilometraje_*  → número del odómetro (NULL = todavía no se tomó).
+  //   · combustible_*  → nivel en octavos, 0 a 8 (NULL = todavía no se tomó). En
+  //     octavos y no en texto libre porque es lo que marca la aguja y lo que el
+  //     contrato exige comparar entre la entrega y la devolución.
+  //   · inventario_*   → JSON { "<ítem>": { "estado": "B"|"R"|"M", "nota": "..." } }
+  //     con los ítems de ITEMS_ESTADO_VEHICULO.
+  //   · *_confirmado_* → el CLIENTE confirma lo que anotó el mensajero. Si no puede
+  //     (no está, no tiene el celular a mano), el mensajero deja constancia en
+  //     `*_constancia` y la entrega sigue: no se bloquea la operación por eso.
+  for (const fase of ['salida', 'entrada']) {
+    try { db.exec(`ALTER TABLE operaciones ADD COLUMN kilometraje_${fase} INTEGER`); } catch { /* ya existe */ }
+    try { db.exec(`ALTER TABLE operaciones ADD COLUMN combustible_${fase} INTEGER`); } catch { /* ya existe */ }
+    try { db.exec(`ALTER TABLE operaciones ADD COLUMN inventario_${fase} TEXT DEFAULT '{}'`); } catch { /* ya existe */ }
+    try { db.exec(`ALTER TABLE operaciones ADD COLUMN ${fase}_confirmado_en TEXT DEFAULT ''`); } catch { /* ya existe */ }
+    try { db.exec(`ALTER TABLE operaciones ADD COLUMN ${fase}_confirmado_por INTEGER REFERENCES usuarios(id)`); } catch { /* ya existe */ }
+    try { db.exec(`ALTER TABLE operaciones ADD COLUMN ${fase}_constancia TEXT DEFAULT ''`); } catch { /* ya existe */ }
+  }
+
+  // Quién intervino en el reporte, cuándo y qué hizo.
+  //
+  // La bitácora general (`auditoria`) no sirve para esto: solo cubría cuatro acciones
+  // del módulo —no registraba subir una foto ni editar el inventario— y además solo la
+  // ven `principal` y `socio`, mientras que esto tiene que verse en el ACTA y en la
+  // ficha de la reserva, que es donde importa saber quién entregó y quién recibió.
+  //
+  // `usuario_id` va en NULL para el MENSAJERO, que entra por token y no tiene cuenta:
+  // su identidad es el nombre asociado al token, que es lo que se guarda en `nombre`.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS operacion_intervenciones (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      operacion_id INTEGER NOT NULL REFERENCES operaciones(id),
+      -- '' para el mensajero (no tiene cuenta); el id de la cuenta para el equipo.
+      usuario_id INTEGER REFERENCES usuarios(id),
+      nombre TEXT NOT NULL DEFAULT '',
+      -- 'mensajero' | 'principal' | 'socio' | 'secretaria'
+      rol TEXT NOT NULL DEFAULT '',
+      -- 'fotos_entrega' | 'fotos_devolucion' | 'inventario_entrega' |
+      -- 'inventario_devolucion' | 'confirmacion_cliente' | 'constancia'
+      accion TEXT NOT NULL,
+      fase TEXT NOT NULL DEFAULT '' CHECK(fase IN ('', 'salida', 'entrada')),
+      detalle TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now', 'localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_intervenciones_operacion
+      ON operacion_intervenciones(operacion_id, created_at);
+  `);
+
   // Cotizaciones sueltas (cotizador de venta, sin reserva ni cuenta de usuario): columnas
   // nuevas para bases ya existentes (una base creada desde cero ya las trae en el CREATE TABLE).
   try { db.exec("ALTER TABLE cotizaciones ADD COLUMN cliente_celular TEXT DEFAULT ''"); } catch { /* ya existe */ }
