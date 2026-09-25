@@ -23,6 +23,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import FirmaEntrada, { type MetodoFirmaUI } from '@/components/FirmaEntrada';
 import ContratoDatos from '@/components/ContratoDatos';
+import { resumenDe } from '@/lib/contratos-resumen';
 
 type Integridad = { ok: boolean; motivo: string };
 
@@ -137,6 +138,10 @@ export default function ContratoFirmar({ contratoId, onCambio }: Props) {
   const [archivoPapel, setArchivoPapel] = useState<{ dataUrl: string; nombre: string; bytes: number } | null>(null);
 
   const textoRef = useRef<HTMLPreElement>(null);
+  // Explicación en español llano del tipo de documento, si la hay. El caso que la
+  // motivó es el pagaré: la palabra asusta y lo que hay que saber cabe en tres frases.
+  // Ver lib/contratos-resumen.ts.
+  const resumen = detalle ? resumenDe(detalle.contrato.tipo) : null;
 
   // Traer el documento y GUARDARLO en el estado son dos pasos separados a propósito:
   // `cargar` solo hace la petición y devuelve el resultado, y `aplicar` es lo único que
@@ -189,8 +194,27 @@ export default function ContratoFirmar({ contratoId, onCambio }: Props) {
     setErrorFirma('');
   };
 
+  /**
+   * Bloques que este gesto firma.
+   *
+   * Normalmente uno. En el PAGARÉ son dos —el pagaré y la carta de instrucciones— y se
+   * recogen juntos: son dos declaraciones distintas, con su propio sello cada una, pero
+   * hacer repetir el mismo gesto seguido no añade ninguna garantía. Lo que hace
+   * consciente a quien firma es haber leído y aceptado, y eso ocurre una vez.
+   *
+   * Solo se agrupan los que están PENDIENTES y que esta persona puede firmar.
+   */
+  const bloquesDelGesto = (bloque: string): string[] => {
+    if (!detalle || detalle.contrato.tipo !== 'pagare') return [bloque];
+    const suyos = detalle.firmas
+      .filter(f => !f.firmada_en && f.puedo_firmar)
+      .map(f => f.bloque);
+    return suyos.includes(bloque) ? suyos : [bloque];
+  };
+
   const firmar = async (bloque: string) => {
     if (!detalle) return;
+    const bloques = bloquesDelGesto(bloque);
     setFirmando(true);
     setErrorFirma('');
     try {
@@ -198,7 +222,7 @@ export default function ContratoFirmar({ contratoId, onCambio }: Props) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          bloque,
+          bloques,
           nombre_confirmado: nombre,
           firma_imagen: firmaImagen,
           metodo,
@@ -440,6 +464,30 @@ export default function ContratoFirmar({ contratoId, onCambio }: Props) {
             </p>
           )
         )
+      )}
+
+      {/* Qué es esto, en español llano, ANTES del texto legal.
+          No sustituye al documento —lo que se firma y lo que el sello cubre sigue
+          siendo el texto íntegro— pero es lo que se lee primero. Sin esto, la primera
+          pantalla de un pagaré es un muro de cláusulas y la gente firma sin saber qué
+          acaba de aceptar. */}
+      {resumen && (
+        <div className="rounded-xl border border-accent/20 bg-accent-light/30 p-4">
+          <p className="text-sm font-bold text-ink">{resumen.queEs}</p>
+          <p className="text-sm text-ink/75 mt-1.5">{resumen.paraQue}</p>
+          <ul className="mt-2.5 space-y-1">
+            {resumen.loQueDebesSaber.map((linea, i) => (
+              <li key={i} className="text-xs text-ink/70 flex gap-2">
+                <span className="text-accent shrink-0">·</span>
+                <span>{linea}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="text-[11px] text-ink/50 mt-3">
+            Este resumen es una ayuda para entenderlo. Lo que firmas es el documento completo,
+            que puedes leer abajo.
+          </p>
+        </div>
       )}
 
       <div>

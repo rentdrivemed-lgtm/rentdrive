@@ -7,8 +7,9 @@ import {
   emitirDocumentosDeLaOperacion, marcoVigente, firmasPendientesDeLaOperacion,
   bloqueoParaEntregar, avisarFirmasPendientes,
 } from '@/lib/contratos-operacion';
-import { leerContrato, leerFirmas } from '@/lib/contratos-firma';
+import { leerContrato, leerFirmas, listarContratosDeReserva } from '@/lib/contratos-firma';
 import { esSelloInstitucional } from '@/lib/contratos-sello-agente';
+import { resumenDe } from '@/lib/contratos-resumen';
 
 process.env.FIRMA_SECRET = 'secreto-de-prueba-suficientemente-largo';
 
@@ -37,13 +38,13 @@ describe('emisión de los documentos de la operación', () => {
   let db: DB;
   beforeEach(() => { db = baseDePrueba(); });
 
-  it('emite los cuatro, en orden, y en la relación que le toca a cada uno', () => {
+  it('emite los cinco, en orden, y en la relación que le toca a cada uno', () => {
     const e = escenario(db);
     const r = emitirDocumentosDeLaOperacion(db, e.reservaId, ACTOR);
 
     expect(r.ok).toBe(true);
     expect(r.documentos.map(d => d.tipo)).toEqual([
-      'agencia', 'arrendamiento', 'otrosi-agencia', 'otrosi-arrendamiento',
+      'agencia', 'arrendamiento', 'otrosi-agencia', 'otrosi-arrendamiento', 'pagare',
     ]);
 
     const filas = db.prepare('SELECT tipo, reserva_id, vehiculo_id FROM contratos ORDER BY id').all() as
@@ -71,13 +72,19 @@ describe('emisión de los documentos de la operación', () => {
     expect(texto).toContain('CONTRATO DE AGENCIA COMERCIAL');
   });
 
-  it('la sociedad queda suscrita en los cuatro, y las personas no', () => {
+  it('la sociedad queda suscrita donde le toca, y las personas no', () => {
     const e = escenario(db);
     const r = emitirDocumentosDeLaOperacion(db, e.reservaId, ACTOR);
 
     for (const doc of r.documentos) {
       const firmas = leerFirmas(db, doc.contratoId);
       const agente = firmas.filter(f => f.rol === 'agente' && f.momento === 'suscripcion');
+      // El pagaré es la excepción y no por olvido: una promesa de pago es unilateral,
+      // la otorga el cliente y la sociedad no la suscribe.
+      if (doc.tipo === 'pagare') {
+        expect(agente.length, 'el pagaré no debería tener bloque de agente').toBe(0);
+        continue;
+      }
       expect(agente.length, `${doc.tipo} sin bloque de agente`).toBeGreaterThan(0);
       for (const f of agente) {
         expect(f.firmada_en, `${doc.tipo}/${f.bloque} sin sellar`).not.toBe('');
@@ -126,11 +133,101 @@ describe('emisión de los documentos de la operación', () => {
     emitirDocumentosDeLaOperacion(db, e.reservaId, ACTOR);
     emitirDocumentosDeLaOperacion(db, e.reservaId, ACTOR);
 
-    expect(db.prepare('SELECT COUNT(*) AS n FROM contratos').get()).toEqual({ n: 4 });
+    expect(db.prepare('SELECT COUNT(*) AS n FROM contratos').get()).toEqual({ n: 5 });
   });
 
   it('una reserva que no existe se rechaza con 404', () => {
     expect(emitirDocumentosDeLaOperacion(db, 99999, ACTOR)).toMatchObject({ ok: false, status: 404 });
+  });
+});
+
+describe('pagaré y carta de instrucciones', () => {
+  let db: DB;
+  beforeEach(() => { db = baseDePrueba(); });
+
+  it('se emite con la operación y lo firma SOLO el cliente', () => {
+    const e = escenario(db);
+    const r = emitirDocumentosDeLaOperacion(db, e.reservaId, ACTOR);
+
+    const pagare = r.documentos.find(d => d.tipo === 'pagare');
+    expect(pagare, 'el pagaré debería emitirse con la operación').toBeTruthy();
+
+    const firmas = leerFirmas(db, pagare!.contratoId);
+    // Una promesa de pago es unilateral: no lleva bloque de la sociedad.
+    expect(firmas.every(f => f.rol === 'cliente')).toBe(true);
+    expect(firmas.every(f => Number(f.usuario_esperado_id) === e.clienteId)).toBe(true);
+  });
+
+  it('tiene DOS bloques del cliente: el pagaré y la carta de instrucciones', () => {
+    const e = escenario(db);
+    const r = emitirDocumentosDeLaOperacion(db, e.reservaId, ACTOR);
+    const pagare = r.documentos.find(d => d.tipo === 'pagare')!;
+
+    const bloques = leerFirmas(db, pagare.contratoId).map(f => f.bloque).sort();
+    expect(bloques).toEqual(['otorgante', 'otorgante-carta']);
+  });
+
+  it('NO espera firmas de codeudores mientras no los haya', () => {
+    // Es lo que evita que la operación se trabe esperando una firma que nadie puede
+    // poner: la plataforma todavía no registra codeudores.
+    const e = escenario(db);
+    const r = emitirDocumentosDeLaOperacion(db, e.reservaId, ACTOR);
+    const pagare = r.documentos.find(d => d.tipo === 'pagare')!;
+
+    expect(leerFirmas(db, pagare.contratoId).some(f => f.rol === 'codeudor')).toBe(false);
+  });
+
+  it('sus firmas pendientes son del cliente y entran en el bloqueo de la entrega', () => {
+    const e = escenario(db);
+    emitirDocumentosDeLaOperacion(db, e.reservaId, ACTOR);
+
+    const delPagare = firmasPendientesDeLaOperacion(db, e.reservaId)
+      .filter(f => f.titulo.toLowerCase().includes('pagar'));
+    expect(delPagare.length).toBe(2);
+    expect(delPagare.every(f => f.usuarioEsperadoId === e.clienteId)).toBe(true);
+  });
+
+  it('tiene resumen en español llano, y dice lo incómodo', () => {
+    const r = resumenDe('pagare')!;
+    expect(r).toBeTruthy();
+    expect(r.queEs.length).toBeLessThan(120);           // una frase, no un párrafo
+    expect(r.loQueDebesSaber.length).toBeGreaterThanOrEqual(3);
+    // Lo que más tranquiliza y lo que más importa saber.
+    expect(r.loQueDebesSaber.join(' ')).toContain('no se usa nunca');
+    expect(r.loQueDebesSaber.join(' ')).toContain('carta de instrucciones');
+  });
+});
+
+describe('la ficha de la reserva', () => {
+  let db: DB;
+  beforeEach(() => { db = baseDePrueba(); });
+
+  it('lista los CINCO, marcos incluidos, aunque no cuelguen de la reserva', () => {
+    const e = escenario(db);
+    emitirDocumentosDeLaOperacion(db, e.reservaId, ACTOR);
+
+    const tipos = listarContratosDeReserva(db, e.reservaId).map(c => c.tipo).sort();
+    expect(tipos).toEqual(
+      ['agencia', 'arrendamiento', 'otrosi-agencia', 'otrosi-arrendamiento', 'pagare'].sort(),
+    );
+  });
+
+  it('NO muestra el marco de arrendamiento de otro cliente del mismo vehículo', () => {
+    const primera = escenario(db);
+    emitirDocumentosDeLaOperacion(db, primera.reservaId, ACTOR);
+
+    const segunda = escenario(db, { vehiculo: primera.vehiculoId });   // otro cliente
+    emitirDocumentosDeLaOperacion(db, segunda.reservaId, ACTOR);
+
+    const deLaSegunda = listarContratosDeReserva(db, segunda.reservaId);
+    const arrendamientos = deLaSegunda.filter(c => c.tipo === 'arrendamiento');
+    expect(arrendamientos).toHaveLength(1);
+    expect(arrendamientos[0].cliente_id).toBe(segunda.clienteId);
+
+    // Y la agencia del vehículo sí es la misma en las dos: es del carro, no del cliente.
+    const agenciaA = listarContratosDeReserva(db, primera.reservaId).find(c => c.tipo === 'agencia')!;
+    const agenciaB = deLaSegunda.find(c => c.tipo === 'agencia')!;
+    expect(agenciaB.id).toBe(agenciaA.id);
   });
 });
 

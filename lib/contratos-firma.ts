@@ -539,9 +539,33 @@ export function leerFirmas(db: DB, contratoId: number): FirmaContratoRow[] {
     .all(contratoId) as FirmaContratoRow[];
 }
 
-/** Documentos de una reserva, el vigente y los anulados, más recientes primero. */
+/**
+ * Documentos de una reserva, el vigente y los anulados, más recientes primero.
+ *
+ * Incluye también los dos contratos MARCO que rigen esa operación —la agencia del
+ * vehículo y el arrendamiento de ese vehículo con ese cliente—, aunque no cuelguen de
+ * la reserva. Sin ellos la ficha mostraría los otrosíes pero no los contratos que
+ * modifican, que es justo lo que alguien busca cuando abre la lista: ver TODO lo que
+ * ampara este alquiler. Se filtran por vehículo y por las partes de ESTA reserva, así
+ * que no aparece el marco de otro cliente.
+ */
 export function listarContratosDeReserva(db: DB, reservaId: number): ContratoRow[] {
-  return db.prepare('SELECT * FROM contratos WHERE reserva_id = ? ORDER BY id DESC').all(reservaId) as ContratoRow[];
+  return db.prepare(`
+    SELECT c.* FROM contratos c
+    WHERE c.reserva_id = ?
+       OR (
+         c.reserva_id IS NULL
+         AND c.tipo IN ('agencia', 'arrendamiento')
+         AND EXISTS (
+           SELECT 1 FROM reservas r JOIN vehiculos v ON v.id = r.vehiculo_id
+           WHERE r.id = ?
+             AND c.vehiculo_id = r.vehiculo_id
+             AND (c.tipo = 'agencia' OR c.cliente_id = r.usuario_id)
+             AND (c.tipo = 'arrendamiento' OR c.propietario_id = v.propietario_id)
+         )
+       )
+    ORDER BY c.id DESC
+  `).all(reservaId, reservaId) as ContratoRow[];
 }
 
 export function tituloDocumento(tipo: TipoDocumento | string): string {
@@ -824,4 +848,48 @@ export function anularContrato(
   if (!aplicado) return err(409, 'Este documento ya está anulado.');
 
   return { ok: true, contrato: leerContrato(db, contratoId)! };
+}
+
+// ── Varios bloques con una sola confirmación ────────────────────────────────
+
+export type FirmarVariosOk = {
+  ok: true;
+  firmados: string[];
+  completo: boolean;
+  contrato: ContratoRow;
+};
+
+/**
+ * Recoge VARIOS bloques del mismo documento en un solo acto de la persona.
+ *
+ * Existe por el pagaré, que pide dos trazos al mismo cliente: el del pagaré y el de la
+ * carta de instrucciones. Son dos bloques distintos porque son dos declaraciones
+ * distintas —y cada uno conserva su propio sello—, pero pedirle a alguien que repita el
+ * mismo gesto dos veces seguidas no añade ninguna garantía: lo que lo hace consciente
+ * es haber leído y aceptado, y eso ocurre una vez.
+ *
+ * Cada bloque pasa por `firmarBloqueContrato` ENTERA, con sus trece comprobaciones y su
+ * propia entrada en la bitácora. No se relaja nada: lo único que se comparte es el
+ * gesto en pantalla.
+ *
+ * Si uno falla, los anteriores quedan firmados y se devuelve el error con la lista de
+ * los que sí entraron. Es recuperable: son bloques del mismo documento y de la misma
+ * persona, así que la pantalla vuelve a ofrecer los que falten.
+ */
+export function firmarBloquesDeUnaVez(
+  db: DB, contratoId: number, quien: QuienFirma, bloques: readonly string[],
+  opts: Omit<FirmarOpciones, 'bloque'>,
+): FirmarVariosOk | (ErrorOperacion & { firmados: string[] }) {
+  const firmados: string[] = [];
+  let ultimo: FirmarOk | null = null;
+
+  for (const bloque of bloques) {
+    const r = firmarBloqueContrato(db, contratoId, quien, { ...opts, bloque });
+    if (!r.ok) return { ...r, firmados };
+    firmados.push(bloque);
+    ultimo = r;
+  }
+
+  if (!ultimo) return { ok: false, status: 400, error: 'No se indicó ningún bloque que firmar.', firmados };
+  return { ok: true, firmados, completo: ultimo.completo, contrato: ultimo.contrato };
 }

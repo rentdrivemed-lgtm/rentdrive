@@ -31,12 +31,25 @@ import type { TipoDocumento } from './contratos-datos';
 
 type DB = Database.Database;
 
-/** Los cuatro documentos de una operación, en el orden en que deben emitirse. */
+/**
+ * Los documentos de una operación, en el orden en que deben emitirse.
+ *
+ * El PAGARÉ va al final y solo lo firma el cliente: no lleva bloque de la sociedad
+ * (una promesa de pago es unilateral) ni se encadena a ningún marco. Sus dos bloques
+ * —el pagaré y la carta de instrucciones— se recogen con UNA sola confirmación; ver
+ * `firmarBloquesDeUnaVez` en lib/contratos-firma.ts.
+ *
+ * Los CODEUDORES no aparecen: `bloquesCodeudor([])` devuelve vacío mientras la
+ * plataforma no los registre, así que el pagaré no espera firmas que nadie puede poner
+ * y la operación no se traba. Si más adelante hay que añadir uno, se anula el documento
+ * y se reemite con su bloque desde el panel.
+ */
 export const SECUENCIA_OPERACION: readonly { tipo: TipoDocumento; marco: boolean }[] = [
   { tipo: 'agencia', marco: true },
   { tipo: 'arrendamiento', marco: true },
   { tipo: 'otrosi-agencia', marco: false },
   { tipo: 'otrosi-arrendamiento', marco: false },
+  { tipo: 'pagare', marco: false },
 ];
 
 type Reserva = { id: number; vehiculo_id: number; usuario_id: number; propietario_id: number };

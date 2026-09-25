@@ -1,4 +1,4 @@
-// Recoge el trazo de UN bloque de firma de un contrato digital.
+// Recoge el trazo de uno o VARIOS bloques de firma de un contrato digital.
 //
 // Quién puede firmar qué (el detalle vive en lib/contratos-firma.ts → puedeFirmarBloque):
 //   · bloques de EL ARRENDATARIO / EL OTORGANTE → la cuenta del cliente de la reserva;
@@ -13,12 +13,15 @@ import { getCurrentUser } from '@/lib/auth';
 import { bloqueadoPorCsrf } from '@/lib/csrf';
 import { ipCliente } from '@/lib/limite-tasa';
 import { accesoContrato } from '@/lib/contratos-acceso';
-import { firmarBloqueContrato, leerContrato, esMetodoFirma } from '@/lib/contratos-firma';
+import { firmarBloquesDeUnaVez, leerContrato, esMetodoFirma } from '@/lib/contratos-firma';
 import { FIRMA_PNG_MAX_CHARS_TOTAL } from '@/lib/firma-imagen';
 
 export const dynamic = 'force-dynamic';
 
 const BLOQUE_MAX_CHARS = 40;
+// Tope defensivo: el documento con más bloques de una misma persona es el pagaré, con
+// dos. Un número alto aquí solo serviría para pedir trabajo inútil al servidor.
+const BLOQUES_MAX = 6;
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const csrf = bloqueadoPorCsrf(req);
@@ -34,13 +37,31 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
 
   const body = await req.json().catch(() => ({})) as {
-    bloque?: unknown; nombre_confirmado?: unknown; firma_imagen?: unknown;
+    bloque?: unknown; bloques?: unknown; nombre_confirmado?: unknown; firma_imagen?: unknown;
     metodo?: unknown; acepta?: unknown; version?: unknown; revision?: unknown;
   };
 
-  const bloque = typeof body.bloque === 'string' ? body.bloque.trim() : '';
-  if (!bloque || bloque.length > BLOQUE_MAX_CHARS) {
+  // `bloques` (varios) o `bloque` (uno). Lo de varios existe por el pagaré, que pide
+  // dos trazos al mismo cliente —el del pagaré y el de la carta de instrucciones— y no
+  // tiene sentido hacerle repetir el mismo gesto seguido. Cada bloque pasa igual por
+  // todas las comprobaciones y conserva su propio sello; lo único que se comparte es el
+  // gesto. Se mantiene `bloque` porque es lo que manda la pantalla de firma de siempre.
+  const crudos = Array.isArray(body.bloques)
+    ? body.bloques
+    : (typeof body.bloque === 'string' ? [body.bloque] : []);
+  const bloques = crudos
+    .filter((b): b is string => typeof b === 'string')
+    .map(b => b.trim())
+    .filter(b => b.length > 0 && b.length <= BLOQUE_MAX_CHARS);
+
+  if (bloques.length === 0) {
     return NextResponse.json({ error: 'Falta indicar qué bloque se firma.' }, { status: 400 });
+  }
+  if (bloques.length > BLOQUES_MAX) {
+    return NextResponse.json({ error: 'Demasiados bloques en una sola firma.' }, { status: 400 });
+  }
+  if (new Set(bloques).size !== bloques.length) {
+    return NextResponse.json({ error: 'Hay bloques repetidos en la solicitud.' }, { status: 400 });
   }
   if (!esMetodoFirma(body.metodo)) {
     return NextResponse.json({ error: 'Indica cómo se firmó: trazo en pantalla o imagen cargada.' }, { status: 400 });
@@ -82,14 +103,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   // confirma siquiera que el documento exista (404, no 403).
   if (!acceso.puedeVer) return NextResponse.json({ error: 'Documento no encontrado.' }, { status: 404 });
 
-  const resultado = firmarBloqueContrato(db, contratoId, {
+  const resultado = firmarBloquesDeUnaVez(db, contratoId, {
     usuarioId: user.id,
     nombre: user.nombre,
     correo: user.correo,
     rolCuenta: user.rol,
     puedeFirmarComoAgente: acceso.puedeFirmarComoAgente,
-  }, {
-    bloque,
+  }, bloques, {
     nombreConfirmado,
     firmaImagen,
     metodo: body.metodo,
@@ -100,13 +120,22 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     userAgent: req.headers.get('user-agent') || '',
   });
 
-  if (!resultado.ok) return NextResponse.json({ error: resultado.error }, { status: resultado.status });
+  if (!resultado.ok) {
+    // `firmados` dice cuáles SÍ entraron antes del fallo: sin eso, la pantalla volvería
+    // a ofrecer bloques ya firmados y el segundo intento daría «este bloque ya fue
+    // firmado» sin que nadie entienda por qué.
+    return NextResponse.json(
+      { error: resultado.error, firmados: resultado.firmados },
+      { status: resultado.status },
+    );
+  }
 
   return NextResponse.json({
     ok: true,
     completo: resultado.completo,
     estado: resultado.contrato.estado,
-    bloque: resultado.firma.bloque,
-    firmada_en: resultado.firma.firmada_en,
+    bloques: resultado.firmados,
+    // Compatibilidad con la pantalla de firma de siempre, que espera un solo bloque.
+    bloque: resultado.firmados[0],
   });
 }
