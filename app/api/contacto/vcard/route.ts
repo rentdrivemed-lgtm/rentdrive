@@ -14,7 +14,7 @@
 import { NextResponse } from 'next/server';
 import {
   CONTACTO_DIRECCION, CONTACTO_BARRIO, CONTACTO_CIUDAD, CONTACTO_DEPARTAMENTO,
-  CONTACTO_PAIS, CONTACTO_TELEFONO_E164, CONTACTO_INSTAGRAM_URL,
+  CONTACTO_PAIS, CONTACTO_TELEFONO_E164, CONTACTO_INSTAGRAM_URL, CONTACTO_CORREO,
 } from '@/lib/contacto';
 
 export const dynamic = 'force-dynamic';
@@ -45,6 +45,7 @@ export function GET() {
     `ORG:${esc(RAZON_SOCIAL)}`,
     'TITLE:Alquiler de carros y transporte de grupos',
     `TEL;TYPE=CELL,VOICE:${CONTACTO_TELEFONO_E164}`,
+    `EMAIL;TYPE=INTERNET,WORK:${CONTACTO_CORREO}`,
     `URL:${SITIO}`,
     `URL;TYPE=Instagram:${CONTACTO_INSTAGRAM_URL}`,
     `X-SOCIALPROFILE;TYPE=instagram:${CONTACTO_INSTAGRAM_URL}`,

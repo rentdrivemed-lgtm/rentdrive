@@ -17,6 +17,7 @@ import {
   CONTACTO_DIRECCION, CONTACTO_BARRIO, CONTACTO_CIUDAD, CONTACTO_DEPARTAMENTO,
   CONTACTO_DIRECCION_COMPLETA, CONTACTO_TELEFONO_VISIBLE, CONTACTO_TEL_HREF,
   CONTACTO_WHATSAPP_URL, CONTACTO_INSTAGRAM_URL, CONTACTO_INSTAGRAM_USUARIO,
+  CONTACTO_CORREO, CONTACTO_CORREO_HREF,
   CONTACTO_GOOGLE_MAPS_URL, CONTACTO_WAZE_URL,
 } from '@/lib/contacto';
 
@@ -46,6 +47,7 @@ const ENLACES: Enlace[] = [
   { href: SITIO, titulo: 'Ver los carros disponibles', detalle: 'drivepasscol.com', emoji: '🚗', externo: true },
   { href: `${SITIO}/buses`, titulo: 'Transporte de grupos', detalle: 'De 12 a 42 pasajeros, con conductor', emoji: '🚌', externo: true },
   { href: CONTACTO_INSTAGRAM_URL, titulo: 'Instagram', detalle: `@${CONTACTO_INSTAGRAM_USUARIO}`, emoji: '📸', externo: true },
+  { href: CONTACTO_CORREO_HREF, titulo: 'Escríbenos un correo', detalle: CONTACTO_CORREO, emoji: '✉️' },
   { href: CONTACTO_GOOGLE_MAPS_URL, titulo: 'Cómo llegar', detalle: `${CONTACTO_DIRECCION}, ${CONTACTO_BARRIO}`, emoji: '📍', externo: true },
   { href: CONTACTO_WAZE_URL, titulo: 'Abrir en Waze', detalle: CONTACTO_CIUDAD, emoji: '🧭', externo: true },
 ];

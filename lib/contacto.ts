@@ -37,6 +37,18 @@ export const CONTACTO_WHATSAPP_URL = `https://wa.me/${CONTACTO_INDICATIVO_PAIS}$
 export const CONTACTO_INSTAGRAM_USUARIO = 'drivepasscol_';
 export const CONTACTO_INSTAGRAM_URL = `https://instagram.com/${CONTACTO_INSTAGRAM_USUARIO}`;
 
+/**
+ * Correo de atención al público.
+ *
+ * NO es el mismo que `AGENTE.correo` (notificaciones@), que es la dirección para
+ * notificaciones contractuales y habeas data que citan los contratos. Ese vive en
+ * lib/contratos-datos.ts y no se toca desde aquí: cambiar el correo comercial no puede
+ * mover el de las notificaciones legales, que es el que quedó impreso —y firmado— en
+ * los documentos ya emitidos.
+ */
+export const CONTACTO_CORREO = 'info@drivepasscol.com';
+export const CONTACTO_CORREO_HREF = `mailto:${CONTACTO_CORREO}`;
+
 // ── Mapas ────────────────────────────────────────────────────────────────────
 // Los enlaces van POR CONSULTA DE DIRECCIÓN, no por coordenadas: hoy solo está
 // confirmada la calle (San Joaquín, Laureles-Estadio), no el número exacto, y un
