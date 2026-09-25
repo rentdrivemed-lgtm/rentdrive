@@ -192,12 +192,30 @@ export default function ReservasSeccion() {
     abrirCargosExtra(cargosModal.r);
   };
 
+  // Motivo por el que el servidor rechazó el último cambio de estado, por reserva.
+  const [bloqueo, setBloqueo] = useState<{ id: number; motivo: string; esFirmas: boolean } | null>(null);
+
   const cambiarEstadoReserva = async (id: number, estado: string) => {
-    await fetch(`/api/reservas/${id}`, {
+    const res = await fetch(`/api/reservas/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ estado }),
     });
+    const data = await res.json().catch(() => ({}));
+
+    // Antes la pantalla se actualizaba SIEMPRE, hubiera aceptado el servidor o no: la
+    // tarjeta mostraba «en curso» sobre una reserva que había sido rechazada, y nadie
+    // se enteraba hasta recargar. Ahora el estado solo cambia si el servidor lo aceptó.
+    if (!res.ok) {
+      setBloqueo({
+        id,
+        motivo: data.error || 'No se pudo cambiar el estado de la reserva.',
+        // El 409 de firmas pendientes trae los documentos concretos que faltan.
+        esFirmas: data.codigo === 'firmas_pendientes',
+      });
+      return;
+    }
+    setBloqueo(b => (b?.id === id ? null : b));
     setReservas(rs => rs.map(r => r.id === id ? { ...r, estado } : r));
   };
 
@@ -430,6 +448,23 @@ export default function ReservasSeccion() {
                             <IconX size={12} /> Rechazar
                           </button>
                         </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Por qué no se pudo entregar. Se pinta en la tarjeta y no en una
+                      alerta que se cierra: el motivo hay que leerlo y, si son firmas,
+                      hay que ir a destrabarlas. */}
+                  {bloqueo?.id === r.id && (
+                    <div className="mb-2 rounded-lg border border-warning/30 bg-warning/5 px-2.5 py-2">
+                      <p className="text-[11px] text-ink leading-relaxed">{bloqueo.motivo}</p>
+                      {bloqueo.esFirmas && (
+                        <a
+                          href={`/firmar/${r.id}`}
+                          className="inline-block mt-1.5 text-[11px] font-semibold text-accent hover:underline"
+                        >
+                          Ver qué firmas faltan →
+                        </a>
                       )}
                     </div>
                   )}
