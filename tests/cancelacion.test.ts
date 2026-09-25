@@ -8,6 +8,10 @@ import {
   HORAS_LIMITE_GRATIS, PCT_CANCELACION_TARDIA, PCT_NO_SHOW, HORAS_GRACIA_NO_SHOW,
   calcularPoliticaCancelacion, esNoShowAplicable, fechaHoraRecogida,
 } from '@/lib/cancelacion';
+import {
+  DEPOSITO_GARANTIA, DEPOSITO_GARANTIA_ESTANDAR, DEPOSITO_GARANTIA_TARJETA_CREDITO,
+  depositoSegun,
+} from '@/lib/contratos-calculo';
 
 /** Una recogida a `horas` de distancia desde un momento fijo. */
 function recogidaEn(horas: number): { pickup: Date; ahora: Date } {
@@ -60,5 +64,21 @@ describe('política de cancelación', () => {
     // Sin hora registrada se asume el inicio del día: es lo más favorable al cliente,
     // porque le da más horas de anticipación para cancelar sin costo.
     expect(fechaHoraRecogida('2026-10-01', null).getHours()).toBe(0);
+  });
+});
+
+describe('depósito de garantía', () => {
+  it('es menor con tarjeta de crédito, porque el cupo queda retenido ahí', () => {
+    expect(DEPOSITO_GARANTIA_ESTANDAR).toBe(2_000_000);
+    expect(DEPOSITO_GARANTIA_TARJETA_CREDITO).toBe(1_000_000);
+    expect(depositoSegun('estandar')).toBe(DEPOSITO_GARANTIA_ESTANDAR);
+    expect(depositoSegun('tarjeta_credito')).toBe(DEPOSITO_GARANTIA_TARJETA_CREDITO);
+  });
+
+  // El sistema todavía no distingue crédito de débito, así que por defecto cobra el
+  // alto: equivocarse hacia arriba se corrige devolviendo, y hacia abajo deja a la
+  // empresa sin garantía.
+  it('por defecto aplica el ALTO', () => {
+    expect(DEPOSITO_GARANTIA).toBe(DEPOSITO_GARANTIA_ESTANDAR);
   });
 });

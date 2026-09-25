@@ -31,8 +31,40 @@
 
 // ── Constantes que los documentos traen fijas ───────────────────────────────
 
-/** Depósito de garantía del arrendatario (cláusula octava de agencia / sexta de arrendamiento). */
-export const DEPOSITO_GARANTIA = 2_000_000;
+// ── Depósito de garantía ────────────────────────────────────────────────────
+//
+// Cláusula octava de agencia / sexta de arrendamiento. El monto DEPENDE DE CÓMO se
+// deje: con tarjeta de crédito basta la mitad, porque el cupo queda retenido en el
+// propio plástico y el riesgo de recuperación es menor que con plata en efectivo.
+//
+// ⚠️ EL SISTEMA TODAVÍA NO SABE SI UNA TARJETA ES DE CRÉDITO O DE DÉBITO. Los métodos
+// de pago son 'tarjeta | efectivo | transferencia' en la web y
+// 'efectivo | transferencia | datafono | otro' en el mostrador, y de Wompi solo se
+// guarda la marca (Visa, Mastercard), no el tipo. Por eso el valor por defecto es el
+// ALTO: equivocarse hacia arriba se corrige devolviendo, y hacia abajo deja a la
+// empresa sin garantía. Cuando el depósito sea con tarjeta de crédito, el equipo lo
+// ajusta en la operación desde «Completar los datos del documento», que ya admite
+// `deposito` (ver lib/contratos-edicion.ts).
+
+/** Depósito cuando se deja en efectivo, por transferencia o con tarjeta débito. */
+export const DEPOSITO_GARANTIA_ESTANDAR = 2_000_000;
+
+/** Depósito cuando se deja con tarjeta de CRÉDITO: el cupo queda retenido en la tarjeta. */
+export const DEPOSITO_GARANTIA_TARJETA_CREDITO = 1_000_000;
+
+/** Modalidades de depósito que reconoce el negocio. */
+export type ModalidadDeposito = 'estandar' | 'tarjeta_credito';
+
+export function depositoSegun(modalidad: ModalidadDeposito): number {
+  return modalidad === 'tarjeta_credito' ? DEPOSITO_GARANTIA_TARJETA_CREDITO : DEPOSITO_GARANTIA_ESTANDAR;
+}
+
+/**
+ * Valor por defecto cuando nadie ha dicho la modalidad.
+ *
+ * Es el ALTO a propósito: ver la nota de arriba.
+ */
+export const DEPOSITO_GARANTIA = DEPOSITO_GARANTIA_ESTANDAR;
 
 /** Pena por cada día o fracción de mora en la restitución: 200 % del canon diario (cláusula décima segunda del arrendamiento). */
 export const PENA_MORA_PCT = 200;

@@ -33,7 +33,7 @@ const content = {
       },
       {
         title: '6. Depósito de garantía',
-        body: 'Al suscribir el contrato se entrega un depósito de garantía de $2.000.000. No es parte del canon, no genera intereses y no es una multa. Lo conservamos durante los ocho (8) días hábiles siguientes a la devolución del vehículo, y dentro de ese plazo podemos descontar de él comparendos, fotomultas, peajes, combustible faltante, deducibles, daños no cubiertos por la póliza, lavado, grúa o inmovilización. Vencido el plazo le devolvemos el saldo con el detalle de lo descontado. Si lo que queda a su cargo supera el depósito, deberá pagar la diferencia dentro de los cinco (5) días hábiles siguientes a que se lo solicitemos.',
+        body: 'Al suscribir el contrato se entrega un depósito de garantía. Son $2.000.000 si lo deja en efectivo, por transferencia o con tarjeta débito, y $1.000.000 si lo deja con tarjeta de crédito. No es parte del canon, no genera intereses y no es una multa. Lo conservamos durante los ocho (8) días hábiles siguientes a la devolución del vehículo, y dentro de ese plazo podemos descontar de él comparendos, fotomultas, peajes, combustible faltante, deducibles, daños no cubiertos por la póliza, lavado, grúa o inmovilización. Vencido el plazo le devolvemos el saldo con el detalle de lo descontado. Si lo que queda a su cargo supera el depósito, deberá pagar la diferencia dentro de los cinco (5) días hábiles siguientes a que se lo solicitemos.',
       },
       {
         title: '7. Pagaré y carta de instrucciones',
@@ -57,7 +57,7 @@ const content = {
       },
       {
         title: '12. El seguro',
-        body: 'El vehículo circula amparado por una póliza expedida por la aseguradora, en la que DrivePass figura como tomador y el propietario como asegurado. Usted queda incorporado como asegurado en el amparo de responsabilidad civil extracontractual. La póliza tiene deducibles, franquicias y exclusiones: lo que ella no cubra queda a su cargo en los términos del contrato. Puede pedirnos copia de la carátula y del clausulado antes de alquilar; le recomendamos leerlos.',
+        body: 'Lo que DrivePass asume es mantener vigente una póliza con una aseguradora que ampare la actividad de renta. La expide la aseguradora, no nosotros: DrivePass figura como tomador y el propietario como asegurado, y usted queda incorporado como asegurado en el amparo de responsabilidad civil extracontractual. Como toda póliza de automóviles, tiene deducibles, franquicias y exclusiones, y lo que ella no cubra queda a su cargo en los términos de su contrato. Puede pedirnos copia de la carátula y del clausulado antes de alquilar; le recomendamos leerlos.',
       },
       {
         title: '13. Cancelaciones',
@@ -108,7 +108,7 @@ const content = {
       },
       {
         title: '6. Security deposit',
-        body: 'On signing the contract a security deposit of COP 2,000,000 is provided. It is not part of the rental price, earns no interest and is not a penalty. We hold it for eight (8) business days after the vehicle is returned, and within that period we may deduct traffic tickets, camera fines, tolls, missing fuel, deductibles, damage not covered by the policy, cleaning, towing or impoundment. Once the period ends we return the balance with a breakdown of what was deducted. If the amounts owed exceed the deposit, you must pay the difference within five (5) business days of our request.',
+        body: 'On signing the contract a security deposit is provided. It is COP 2,000,000 if left in cash, by bank transfer or with a debit card, and COP 1,000,000 if left with a credit card. It is not part of the rental price, earns no interest and is not a penalty. We hold it for eight (8) business days after the vehicle is returned, and within that period we may deduct traffic tickets, camera fines, tolls, missing fuel, deductibles, damage not covered by the policy, cleaning, towing or impoundment. Once the period ends we return the balance with a breakdown of what was deducted. If the amounts owed exceed the deposit, you must pay the difference within five (5) business days of our request.',
       },
       {
         title: '7. Promissory note and instruction letter',
@@ -132,7 +132,7 @@ const content = {
       },
       {
         title: '12. Insurance',
-        body: 'The vehicle is covered by a policy issued by the insurer, in which DrivePass is the policyholder and the owner is the insured party. You are included as an insured party under third-party liability cover. The policy has deductibles, excesses and exclusions: whatever it does not cover is your responsibility under the terms of the contract. You may ask us for a copy of the policy summary and conditions before renting; we recommend reading them.',
+        body: 'What DrivePass undertakes is to keep in force a policy with an insurer covering the rental activity. The insurer issues it, not us: DrivePass is the policyholder and the owner is the insured party, and you are included as an insured party under third-party liability cover. Like any motor policy, it has deductibles, excesses and exclusions, and whatever it does not cover is your responsibility under the terms of your contract. You may ask us for a copy of the policy summary and conditions before renting; we recommend reading them.',
       },
       {
         title: '13. Cancellations',
