@@ -19,7 +19,10 @@ function BusesContent() {
   const [loading, setLoading] = useState(true);
   const [errorCarga, setErrorCarga] = useState('');
   const [categoria, setCategoria] = useState('');
-  const [pasajeros, setPasajeros] = useState('');
+  // Arranca con lo que traiga el enlace: la franja «¿Viajan en grupo?» de la portada
+  // manda acá el número que la persona ya escribió, y volvérselo a pedir sería tratar
+  // su respuesta como si no contara.
+  const [pasajeros, setPasajeros] = useState(searchParams.get('pasajeros') || '');
   const [seleccionado, setSeleccionado] = useState<BusPublico | null>(null);
   // Deep-link `/buses?id=<vehiculoId>` (ver app/vehiculos/[id]/page.tsx): mientras se resuelve
   // el bus puntual, no mostramos la vitrina filtrable de fondo para evitar el parpadeo de

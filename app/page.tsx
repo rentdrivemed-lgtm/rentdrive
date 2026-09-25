@@ -6,6 +6,7 @@ import { useLang } from '@/contexts/LanguageContext';
 import { IconFilter, IconKey, IconShield, IconMetrocable, IconCar, IconCalendar, IconX } from '@/components/Icons';
 import { TIPO_VEHICULO_LABELS, type TipoVehiculo } from '@/lib/rentabilidad';
 import { FranjaSura } from '@/components/SelloSura';
+import FranjaBuses from '@/components/FranjaBuses';
 
 const CATEGORIAS = Object.entries(TIPO_VEHICULO_LABELS) as [TipoVehiculo, string][];
 
@@ -130,6 +131,12 @@ export default function Home() {
           todo riesgo» en algo verificable. El texto y el aviso viven en
           `lib/i18n.ts` (clave `sura`) y salen del clausulado, no del marketing. */}
       <FranjaSura />
+
+      {/* ── BUSES ──
+          Antes de la vitrina de carros, no después: quien necesita mover un grupo no
+          baja a mirar sedanes, y al final de la página no lo vería nadie. Es una sola
+          franja compacta, así que no le quita protagonismo al producto principal. */}
+      <FranjaBuses />
 
       {/* ── FILTROS ── */}
       <section id="vehiculos" className="max-w-7xl mx-auto px-4 sm:px-6 py-8 sm:py-10">
