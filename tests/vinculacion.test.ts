@@ -176,6 +176,46 @@ describe('el texto que se lee ANTES de autorizar', () => {
   });
 });
 
+describe('el texto no se contradice con lo que hace el sistema', () => {
+  let db: DB;
+  beforeEach(() => { db = baseDePrueba(); });
+
+  function texto(db2: DB): string {
+    const id = crearUsuario(db2, { rol: 'usuario' });
+    return generarTextoRegistro(armarDatosVinculacion(db2, id, 'usuario')!, {
+      general: false, datosSensibles: false, comunicacionesComerciales: false,
+    });
+  }
+
+  // El sistema NO crea la cuenta a quien no autoriza las imágenes. El documento tiene
+  // que decirlo: un consentimiento que se declara libre y no lo es se puede discutir
+  // después, y ahí se cae la base de todo el tratamiento.
+  it('advierte que sin la autorización no se puede prestar el servicio', () => {
+    const t = texto(db);
+    expect(t).toContain('no podrá prestarle el servicio');
+    expect(t).toContain('presupuesto indispensable');
+  });
+
+  it('YA NO afirma que ninguna actividad se condiciona', () => {
+    // Era la frase del modelo que contradecía al código.
+    expect(texto(db)).not.toContain('Ninguna actividad se condiciona');
+  });
+
+  it('pero conserva lo que SÍ es cierto: lo demás no se condiciona', () => {
+    const t = texto(db);
+    expect(t).toContain('Ninguna otra actividad se condiciona');
+    expect(t).toContain('comunicaciones comerciales');
+    // Negarse a las promociones no puede afectar al servicio, y el texto lo dice.
+    expect(t).toContain('no afecta en nada la prestación del servicio');
+  });
+
+  it('mantiene el derecho a no autorizar, que es de la ley', () => {
+    const t = texto(db);
+    expect(t).toContain('no está obligado a autorizar el tratamiento de datos sensibles');
+    expect(t).toContain('Decreto 1377 de 2013');
+  });
+});
+
 describe('cuentas que todavía no han autorizado', () => {
   let db: DB;
   beforeEach(() => { db = baseDePrueba(); });

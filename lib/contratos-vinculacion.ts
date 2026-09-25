@@ -182,11 +182,9 @@ export function generarContratoVinculacion(
   // tener cuenta (decisión del dueño, sep-2026). Se comprueba también acá y no solo en
   // el registro: esta función la llaman además el panel y la reemisión.
   //
-  // ⚖️ REVISAR: el texto del abogado declara en su cláusula TERCERA que «ninguna
-  // actividad se condiciona a la entrega de datos sensibles» y en la CUARTA informa de
-  // que es facultativo. Exigirlos contradice esas dos cláusulas. Pendiente de que el
-  // abogado las reformule para decir que sin esa autorización no se puede verificar la
-  // identidad y por tanto no se puede prestar el servicio.
+  // Y el TEXTO lo dice: la cláusula TERCERA advierte de manera expresa que sin la
+  // autorización de la CUARTA no se puede prestar el servicio. Antes decía lo
+  // contrario —«ninguna actividad se condiciona»— y contradecía a este código.
   if (!consentimientos.general) return err(400, 'Falta la autorización de tratamiento de datos.');
   if (!consentimientos.datosSensibles) {
     return err(400, 'Falta la autorización para tratar las imágenes de tus documentos de identidad.');

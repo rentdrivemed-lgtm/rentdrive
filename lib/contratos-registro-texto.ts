@@ -22,6 +22,27 @@
 //   · la razón social, que en el modelo decía «DRIVEPASS S.A.S.» y es
 //     «DRIVEPASS COL S.A.S.» — el nombre correcto según el certificado de existencia
 //     y representación legal, y el que usan los otros seis documentos.
+//
+// ⚠️ Y POR UNA TERCERA COSA, que NO es de forma: las cláusulas TERCERA y CUARTA se
+// reescribieron el 24-sep-2026, por decisión del dueño y SIN que el abogado las viera.
+//
+// El modelo decía «ninguna actividad se condiciona a la entrega de datos sensibles» y
+// presentaba como «facultativo» autorizar las imágenes de los documentos. Pero la
+// plataforma no crea la cuenta a quien no lo autoriza —sin verificar identidad no hay
+// arrendamiento posible—, así que el documento afirmaba algo falso, y un consentimiento
+// que se declara libre y no lo es se puede discutir después.
+//
+// La redacción nueva dice lo que de verdad ocurre: que autorizar sigue siendo
+// facultativo, que la verificación de identidad exige tratar esas imágenes, y que sin
+// esa autorización no se puede prestar el servicio. Se conserva intacto que ninguna
+// OTRA actividad se condiciona, y que negarse a las comunicaciones comerciales no
+// afecta a nada.
+//
+// Es la fórmula corriente en cualquier plataforma que verifica identidad, y no cambia
+// lo que se exige —eso ya estaba decidido—, solo hace que el papel lo diga. Aun así,
+// conviene que el abogado la vea en la próxima revisión: el documento lleva su nombre
+// detrás y estas dos cláusulas ya no son suyas.
+//
 // Si hay que cambiar una cláusula se cambia primero en el .docx y después acá.
 //
 // ⚠️ Módulo PURO (sin BD, sin `fs`): lo importan tanto las rutas de API como las
@@ -37,7 +58,8 @@ import type { Empresa, Persona } from './contratos-datos';
  *
  * En `true` desde que el documento pasó a ser el del abogado en vez de un borrador
  * del equipo. Lo que queda abierto está anotado con `// ⚖️ REVISAR:` y no impide
- * emitir: son decisiones sobre el modelo, no defectos del texto.
+ * emitir: son cosas que el propio modelo deja al criterio de la empresa, no defectos
+ * del texto. Ver también la nota de cabecera sobre las cláusulas TERCERA y CUARTA.
  */
 export const REGISTRO_REVISADO_POR_ABOGADO = true;
 
@@ -138,15 +160,23 @@ export function generarTextoRegistro(d: DatosRegistro, c: ConsentimientosRegistr
       + `g) si se autoriza por separado, enviar comunicaciones comerciales.`,
     `    ${casilla(c.comunicacionesComerciales)} Autorizo el envío de comunicaciones comerciales.`,
     '',
-    `TERCERA. CARÁCTER FACULTATIVO. La entrega de datos es facultativa; en especial, el titular no `
-      + `está obligado a autorizar el tratamiento de datos sensibles (artículo 6 del Decreto 1377 de `
-      + `2013). Ninguna actividad se condiciona a la entrega de datos sensibles.`,
+    `TERCERA. CARÁCTER FACULTATIVO Y CONSECUENCIA DE NO AUTORIZAR. La entrega de datos personales es `
+      + `facultativa y el titular no está obligado a autorizar el tratamiento de datos sensibles `
+      + `(artículo 6 del Decreto 1377 de 2013). No obstante, se le advierte de manera expresa que la `
+      + `verificación de su identidad y de la vigencia y categoría de su licencia de conducción exige `
+      + `tratar las imágenes de esos documentos, y que dicha verificación es presupuesto indispensable `
+      + `para entregar un vehículo en arrendamiento. En consecuencia, si el titular no otorga la `
+      + `autorización de la cláusula siguiente, ${a.razonSocial} no podrá prestarle el servicio. `
+      + `Ninguna otra actividad se condiciona a la entrega de datos sensibles, y negarse a las `
+      + `finalidades facultativas —en particular el envío de comunicaciones comerciales— no afecta en `
+      + `nada la prestación del servicio.`,
     '',
     `CUARTA. CONSENTIMIENTO REFORZADO PARA DATOS SENSIBLES. Las imágenes de documentos de identidad `
       + `y de la licencia pueden contener datos sensibles/biométricos (artículo 5 de la Ley 1581 de `
-      + `2012). Informado de su carácter facultativo y de que su finalidad es exclusivamente la `
-      + `verificación de identidad y de la licencia y la prevención de fraude, autorizo de forma `
-      + `separada y expresa su tratamiento:`,
+      + `2012). Informado de que su entrega es facultativa, de que su finalidad es exclusivamente la `
+      + `verificación de identidad y de la licencia y la prevención de fraude, y de que sin esta `
+      + `autorización ${a.razonSocial} no puede prestar el servicio de arrendamiento, autorizo de `
+      + `forma separada y expresa su tratamiento:`,
     `    ${casilla(c.datosSensibles)} Sí autorizo.`,
     `Estos datos se conservarán con medidas reforzadas de seguridad y acceso restringido.`,
     '',
@@ -183,8 +213,8 @@ export function generarTextoRegistro(d: DatosRegistro, c: ConsentimientosRegistr
   ].join('\n');
 }
 
-// ⚖️ REVISAR: dos decisiones que el modelo del abogado deja abiertas y que no dependen
-// del texto sino de la operación:
+// ⚖️ REVISAR: dos cosas que el modelo del abogado deja al criterio de la empresa y que
+// no dependen del texto sino de la operación:
 //
 //  1. El correo de habeas data es hoy el general de notificaciones. La ley no exige uno
 //     dedicado, pero la política publicada debe indicar el mismo que diga este

@@ -81,10 +81,9 @@ export async function POST(req: NextRequest) {
   // autoriza el tratamiento de las imágenes de sus documentos no puede registrarse,
   // porque sin verificar identidad no hay operación posible.
   //
-  // ⚖️ REVISAR: el texto del abogado dice en su cláusula TERCERA que «ninguna actividad
-  // se condiciona a la entrega de datos sensibles» y en la CUARTA que es facultativo.
-  // Exigirlos contradice ambas. Pendiente de que las reformule para decir que sin esa
-  // autorización no se puede verificar la identidad y por tanto no se presta el servicio.
+  // El documento que se firma lo dice con esas palabras (cláusulas TERCERA y CUARTA):
+  // la verificación de identidad exige tratar las imágenes, y sin esa autorización no
+  // se puede prestar el servicio. Antes el texto afirmaba lo contrario.
   if (autoriza_datos !== true) {
     return NextResponse.json(
       { error: 'Para crear tu cuenta necesitas autorizar el tratamiento de tus datos personales.' },
