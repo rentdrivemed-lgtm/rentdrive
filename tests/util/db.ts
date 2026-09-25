@@ -48,12 +48,15 @@ export function crearUsuario(db: DB, parcial: Partial<{
   return id;
 }
 
-/** Un admin con los permisos que se le pasen, en el nivel indicado. */
-export function crearAdmin(db: DB, nivel: 'principal' | 'socio' | 'secretaria', areas?: string[]): number {
+/**
+ * Un admin del nivel indicado.
+ *
+ * Las áreas NO se pasan: salen del NIVEL (`AREA_NIVELES` en lib/permisos.ts), y
+ * `permisos_extra` es solo para excepciones por cuenta. Fijarlas a mano en la prueba
+ * verificaría un permiso inventado en vez del que de verdad rige.
+ */
+export function crearAdmin(db: DB, nivel: 'principal' | 'socio' | 'secretaria'): number {
   const id = crearUsuario(db, { rol: 'admin' });
   db.prepare('UPDATE usuarios SET admin_nivel = ? WHERE id = ?').run(nivel, id);
-  if (areas) {
-    db.prepare('UPDATE usuarios SET admin_areas = ? WHERE id = ?').run(JSON.stringify(areas), id);
-  }
   return id;
 }

@@ -44,6 +44,10 @@ export type AccesoContrato = {
 export function accesoContrato(db: Database.Database, user: UserPayload, partes: PartesDocumento): AccesoContrato {
   const esAdmin = user.rol === 'admin';
   const puedeGestionar = esAdmin && adminTieneArea(db, user.id, AREA_CONTRATOS);
+  // Ver NO es gestionar. La secretaría atiende el mostrador y tiene que poder
+  // responder «¿por qué no puedo entregar este carro?», pero anular un documento
+  // contractual sigue siendo de principal y socio.
+  const puedeVerComoEquipo = puedeGestionar || (esAdmin && adminTieneArea(db, user.id, 'contratos_ver'));
   const puedeFirmarComoAgente = esAdmin && adminTieneArea(db, user.id, AREA_FIRMAR_AGENTE);
 
   // El papel se decide por el ID de la cuenta, no por `usuarios.rol`: una cuenta de
@@ -58,7 +62,7 @@ export function accesoContrato(db: Database.Database, user: UserPayload, partes:
         : null;
 
   return {
-    puedeVer: puedeGestionar || parte !== null,
+    puedeVer: puedeVerComoEquipo || parte !== null,
     parte,
     puedeGestionar,
     puedeFirmarComoAgente,

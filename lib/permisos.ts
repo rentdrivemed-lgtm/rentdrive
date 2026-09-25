@@ -41,6 +41,11 @@ export const AREA_NIVELES: Record<string, AdminNivel[]> = {
   // documento emitido es un acto jurídico con el cliente y con el propietario, y
   // anularlo tumba firmas ya recogidas.
   contratos:    ['principal', 'socio'],
+  // VER el estado de firmas, sin poder emitir ni anular. Separada de `contratos` a
+  // propósito: la secretaría atiende el mostrador y necesita responder «¿por qué no
+  // puedo entregar este carro?», pero dejar sin efecto un documento contractual es
+  // otra cosa y sigue siendo de principal y socio.
+  contratos_ver: ['principal', 'socio', 'secretaria'],
   // Contratos de VINCULACIÓN (los que se firman al crear la cuenta). Área APARTE de
   // `contratos` y sí abierta a secretaría, a propósito: acá solo se puede emitir el
   // documento, reenviar el aviso y acompañar a la persona mientras firma en el
@@ -113,6 +118,7 @@ export const AREA_LABEL: Record<string, string> = {
   reservas: 'Reservas',
   contabilidad: 'Contabilidad',
   contratos: 'Contratos digitales',
+  contratos_ver: 'Contratos digitales (solo ver)',
   contratos_vinculacion: 'Contratos de vinculación (registro)',
   mercado: 'Mercado',
   calculadora: 'Calculadora',

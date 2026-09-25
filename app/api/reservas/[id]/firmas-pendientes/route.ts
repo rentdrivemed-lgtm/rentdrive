@@ -36,7 +36,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   // `accesoContrato` en lib/contratos-acceso.ts.
   const esParte = !!reserva
     && (Number(reserva.usuario_id) === Number(user.id) || Number(reserva.propietario_id) === Number(user.id));
-  const esEquipo = user.rol === 'admin' && adminTieneArea(db, user.id, 'contratos');
+  // `contratos_ver` y no `contratos`: la secretaría necesita ver por qué una entrega
+  // está trabada, sin poder emitir ni anular nada.
+  const esEquipo = user.rol === 'admin'
+    && (adminTieneArea(db, user.id, 'contratos') || adminTieneArea(db, user.id, 'contratos_ver'));
   if (!reserva || (!esParte && !esEquipo)) {
     return NextResponse.json({ error: 'La reserva no existe.' }, { status: 404 });
   }
