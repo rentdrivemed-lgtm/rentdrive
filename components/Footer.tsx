@@ -1,10 +1,12 @@
 'use client';
 import Link from 'next/link';
 import { LogoWordmark } from '@/components/Logo';
-import { IconPin } from '@/components/Icons';
+import { IconPin, IconPhone, IconMail, IconWhatsapp, IconInstagram, IconMaps, IconWaze } from '@/components/Icons';
 import { useLang } from '@/contexts/LanguageContext';
 import {
   CONTACTO_BARRIO,
+  CONTACTO_CORREO,
+  CONTACTO_CORREO_HREF,
   CONTACTO_CIUDAD,
   CONTACTO_DIRECCION,
   CONTACTO_GOOGLE_MAPS_URL,
@@ -55,23 +57,44 @@ export default function Footer() {
                 <span className="block text-white/40 text-xs mt-1.5">
                   {t.footer.directions}:{' '}
                   <a href={CONTACTO_GOOGLE_MAPS_URL} target="_blank" rel="noopener noreferrer"
-                    className="text-white/70 hover:text-white underline underline-offset-2 transition">Google Maps</a>
+                    className="inline-flex items-center gap-1 text-white/70 hover:text-white underline underline-offset-2 transition">
+                    <IconMaps size={11} className="shrink-0" />Google Maps</a>
                   {' · '}
                   <a href={CONTACTO_WAZE_URL} target="_blank" rel="noopener noreferrer"
-                    className="text-white/70 hover:text-white underline underline-offset-2 transition">Waze</a>
+                    className="inline-flex items-center gap-1 text-white/70 hover:text-white underline underline-offset-2 transition">
+                    <IconWaze size={11} className="shrink-0" />Waze</a>
                 </span>
               </div>
             </div>
             {/* `block py-0.5`: en el celular cada enlace ocupa el ancho de la
                 columna y algo más de alto, para que se pueda tocar sin apuntar. */}
+            {/* Con el logo de cada canal, no con el nombre suelto: en un pie de página
+                nadie LEE, barre con la vista, y el logotipo de WhatsApp o de Instagram
+                se reconoce antes que su palabra. Los iconos van `aria-hidden` porque
+                el texto de al lado ya nombra el canal — anunciarlo dos veces a un
+                lector de pantalla sería peor, no mejor. */}
             <div className="space-y-1">
               <a href={CONTACTO_TEL_HREF} aria-label={`${t.footer.call} ${CONTACTO_TELEFONO_VISIBLE}`}
-                className="block py-0.5 hover:text-white transition">{CONTACTO_TELEFONO_VISIBLE}</a>
+                className="flex items-center gap-2 py-0.5 justify-center sm:justify-start hover:text-white transition">
+                <IconPhone size={15} className="shrink-0 text-white/35" />
+                {CONTACTO_TELEFONO_VISIBLE}
+              </a>
               <a href={CONTACTO_WHATSAPP_URL} target="_blank" rel="noopener noreferrer"
-                className="block py-0.5 hover:text-white transition">{t.footer.whatsapp}</a>
+                className="flex items-center gap-2 py-0.5 justify-center sm:justify-start hover:text-white transition">
+                <IconWhatsapp size={15} className="shrink-0 text-white/35" />
+                {t.footer.whatsapp}
+              </a>
               <a href={CONTACTO_INSTAGRAM_URL} target="_blank" rel="noopener noreferrer"
                 aria-label={`${t.footer.instagram} (@${CONTACTO_INSTAGRAM_USUARIO})`}
-                className="block py-0.5 hover:text-white transition">@{CONTACTO_INSTAGRAM_USUARIO}</a>
+                className="flex items-center gap-2 py-0.5 justify-center sm:justify-start hover:text-white transition">
+                <IconInstagram size={15} className="shrink-0 text-white/35" />
+                @{CONTACTO_INSTAGRAM_USUARIO}
+              </a>
+              <a href={CONTACTO_CORREO_HREF}
+                className="flex items-center gap-2 py-0.5 justify-center sm:justify-start hover:text-white transition">
+                <IconMail size={15} className="shrink-0 text-white/35" />
+                {CONTACTO_CORREO}
+              </a>
             </div>
           </address>
         </div>

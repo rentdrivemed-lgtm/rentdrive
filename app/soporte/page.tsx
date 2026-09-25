@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { IconArrowL, IconSend } from '@/components/Icons';
+import { IconArrowL, IconSend, IconWhatsapp } from '@/components/Icons';
 import { CONTACTO_TELEFONO_VISIBLE, CONTACTO_WHATSAPP_URL } from '@/lib/contacto';
 
 type Mensaje = { id: number; remitente_tipo: 'solicitante' | 'admin' | 'ia'; contenido: string; created_at: string };
@@ -121,7 +121,8 @@ export default function SoportePage() {
             <p className="text-ink/40 text-xs">
               ¿Prefieres WhatsApp?{' '}
               <a href={CONTACTO_WHATSAPP_URL} target="_blank" rel="noopener noreferrer"
-                className="text-accent font-semibold hover:underline">{CONTACTO_TELEFONO_VISIBLE}</a>
+                className="inline-flex items-center gap-1 text-accent font-semibold hover:underline">
+                <IconWhatsapp size={12} className="shrink-0" />{CONTACTO_TELEFONO_VISIBLE}</a>
             </p>
           </div>
         )}
