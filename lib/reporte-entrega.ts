@@ -187,6 +187,35 @@ export function registrarIntervencion(
   );
 }
 
+/**
+ * Igual, pero SIN acumular una línea por cada foto.
+ *
+ * Tomar el registro fotográfico son veinte toques de pantalla, no veinte
+ * intervenciones: si cada foto dejara su fila, el acta acabaría con una página de
+ * «tomó el registro fotográfico» y nadie encontraría lo que de verdad importa —quién
+ * entregó y quién recibió—. Se conserva UNA por actor, acción y fase, con la hora y el
+ * detalle más recientes.
+ */
+export function registrarIntervencionUnica(
+  db: DB, operacionId: number, actor: ActorIntervencion,
+  accion: AccionIntervencion, fase: FaseReporte | '', detalle = '',
+): void {
+  const previa = db.prepare(`
+    SELECT id FROM operacion_intervenciones
+    WHERE operacion_id = ? AND accion = ? AND fase = ? AND nombre = ?
+      AND (usuario_id IS ? OR usuario_id = ?)
+    ORDER BY id DESC LIMIT 1
+  `).get(operacionId, accion, fase, actor.nombre || '', actor.usuarioId, actor.usuarioId) as { id: number } | undefined;
+
+  if (previa) {
+    db.prepare(
+      "UPDATE operacion_intervenciones SET detalle = ?, created_at = datetime('now','localtime') WHERE id = ?"
+    ).run(detalle.slice(0, 500), previa.id);
+    return;
+  }
+  registrarIntervencion(db, operacionId, actor, accion, fase, detalle);
+}
+
 export function leerIntervenciones(db: DB, operacionId: number): Intervencion[] {
   const filas = db.prepare(
     'SELECT * FROM operacion_intervenciones WHERE operacion_id = ? ORDER BY created_at, id'

@@ -309,3 +309,35 @@ describe('el acta imprime el reporte, no rayas', () => {
     expect(texto).toContain('___');
   });
 });
+
+describe('quién puede confirmar', () => {
+  let db: DB;
+  beforeEach(() => { db = baseDePrueba(); });
+
+  // El punto delicado de la etapa: la conformidad es del cliente y de nadie más.
+  // Dejar que el equipo o el mensajero confirmen «en su nombre» convertiría la
+  // constancia en una firma falsa, que es justo lo que se quiso evitar.
+  it('la confirmación queda a nombre de quien la da', () => {
+    const { operacionId, clienteId } = operacion(db);
+    completar(db, operacionId, 'salida');
+    confirmarCliente(db, operacionId, 'salida', clienteId, 'Juan Cliente');
+
+    const r = leerReporte(db, operacionId, 'salida')!;
+    expect(r.confirmadoPor).toBe(clienteId);
+
+    const i = leerIntervenciones(db, operacionId).find(x => x.accion === 'confirmacion_cliente')!;
+    expect(i.rol).toBe('cliente');
+    expect(i.usuarioId).toBe(clienteId);
+  });
+
+  it('la constancia NO cuenta como confirmación', () => {
+    const { operacionId } = operacion(db);
+    completar(db, operacionId, 'salida');
+    dejarConstancia(db, operacionId, 'salida', 'El cliente se fue de afán.', MENSAJERO);
+
+    const r = leerReporte(db, operacionId, 'salida')!;
+    expect(r.confirmadoEn).toBe('');      // sigue sin confirmar
+    expect(r.confirmadoPor).toBeNull();
+    expect(r.constancia).not.toBe('');
+  });
+});

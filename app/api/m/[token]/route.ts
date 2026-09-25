@@ -13,6 +13,7 @@ import {
 } from '@/lib/fotos-servicio';
 import { tieneClaveAnthropic } from '@/lib/anthropic';
 import { limiteInspeccion, faltanFotosParaInspeccion, faltanFotosParaEntrega } from '@/lib/inspeccion-vehiculo';
+import { guardarMediciones, dejarConstancia, parsearInventario, registrarIntervencionUnica } from '@/lib/reporte-entrega';
 
 export const dynamic = 'force-dynamic';
 // Inerte en Railway (Docker): solo lo respetan plataformas tipo Vercel. El tope
@@ -20,6 +21,17 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
 type Mensajero = { id: number; nombre: string };
+
+/**
+ * Cómo firma sus intervenciones el mensajero en el reporte.
+ *
+ * `usuarioId: null` porque entra por TOKEN y no tiene cuenta: su identidad es el nombre
+ * asociado a su enlace, que es lo que decidió el dueño. Mismo criterio que la bitácora
+ * general, que ya lo audita con `id: null, nivel: 'mensajero'`.
+ */
+function actorMensajero(m: Mensajero) {
+  return { usuarioId: null, nombre: m.nombre, rol: 'mensajero' };
+}
 
 // Acciones que pueden dejar una fase SIN fotos (ver el bloque al final del PUT).
 const ACCIONES_QUE_QUITAN_FOTOS = new Set(['fotos', 'quitar_foto_suelta', 'foto_casilla']);
@@ -148,6 +160,42 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ toke
       quitarOmision(db, opId, body.fase, body.casilla);
       break;
     }
+    // ── Lo que el acta necesita y antes se llenaba a mano ──
+    //
+    // Kilometraje, nivel de combustible e inventario de estado. Van al REPORTE
+    // (lib/reporte-entrega.ts) y de ahí los imprime el acta: quien los anota acá no
+    // vuelve a digitarlos en ningún papel.
+    case 'mediciones': {
+      if (!esFase(body.fase)) return NextResponse.json({ error: 'Fase inválida' }, { status: 400 });
+
+      const datos: Parameters<typeof guardarMediciones>[3] = {};
+      if (body.kilometraje !== undefined && body.kilometraje !== null && body.kilometraje !== '') {
+        datos.kilometraje = Number(body.kilometraje);
+      }
+      if (body.combustible !== undefined && body.combustible !== null && body.combustible !== '') {
+        datos.combustible = Number(body.combustible);
+      }
+      if (body.inventario && typeof body.inventario === 'object') {
+        // `parsearInventario` descarta lo que no esté en el catálogo del acta: un JSON
+        // con claves inventadas no puede acabar impreso en un documento.
+        datos.inventario = parsearInventario(JSON.stringify(body.inventario));
+      }
+
+      const r = guardarMediciones(db, opId, body.fase, datos, actorMensajero(m));
+      if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.status });
+      break;
+    }
+
+    // El cliente no pudo confirmar y quien entrega deja constancia. La entrega NO se
+    // traba por esto: el acta prefiere decir que no confirmó, y por qué, a afirmar una
+    // conformidad que no hubo.
+    case 'constancia': {
+      if (!esFase(body.fase)) return NextResponse.json({ error: 'Fase inválida' }, { status: 400 });
+      const r = dejarConstancia(db, opId, body.fase, String(body.motivo || ''), actorMensajero(m));
+      if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.status });
+      break;
+    }
+
     // PASO 1: el inventario del estado en que SALE el carro (solo fotos de salida).
     // Mismas defensas que la inspección de abajo, por las mismas razones: esta pantalla
     // no tiene login (basta el enlace del mensajero), así que el tope por actor es la
@@ -210,6 +258,21 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ toke
   // La bitácora se escribe con `usuario_id` en NULL a propósito: el mensajero entra por
   // un enlace con token y no tiene fila en `usuarios`. Queda su nombre y el enlace como
   // identidad, que es exactamente lo que se sabe de él.
+  // Que el ACTA diga quién tomó las fotos. Una sola línea por fase y por persona, con
+  // la hora de la última: veinte fotos son veinte toques de pantalla, no veinte
+  // intervenciones, y una página de «tomó el registro fotográfico» taparía lo que de
+  // verdad importa leer ahí, que es quién entregó y quién recibió.
+  if (ACCIONES_QUE_QUITAN_FOTOS.has(body.accion) && esFase(body.fase)) {
+    const columna = body.fase === 'salida' ? 'fotos_salida' : 'fotos_entrada';
+    const fila = db.prepare(`SELECT ${columna} AS f FROM operaciones WHERE id = ?`).get(opId) as { f: string | null };
+    let cuantas = 0;
+    try { const v = JSON.parse(fila?.f || '[]'); cuantas = Array.isArray(v) ? v.length : 0; } catch { cuantas = 0; }
+    if (cuantas > 0) {
+      registrarIntervencionUnica(db, opId, actorMensajero(m), 'fotos', body.fase,
+        `Tomó ${cuantas} fotografía(s)`);
+    }
+  }
+
   if (ACCIONES_QUE_QUITAN_FOTOS.has(body.accion)) {
     const limpieza = invalidarInspeccionSiFaseVacia(db, opId);
     if (limpieza) {

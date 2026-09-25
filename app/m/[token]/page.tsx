@@ -8,6 +8,9 @@ import CasillasFotos from '@/components/CasillasFotos';
 import { lugarResumen, type Lugar } from '@/lib/lugares';
 import { parseFotosServicio, parseOmisiones, type CasillaId, type FaseFoto } from '@/lib/fotos-servicio';
 import { IconCheck } from '@/components/Icons';
+import ReporteMediciones from '@/components/ReporteMediciones';
+import { ITEMS_ESTADO_VEHICULO } from '@/lib/contratos-datos';
+import ConstanciaCliente from '@/components/ConstanciaCliente';
 
 type Tarea = { id: number; tipo: string; titulo: string; detalle: string; estado: 'pendiente' | 'hecho'; orden: number };
 type Detalle = {
@@ -23,8 +26,26 @@ type Operacion = {
   // Casillas guiadas de fotos (ver lib/fotos-servicio.ts). `fotos_guiadas` vale 0 en
   // los servicios anteriores a las casillas: ahí no se exigen las 8 fotos.
   fotos_omitidas: string; fotos_guiadas: number;
+  // Lo que antes se llenaba a mano en el acta impresa (ver lib/reporte-entrega.ts).
+  kilometraje_salida: number | null; kilometraje_entrada: number | null;
+  combustible_salida: number | null; combustible_entrada: number | null;
+  inventario_salida: string; inventario_entrada: string;
+  salida_confirmado_en: string; entrada_confirmado_en: string;
+  salida_constancia: string; entrada_constancia: string;
   detalle: Detalle; tareas: Tarea[];
 };
+
+/**
+ * Lee el inventario guardado. Local y no importado de lib/reporte-entrega.ts porque
+ * aquel es de SERVIDOR (better-sqlite3) y esta pantalla es 'use client'. Acá basta con
+ * leerlo para pintarlo; quien manda sobre qué es válido es el servidor al guardarlo.
+ */
+function parsearInventarioUI(json: string): Record<string, { estado: 'B' | 'R' | 'M'; nota: string }> {
+  try {
+    const v = JSON.parse(json || '{}');
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+  } catch { return {}; }
+}
 
 const TAREA_ICON: Record<string, string> = { lavar: '🚿', tanquear: '⛽', entregar: '📤', recibir: '📥', inspeccion: '📸' };
 const OP_LABEL: Record<string, string> = { pendiente: 'Sin iniciar', asignada: 'Asignada', en_proceso: 'En proceso', finalizada: 'Finalizada' };
@@ -131,6 +152,27 @@ export default function MensajeroPage() {
 
   const quitarOmision = async (op: Operacion, fase: FaseFoto, casilla: CasillaId) => {
     await accion({ accion: 'quitar_omision', operacion_id: op.id, fase, casilla });
+  };
+
+  /**
+   * Guarda un trozo del reporte: el kilometraje, el combustible o un ítem del
+   * inventario. A trozos y no de una porque así es como se revisa un carro —una vuelta
+   * alrededor, marcando— y nadie debería perder media revisión por cerrar la pantalla.
+   */
+  /** El cliente no pudo confirmar: queda escrito por qué, y la entrega sigue. */
+  const dejarConstancia = async (op: Operacion, fase: FaseFoto, motivo: string): Promise<boolean> => {
+    const r = await accion({ accion: 'constancia', operacion_id: op.id, fase, motivo });
+    if (!r.ok) setErrorTarea(e => ({ ...e, [op.id]: r.error || 'No se pudo guardar la constancia.' }));
+    return r.ok;
+  };
+
+  const guardarMediciones = async (
+    op: Operacion, fase: FaseFoto,
+    datos: { kilometraje?: number; combustible?: number; inventario?: Record<string, { estado: string; nota: string }> },
+  ): Promise<boolean> => {
+    const r = await accion({ accion: 'mediciones', operacion_id: op.id, fase, ...datos });
+    if (!r.ok) setErrorTarea(e => ({ ...e, [op.id]: r.error || 'No se pudo guardar.' }));
+    return r.ok;
   };
 
   // Fotos sueltas de servicios anteriores a las casillas. Se manda SOLO la URL que se
@@ -291,6 +333,25 @@ export default function MensajeroPage() {
                       onVer={abrirVisor}
                       onQuitarSuelta={url => quitarFotoSuelta(op, 'salida', url)} />
 
+                    {/* Lo que el ACTA necesita y antes se llenaba a mano en papel. Va
+                        junto a las fotos de salida porque es el mismo momento: el
+                        mensajero está con el carro delante, antes de entregarlo. */}
+                    <div className="border-t border-border/60 pt-3">
+                      <ReporteMediciones
+                        titulo="📋 Estado al ENTREGAR"
+                        items={ITEMS_ESTADO_VEHICULO}
+                        kilometraje={op.kilometraje_salida}
+                        combustible={op.combustible_salida}
+                        inventario={parsearInventarioUI(op.inventario_salida)}
+                        bloqueado={!!op.salida_confirmado_en}
+                        onGuardar={datos => guardarMediciones(op, 'salida', datos)} />
+                      {op.salida_confirmado_en && (
+                        <p className="text-[11px] text-success mt-2">
+                          El cliente ya confirmó este estado. Para corregir algo, escríbele al equipo.
+                        </p>
+                      )}
+                    </div>
+
                     {/* PASO 1 — con las fotos de salida, ANTES de entregarle el carro al
                         cliente. Va justo debajo de esas casillas para que el orden de la
                         pantalla sea el orden real del trabajo. */}
@@ -327,6 +388,33 @@ export default function MensajeroPage() {
                       onQuitarOmision={casilla => quitarOmision(op, 'entrada', casilla)}
                       onVer={abrirVisor}
                       onQuitarSuelta={url => quitarFotoSuelta(op, 'entrada', url)} />
+
+                    {/* El mismo reporte, para la DEVOLUCIÓN. Es el otro momento de la
+                        misma acta, y es lo que permite comparar cómo salió el carro con
+                        cómo volvió. */}
+                    <div className="border-t border-border/60 pt-3">
+                      <ReporteMediciones
+                        titulo="📋 Estado al RECIBIR"
+                        items={ITEMS_ESTADO_VEHICULO}
+                        kilometraje={op.kilometraje_entrada}
+                        combustible={op.combustible_entrada}
+                        inventario={parsearInventarioUI(op.inventario_entrada)}
+                        bloqueado={!!op.entrada_confirmado_en}
+                        onGuardar={datos => guardarMediciones(op, 'entrada', datos)} />
+                      {op.entrada_confirmado_en && (
+                        <p className="text-[11px] text-success mt-2">
+                          El cliente ya confirmó este estado.
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Si el cliente no puede confirmar, se deja constancia y la entrega
+                        SIGUE. El acta dirá que no confirmó y por qué, en vez de afirmar
+                        una conformidad que no hubo. */}
+                    <ConstanciaCliente
+                      salida={{ confirmado: !!op.salida_confirmado_en, constancia: op.salida_constancia }}
+                      entrada={{ confirmado: !!op.entrada_confirmado_en, constancia: op.entrada_constancia }}
+                      onDejar={(fase, motivo) => dejarConstancia(op, fase, motivo)} />
 
                     <button
                       onClick={() => inspeccionar(op)}
