@@ -20,6 +20,7 @@ import {
   CONTACTO_CORREO, CONTACTO_CORREO_HREF,
   CONTACTO_GOOGLE_MAPS_URL, CONTACTO_WAZE_URL,
 } from '@/lib/contacto';
+import ContactoAcciones from '@/components/ContactoAcciones';
 
 export const metadata: Metadata = {
   title: 'Contacto — DrivePass',
@@ -38,11 +39,10 @@ type Enlace = {
   externo?: boolean;
 };
 
+// WhatsApp NO está en esta lista: lo lleva `ContactoAcciones`, que además compone el
+// mensaje. Un segundo botón suelto de WhatsApp competiría con aquel y la gente tocaría
+// el que no compone nada.
 const ENLACES: Enlace[] = [
-  {
-    href: CONTACTO_WHATSAPP_URL, titulo: 'Escríbenos por WhatsApp',
-    detalle: CONTACTO_TELEFONO_VISIBLE, emoji: '💬', principal: true, externo: true,
-  },
   { href: CONTACTO_TEL_HREF, titulo: 'Llamar', detalle: CONTACTO_TELEFONO_VISIBLE, emoji: '📞' },
   { href: SITIO, titulo: 'Ver los carros disponibles', detalle: 'drivepasscol.com', emoji: '🚗', externo: true },
   { href: `${SITIO}/buses`, titulo: 'Transporte de grupos', detalle: 'De 12 a 42 pasajeros, con conductor', emoji: '🚌', externo: true },
@@ -65,7 +65,9 @@ export default function ContactoPage() {
         </p>
       </header>
 
-      <nav className="mt-7 space-y-2.5" aria-label="Formas de contacto">
+      <ContactoAcciones whatsappUrl={CONTACTO_WHATSAPP_URL} urlTarjeta={`${SITIO}/contacto`} />
+
+      <nav className="mt-6 space-y-2.5" aria-label="Formas de contacto">
         {ENLACES.map(e => (
           <a
             key={e.href}
