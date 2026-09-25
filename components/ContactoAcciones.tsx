@@ -14,7 +14,8 @@
 // COMPARTIR y MOSTRAR EL QR existen por cómo se usa esto de verdad: alguien que ya es
 // cliente quiere pasarle DrivePass a un amigo, o enseñarle la pantalla para que la
 // escanee. Sin eso tendría que copiar la URL a mano.
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
+import { IconWhatsapp, IconCar, IconBus, IconKey, IconChat } from '@/components/Icons';
 
 type Props = {
   whatsappUrl: string;
@@ -25,18 +26,18 @@ type Props = {
 type Intencion = {
   clave: string;
   etiqueta: string;
-  emoji: string;
+  icono: ReactNode;
   /** `null` cuando hace falta preguntar algo más antes de componer el mensaje. */
   mensaje: string | null;
 };
 
 const INTENCIONES: Intencion[] = [
-  { clave: 'carro', etiqueta: 'Alquilar un carro', emoji: '🚗',
+  { clave: 'carro', etiqueta: 'Alquilar un carro', icono: <IconCar size={17} />,
     mensaje: 'Hola, quiero alquilar un carro. ¿Me ayudan con la disponibilidad?' },
-  { clave: 'grupo', etiqueta: 'Mover un grupo', emoji: '🚌', mensaje: null },
-  { clave: 'propietario', etiqueta: 'Poner mi carro a rentar', emoji: '🔑',
+  { clave: 'grupo', etiqueta: 'Mover un grupo', icono: <IconBus size={17} />, mensaje: null },
+  { clave: 'propietario', etiqueta: 'Poner mi carro a rentar', icono: <IconKey size={17} />,
     mensaje: 'Hola, tengo un carro y me interesa ponerlo a rentar con ustedes. ¿Cómo funciona?' },
-  { clave: 'otra', etiqueta: 'Otra cosa', emoji: '💬',
+  { clave: 'otra', etiqueta: 'Otra cosa', icono: <IconChat size={17} />,
     mensaje: 'Hola, quiero hacerles una consulta.' },
 ];
 
@@ -99,7 +100,7 @@ export default function ContactoAcciones({ whatsappUrl, urlTarjeta }: Props) {
                   : 'bg-surface border-border text-ink/70 hover:bg-ink/5'
               }`}
             >
-              <span className="text-base shrink-0" aria-hidden="true">{i.emoji}</span>
+              <span className={`shrink-0 ${activa ? 'text-accent' : 'text-ink/45'}`}>{i.icono}</span>
               <span className="text-xs font-semibold leading-tight">{i.etiqueta}</span>
             </button>
           );
@@ -136,7 +137,8 @@ export default function ContactoAcciones({ whatsappUrl, urlTarjeta }: Props) {
         target="_blank" rel="noopener noreferrer"
         className="mt-3 flex items-center justify-center gap-2 rounded-2xl bg-accent px-4 py-3.5 text-sm font-bold text-white hover:opacity-90 transition"
       >
-        💬 {mensaje ? 'Abrir WhatsApp con este mensaje' : 'Escríbenos por WhatsApp'}
+        <IconWhatsapp size={18} />
+        {mensaje ? 'Abrir WhatsApp con este mensaje' : 'Escríbenos por WhatsApp'}
       </a>
 
       <div className="mt-3 grid grid-cols-2 gap-2">

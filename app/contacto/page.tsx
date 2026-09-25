@@ -13,6 +13,7 @@
 // los correos y el marcado para buscadores. No hay ni un teléfono escrito a mano aquí:
 // si se cambia allá, esta tarjeta cambia con él.
 import type { Metadata } from 'next';
+import type { ReactNode } from 'react';
 import {
   CONTACTO_DIRECCION, CONTACTO_BARRIO, CONTACTO_CIUDAD, CONTACTO_DEPARTAMENTO,
   CONTACTO_DIRECCION_COMPLETA, CONTACTO_TELEFONO_VISIBLE, CONTACTO_TEL_HREF,
@@ -21,6 +22,9 @@ import {
   CONTACTO_GOOGLE_MAPS_URL, CONTACTO_WAZE_URL,
 } from '@/lib/contacto';
 import ContactoAcciones from '@/components/ContactoAcciones';
+import {
+  IconPhone, IconMail, IconCar, IconBus, IconInstagram, IconMaps, IconWaze,
+} from '@/components/Icons';
 
 export const metadata: Metadata = {
   title: 'Contacto — DrivePass',
@@ -33,9 +37,9 @@ type Enlace = {
   href: string;
   titulo: string;
   detalle: string;
-  emoji: string;
-  /** El principal va destacado: es el que usa casi todo el mundo. */
-  principal?: boolean;
+  /** Logo real de la marca, o icono de línea de la casa. Nunca un emoji: el emoji lo
+   *  dibuja cada sistema a su manera y en Android el de WhatsApp ni siquiera existe. */
+  icono: ReactNode;
   externo?: boolean;
 };
 
@@ -43,13 +47,20 @@ type Enlace = {
 // mensaje. Un segundo botón suelto de WhatsApp competiría con aquel y la gente tocaría
 // el que no compone nada.
 const ENLACES: Enlace[] = [
-  { href: CONTACTO_TEL_HREF, titulo: 'Llamar', detalle: CONTACTO_TELEFONO_VISIBLE, emoji: '📞' },
-  { href: SITIO, titulo: 'Ver los carros disponibles', detalle: 'drivepasscol.com', emoji: '🚗', externo: true },
-  { href: `${SITIO}/buses`, titulo: 'Transporte de grupos', detalle: 'De 12 a 42 pasajeros, con conductor', emoji: '🚌', externo: true },
-  { href: CONTACTO_INSTAGRAM_URL, titulo: 'Instagram', detalle: `@${CONTACTO_INSTAGRAM_USUARIO}`, emoji: '📸', externo: true },
-  { href: CONTACTO_CORREO_HREF, titulo: 'Escríbenos un correo', detalle: CONTACTO_CORREO, emoji: '✉️' },
-  { href: CONTACTO_GOOGLE_MAPS_URL, titulo: 'Cómo llegar', detalle: `${CONTACTO_DIRECCION}, ${CONTACTO_BARRIO}`, emoji: '📍', externo: true },
-  { href: CONTACTO_WAZE_URL, titulo: 'Abrir en Waze', detalle: CONTACTO_CIUDAD, emoji: '🧭', externo: true },
+  { href: CONTACTO_TEL_HREF, titulo: 'Llamar', detalle: CONTACTO_TELEFONO_VISIBLE,
+    icono: <IconPhone size={20} /> },
+  { href: SITIO, titulo: 'Ver los carros disponibles', detalle: 'drivepasscol.com',
+    icono: <IconCar size={20} />, externo: true },
+  { href: `${SITIO}/buses`, titulo: 'Transporte de grupos', detalle: 'De 12 a 42 pasajeros, con conductor',
+    icono: <IconBus size={20} />, externo: true },
+  { href: CONTACTO_INSTAGRAM_URL, titulo: 'Instagram', detalle: `@${CONTACTO_INSTAGRAM_USUARIO}`,
+    icono: <IconInstagram size={19} />, externo: true },
+  { href: CONTACTO_CORREO_HREF, titulo: 'Escríbenos un correo', detalle: CONTACTO_CORREO,
+    icono: <IconMail size={20} /> },
+  { href: CONTACTO_GOOGLE_MAPS_URL, titulo: 'Cómo llegar', detalle: `${CONTACTO_DIRECCION}, ${CONTACTO_BARRIO}`,
+    icono: <IconMaps size={19} />, externo: true },
+  { href: CONTACTO_WAZE_URL, titulo: 'Abrir en Waze', detalle: CONTACTO_CIUDAD,
+    icono: <IconWaze size={19} />, externo: true },
 ];
 
 export default function ContactoPage() {
@@ -73,18 +84,14 @@ export default function ContactoPage() {
             key={e.href}
             href={e.href}
             {...(e.externo ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
-            className={`flex items-center gap-3 rounded-2xl border px-4 py-3.5 transition ${
-              e.principal
-                ? 'bg-accent border-accent text-white hover:opacity-90'
-                : 'bg-surface border-border text-ink hover:bg-ink/5'
-            }`}
+            className="flex items-center gap-3 rounded-2xl border border-border bg-surface px-4 py-3.5 text-ink hover:bg-ink/5 transition"
           >
-            <span className="text-xl shrink-0" aria-hidden="true">{e.emoji}</span>
+            <span className="w-9 h-9 rounded-xl bg-accent-light flex items-center justify-center shrink-0 text-accent">
+              {e.icono}
+            </span>
             <span className="min-w-0">
               <span className="block text-sm font-semibold leading-tight">{e.titulo}</span>
-              <span className={`block text-xs mt-0.5 ${e.principal ? 'text-white/80' : 'text-ink/50'}`}>
-                {e.detalle}
-              </span>
+              <span className="block text-xs mt-0.5 text-ink/50">{e.detalle}</span>
             </span>
           </a>
         ))}
