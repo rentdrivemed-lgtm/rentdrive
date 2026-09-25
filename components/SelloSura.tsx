@@ -14,10 +14,26 @@ import { IconArrowR, IconCheck } from '@/components/Icons';
 //
 // NO se promete cobertura total, porque el contrato dice lo contrario: el
 // deducible, la franquicia, el faltante de la indemnización, el infraseguro y
-// los hechos que el clausulado excluye —entre ellos la no restitución del
-// vehículo— quedan por fuera del amparo. Por eso cada bloque cierra con un
-// aviso que lo dice con todas las letras. Si alguien quiere «endurecer» el
+// los hechos que el clausulado excluye quedan por fuera del amparo. Por eso cada
+// bloque cierra con un aviso que lo dice. Si alguien quiere «endurecer» el
 // mensaje de marketing, tiene que cambiar antes el contrato, no este archivo.
+//
+// ⚠️ QUÉ EXCLUSIONES SE NOMBRAN Y CUÁLES NO (decisión del dueño, sep-2026).
+// El aviso habla de los límites EN GENERAL y no enumera exclusiones concretas.
+// En particular, NO se nombran el abuso de confianza ni la estafa: ni aquí, ni en
+// la portada, ni en la página de propietarios, ni dentro de la sesión del
+// propietario, ni en ninguna política de acceso público. Esas dos se explican por
+// teléfono o en el punto de atención, junto con cómo se mitigan —validación de
+// identidad del arrendatario, depósito de garantía y pagaré a favor del dueño—,
+// que es una conversación, no una línea suelta en una página.
+//
+// Donde SÍ están, con todas las letras, es en el CONTRATO: son declaraciones que
+// el propietario firma en el anexo de la póliza («Conozco que…», «Acepto…») y la
+// base probatoria de la cláusula que limita la responsabilidad de DrivePass. Así
+// que esto no le oculta nada a quien asume el riesgo: evita dejarlo escrito en una
+// página que puede leer cualquiera, incluido quien vaya a alquilar.
+//
+// Si vuelve a aparecer por aquí, no es que se hubiera perdido: se quitó a propósito.
 //
 // El número de póliza y su vigencia NO se publican aquí a propósito: son datos
 // por vehículo, viven en `vehiculos.poliza_*`, cambian con cada renovación y
