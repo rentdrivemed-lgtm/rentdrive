@@ -1,5 +1,15 @@
-// Política de cancelación de reservas — reglas de negocio de RentDrive.
-export const HORAS_LIMITE_GRATIS = 72;
+// Política de cancelación de reservas — reglas de negocio de DrivePass.
+//
+// ⚖️ EL PLAZO LO FIJA EL CONTRATO, no este archivo. La cláusula de desistimiento del
+// contrato de arrendamiento (lib/contratos-plantillas.ts) reconoce la devolución íntegra
+// a quien avisa con CUARENTA Y OCHO (48) horas o más, y el 50 % a quien avisa dentro de
+// esas 48 horas.
+//
+// Estuvo en 72 hasta sep-2026, y no era un detalle: entre las 48 y las 72 horas el
+// contrato prometía devolver todo y el sistema retenía el 50 %. Se le cobraba de más a
+// quien cancelaba dentro de lo pactado. Si algún día se quiere cambiar el plazo, se
+// cambia PRIMERO en el contrato y después acá.
+export const HORAS_LIMITE_GRATIS = 48;
 export const PCT_CANCELACION_TARDIA = 50;
 export const HORAS_GRACIA_NO_SHOW = 3;
 export const PCT_NO_SHOW = 100;
