@@ -42,7 +42,7 @@ export const es = {
         'Te entregamos copia de la carátula y del clausulado, y de cada anexo o renovación dentro de los cinco días hábiles siguientes a su expedición.',
         'Si hay siniestro presentamos la reclamación en tu nombre con las actas, las fotos y los soportes; tú conservas la condición de asegurado y beneficiario.',
       ],
-      aviso: 'La póliza tiene límites y conviene conocerlos antes de publicar: el deducible, la franquicia, el faltante por infraseguro y los hechos que el clausulado excluye quedan fuera del amparo. El caso más importante es la no restitución del vehículo, que la ley colombiana trata como abuso de confianza y no como hurto, y que la aseguradora no indemniza. Por eso cada arrendatario deja depósito de garantía y firma un pagaré a tu orden, y por eso puedes contratar amparos adicionales por tu cuenta si quieres cubrir ese riesgo.',
+      aviso: 'La póliza tiene límites y conviene conocerlos antes de publicar: el deducible, la franquicia, el faltante por infraseguro y los hechos que el clausulado excluye quedan fuera del amparo. Te explicamos cuáles son y cómo los mitigamos —validación de identidad de cada arrendatario, depósito de garantía y pagaré a tu orden— antes de que publiques, por teléfono o en el punto de atención. También puedes contratar amparos adicionales por tu cuenta, y el contrato de agencia te lo deja por escrito con el detalle completo.',
     },
   },
   footer: {
@@ -98,7 +98,7 @@ export const en: Translations = {
         'We give you a copy of the policy schedule and wording, and of every endorsement or renewal within five business days of its issue.',
         'If there is a claim we file it on your behalf with the handover records, photos and supporting evidence; you remain the insured party and the beneficiary.',
       ],
-      aviso: 'The policy has limits and it is worth knowing them before you list: the deductible, the franchise, the shortfall caused by underinsurance and the events the policy wording excludes all fall outside the cover. The most important case is failure to return the vehicle, which Colombian law treats as breach of trust rather than theft, and which the insurer does not pay out on. That is why every renter leaves a security deposit and signs a promissory note in your favour, and why you can take out additional cover on your own account if you want to protect against that risk.',
+      aviso: 'The policy has limits and it is worth knowing them before you list: the deductible, the franchise, the shortfall caused by underinsurance and the events the policy wording excludes all fall outside the cover. We walk you through what they are and how we mitigate them — identity verification for every renter, a security deposit and a promissory note in your favour — before you list, by phone or at our service point. You may also take out additional cover yourself, and the agency agreement sets it all out in writing in full.',
     },
   },
   footer: {
